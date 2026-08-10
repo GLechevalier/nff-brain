@@ -1,0 +1,131 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+// Safe editing of Claude Code's settings.json hook config. The cardinal rule:
+// MERGE, never clobber — users have their own hooks and unknown keys in there.
+// We only ever append our two entries (identified by 'nff-brain' in the command)
+// and only ever remove entries whose command contains 'nff-brain'.
+
+export const RECALL_COMMAND = 'nff-brain recall --stdin-hook';
+export const DISTILL_COMMAND = 'nff-brain distill --stdin-hook';
+
+const MARKER = 'nff-brain';
+
+interface HookEntry {
+  type?: string;
+  command?: string;
+  [k: string]: unknown;
+}
+
+interface HookMatcher {
+  matcher?: string;
+  hooks?: HookEntry[];
+  [k: string]: unknown;
+}
+
+interface SettingsShape {
+  hooks?: Record<string, HookMatcher[]>;
+  [k: string]: unknown;
+}
+
+export function projectSettingsPath(workspaceRoot: string): string {
+  return path.join(workspaceRoot, '.claude', 'settings.json');
+}
+
+export function globalSettingsPath(home: string): string {
+  return path.join(home, '.claude', 'settings.json');
+}
+
+function readSettings(filePath: string): SettingsShape {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as SettingsShape;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw err; // malformed JSON: refuse to touch it rather than destroy it
+  }
+}
+
+function writeSettings(filePath: string, settings: SettingsShape): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n');
+  fs.renameSync(tmp, filePath);
+}
+
+function hasMarkerHook(matchers: HookMatcher[] | undefined): boolean {
+  for (const m of matchers ?? []) {
+    for (const h of m.hooks ?? []) {
+      if (typeof h.command === 'string' && h.command.includes(MARKER)) return true;
+    }
+  }
+  return false;
+}
+
+export interface InstallResult {
+  installed: string[]; // event names newly wired
+  skipped: string[]; // event names that already had an nff-brain hook
+  backedUpTo?: string;
+}
+
+export function installHooks(settingsPath: string): InstallResult {
+  const settings = readSettings(settingsPath);
+  const result: InstallResult = { installed: [], skipped: [] };
+
+  // One-time backup before our first ever edit of this file.
+  const backup = `${settingsPath}.bak-nff-brain`;
+  if (fs.existsSync(settingsPath) && !fs.existsSync(backup)) {
+    fs.copyFileSync(settingsPath, backup);
+    result.backedUpTo = backup;
+  }
+
+  settings.hooks = settings.hooks ?? {};
+  const wanted: Array<[string, string]> = [
+    ['SessionStart', RECALL_COMMAND],
+    ['SessionEnd', DISTILL_COMMAND],
+  ];
+  for (const [event, command] of wanted) {
+    const matchers = (settings.hooks[event] = settings.hooks[event] ?? []);
+    if (hasMarkerHook(matchers)) {
+      result.skipped.push(event);
+      continue;
+    }
+    matchers.push({ hooks: [{ type: 'command', command }] });
+    result.installed.push(event);
+  }
+
+  if (result.installed.length) writeSettings(settingsPath, settings);
+  return result;
+}
+
+export function uninstallHooks(settingsPath: string): string[] {
+  const settings = readSettings(settingsPath);
+  if (!settings.hooks) return [];
+  const removed: string[] = [];
+  for (const [event, matchers] of Object.entries(settings.hooks)) {
+    if (!Array.isArray(matchers)) continue;
+    const kept = matchers
+      .map((m) => ({
+        ...m,
+        hooks: (m.hooks ?? []).filter(
+          (h) => !(typeof h.command === 'string' && h.command.includes(MARKER)),
+        ),
+      }))
+      // Drop matcher blocks that only existed to hold our hook.
+      .filter((m) => (m.hooks?.length ?? 0) > 0 || Object.keys(m).some((k) => k !== 'hooks' && k !== 'matcher'));
+    if (kept.length !== matchers.length || JSON.stringify(kept) !== JSON.stringify(matchers)) {
+      settings.hooks[event] = kept;
+      removed.push(event);
+    }
+    if (kept.length === 0) delete settings.hooks[event];
+  }
+  if (removed.length) writeSettings(settingsPath, settings);
+  return removed;
+}
+
+export function hooksInstalled(settingsPath: string): { sessionStart: boolean; sessionEnd: boolean } {
+  const settings = readSettings(settingsPath);
+  return {
+    sessionStart: hasMarkerHook(settings.hooks?.SessionStart),
+    sessionEnd: hasMarkerHook(settings.hooks?.SessionEnd),
+  };
+}

@@ -1,0 +1,87 @@
+/* The dashboard's monochrome palette re-expressed as VS Code theme variables so
+   the graph inverts correctly in dark themes and reads as native UI.
+   Original literals: #000→ink, #fff→paper, #f5f5f5→hover, #bbb→faint,
+   #888→muted, #ddd/#f0f0f0→line. */
+:root {
+  --nb-paper: var(--vscode-editor-background, #fff);
+  --nb-ink: var(--vscode-editor-foreground, #000);
+  --nb-hover: var(--vscode-list-hoverBackground, #f5f5f5);
+  --nb-faint: var(--vscode-editorLineNumber-foreground, #bbb);
+  --nb-muted: var(--vscode-descriptionForeground, #888);
+  --nb-line: var(--vscode-editorGroup-border, #ddd);
+  --nb-mono: var(--vscode-editor-font-family, monospace);
+}
+
+body {
+  background: var(--nb-paper);
+  color: var(--nb-ink);
+  font-family: var(--nb-mono);
+}
+
+.nb-btn {
+  font-family: var(--nb-mono);
+  font-size: 11px;
+  padding: 4px 10px;
+  letter-spacing: 0.5px;
+  border: 1px solid var(--nb-ink);
+  background: var(--nb-paper);
+  color: var(--nb-ink);
+  cursor: pointer;
+}
+.nb-btn:disabled {
+  border-color: var(--nb-faint);
+  color: var(--nb-faint);
+  cursor: default;
+}
+.nb-btn--solid {
+  background: var(--nb-ink);
+  color: var(--nb-paper);
+}
+.nb-btn--solid:disabled {
+  background: var(--nb-hover);
+  color: var(--nb-faint);
+}
+
+.nb-input,
+.nb-select,
+.nb-textarea {
+  font-family: var(--nb-mono);
+  font-size: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 7px;
+  color: var(--vscode-input-foreground, var(--nb-ink));
+  background: var(--vscode-input-background, var(--nb-paper));
+  border: 1px solid var(--vscode-input-border, var(--nb-ink));
+  outline: none;
+}
+.nb-textarea {
+  resize: vertical;
+  min-height: 140px;
+  line-height: 1.6;
+}
+
+.nb-link {
+  background: none;
+  border: none;
+  padding: 1px 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--nb-mono);
+  font-size: 12px;
+  color: var(--nb-ink);
+  text-decoration: underline;
+}
+
+.nb-icon-btn {
+  font-family: var(--nb-mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--nb-line);
+  background: var(--nb-paper);
+  color: var(--nb-ink);
+  cursor: pointer;
+}
+.nb-icon-btn:hover {
+  background: var(--nb-hover);
+}

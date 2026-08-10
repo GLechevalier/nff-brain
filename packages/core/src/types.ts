@@ -1,0 +1,75 @@
+// Data model for the local brain — a JSON knowledge graph ported from the
+// nff-agent-worker brain (brain_nodes / brain_edges) minus embeddings.
+
+export const BRAIN_VERSION = 1 as const;
+
+export const CATEGORIES = ['core', 'analysis', 'rules', 'strategy'] as const;
+export type Category = (typeof CATEGORIES)[number];
+
+// Same palette as the seed graph so nodes render consistently everywhere.
+export const COLOR_BY_CATEGORY: Record<Category, string> = {
+  core: '#00ffcc',
+  strategy: '#a78bfa',
+  analysis: '#22d3ee',
+  rules: '#4ade80',
+};
+
+export interface BrainNode {
+  id: string; // kebab slug, ≤ 60 chars
+  title: string; // ≤ 80 chars
+  category: Category;
+  content: string; // ≤ 1200 chars, actionable "When X, do Y because Z"
+  color: string;
+  x: number;
+  y: number;
+  size: number;
+  origin: 'seed' | 'agent'; // seed = init/user-authored (never auto-evicted)
+  sourceSession?: string;
+  lastUpdated: string; // ISO
+  recallCount: number;
+  lastRecalledAt?: string; // ISO
+}
+
+export interface BrainEdge {
+  from: string;
+  to: string;
+  strength: number; // 0..1
+}
+
+export interface BrainFile {
+  version: typeof BRAIN_VERSION;
+  updatedAt: string; // ISO — cheap change detection for watchers
+  nodes: BrainNode[];
+  edges: BrainEdge[];
+}
+
+export function emptyBrain(now = new Date()): BrainFile {
+  return { version: BRAIN_VERSION, updatedAt: now.toISOString(), nodes: [], edges: [] };
+}
+
+export function asCategory(v: unknown): Category {
+  return (CATEGORIES as readonly string[]).includes(v as string) ? (v as Category) : 'strategy';
+}
+
+export function slug(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+}
+
+export function clampStrength(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
+// New nodes get a random in-canvas position; the UI's overlap-relaxation pass
+// (brainSpacing) untangles collisions, so an exact placement doesn't matter.
+export function placeNode(category: Category): Pick<BrainNode, 'color' | 'x' | 'y' | 'size'> {
+  return {
+    color: COLOR_BY_CATEGORY[category],
+    x: 120 + Math.random() * 560,
+    y: 100 + Math.random() * 400,
+    size: category === 'core' ? 32 : 16,
+  };
+}

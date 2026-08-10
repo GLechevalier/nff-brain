@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      HAS_VSCE_PAT: ${{ secrets.VSCE_PAT != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run build
+      - run: npx vitest run
+
+      - name: Publish CLI to npm
+        run: npm publish -w nff-brain --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Package VS Code extension
+        run: npx --yes @vscode/vsce package --no-dependencies
+        working-directory: packages/vscode
+
+      - name: Publish to VS Code Marketplace
+        # Requires the VSCE_PAT secret (Azure DevOps token for the publisher).
+        if: ${{ env.HAS_VSCE_PAT == 'true' }}
+        run: npx --yes @vscode/vsce publish --no-dependencies -p "$VSCE_PAT"
+        working-directory: packages/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Attach artifacts to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/vscode/*.vsix

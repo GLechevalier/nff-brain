@@ -1,0 +1,76 @@
+{
+  "name": "nff-brain-vscode",
+  "displayName": "nff-brain",
+  "description": "Visualize and edit your project's nff-brain knowledge graph — the local-first memory Claude Code recalls at every session start. Fully offline; nothing is hosted.",
+  "version": "0.1.0",
+  "publisher": "nff-brain",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "memory",
+    "knowledge-graph",
+    "agent"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GLechevalier/nff-brain.git"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "nffBrain.open",
+        "title": "nff-brain: Open Brain"
+      },
+      {
+        "command": "nffBrain.refresh",
+        "title": "nff-brain: Reload Brain From Disk"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nffBrain",
+          "title": "nff-brain",
+          "icon": "media/brain.svg"
+        }
+      ]
+    },
+    "views": {
+      "nffBrain": [
+        {
+          "type": "webview",
+          "id": "nffBrain.sideView",
+          "name": "Brain"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "vscode:prepublish": "node build.mjs",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@nff-brain/core": "*",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.24.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

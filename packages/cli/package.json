@@ -1,0 +1,36 @@
+{
+  "name": "nff-brain",
+  "version": "0.1.0",
+  "description": "Local-first knowledge-graph memory for Claude Code — recalled at session start, grown after every session.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "nff-brain": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "memory",
+    "knowledge-graph",
+    "agent",
+    "hooks"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GLechevalier/nff-brain.git"
+  },
+  "devDependencies": {
+    "@nff-brain/core": "*",
+    "tsup": "^8.3.5"
+  }
+}
