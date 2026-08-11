@@ -86,13 +86,48 @@ function fileFor(source: NodeSource): string {
   return source === 'project' ? paths.project : paths.global;
 }
 
-/** Open a node as its native markdown editor, in the column beside the graph. */
+/** The editor group holding the graph webview (falls back to the active group). */
+function graphColumn(): vscode.ViewColumn {
+  for (const g of vscode.window.tabGroups.all) {
+    for (const t of g.tabs) {
+      const input = t.input as { viewType?: string } | undefined;
+      // Webview tab viewTypes arrive prefixed (e.g. "mainThreadWebview-nffBrain").
+      if (typeof input?.viewType === 'string' && input.viewType.includes('nffBrain')) {
+        return g.viewColumn;
+      }
+    }
+  }
+  return vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+}
+
+/**
+ * Where node documents go: the existing group next to the graph. Only when the
+ * graph is the sole group does Beside create a second one — with two or more
+ * groups open, docs always land in the neighbour, never a fresh third column.
+ */
+function docColumn(): vscode.ViewColumn {
+  const gc = graphColumn();
+  const others = vscode.window.tabGroups.all.map((g) => g.viewColumn).filter((c) => c !== gc);
+  if (others.length === 0) return vscode.ViewColumn.Beside;
+  const right = others.filter((c) => c > gc).sort((a, b) => a - b)[0];
+  return right ?? others.sort((a, b) => a - b)[0];
+}
+
+/**
+ * Open a node beside the graph — RENDERED markdown preview for reading (node
+ * clicks), raw source only when the caller needs the cursor in it (new node).
+ */
 async function openNodeDoc(source: NodeSource, id: string, opts?: { focus?: boolean }): Promise<void> {
-  await vscode.window.showTextDocument(nodeUri(source, id), {
-    viewColumn: vscode.ViewColumn.Beside,
+  const uri = nodeUri(source, id);
+  if (opts?.focus) {
+    await vscode.window.showTextDocument(uri, { viewColumn: docColumn(), preview: false });
+    return;
+  }
+  await vscode.commands.executeCommand('vscode.openWith', uri, 'vscode.markdown.preview.editor', {
+    viewColumn: docColumn(),
+    preserveFocus: true,
     preview: true,
-    preserveFocus: !opts?.focus,
-  });
+  } satisfies vscode.TextDocumentShowOptions);
 }
 
 async function handleMessage(msg: WebToExt, webview: vscode.Webview): Promise<void> {
