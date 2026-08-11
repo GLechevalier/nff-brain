@@ -4,6 +4,7 @@ export * from './store.js';
 export * from './score.js';
 export * from './nodeMd.js';
 export * from './recall.js';
+export * from './savings.js';
 export * from './novelty.js';
 export * from './modelRequest.js';
 export * from './activity.js';

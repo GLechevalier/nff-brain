@@ -21,7 +21,9 @@ export interface RecallResult {
   seedCount: number; // nodes[0..seedCount) were lexical seeds; the rest are edge-expanded
 }
 
-const DEFAULTS: Required<RecallOptions> = {
+// Exported so the savings estimator can price a preamble line with the SAME
+// content trim recall actually applies, instead of re-hardcoding 600.
+export const RECALL_DEFAULTS: Required<RecallOptions> = {
   k: 6,
   maxNodes: 12,
   maxContentChars: 600,
@@ -73,7 +75,7 @@ export function recallBrain(
   taskText: string,
   options: RecallOptions = {},
 ): RecallResult {
-  const opts = { ...DEFAULTS, ...options };
+  const opts = { ...RECALL_DEFAULTS, ...options };
   const { nodes, edges } = graph;
   if (nodes.length === 0) return { preamble: '', nodes: [], seedCount: 0 };
 

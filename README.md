@@ -3,7 +3,7 @@
   <img src="public/images/tumbnail.png" alt="nff" width="640">
 </p>
 
-# nff-brain, pick the right LLM for the right task
+# nff-brain, save tokens by picking the right LLM for the right task
 
 **Coding agents burn too much tokens, switch models dynamically for the right tasks so you stay under your limits.**
 

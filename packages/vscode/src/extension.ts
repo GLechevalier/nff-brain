@@ -5,6 +5,7 @@ import {
   activityPath,
   asCategory,
   CATEGORIES,
+  eventSavings,
   foldLeastUsed,
   loadBrain,
   mergeBrains,
@@ -17,9 +18,11 @@ import {
   upsertNode,
   type ActivityEvent,
   type BrainFile,
+  type BrainNode,
   type BrainPaths,
 } from '@nff-brain/core';
 import { BrainFs, BrainLinkProvider, nodeUri, SCHEME } from './brainFs';
+import { BrainLauncherProvider } from './launcherView';
 import type { ExtToWeb, NodeSource, ViewActivityEvent, ViewEdge, ViewNode, WebToExt } from './protocol';
 
 // The extension host is the SOLE filesystem authority: every mutation goes
@@ -50,8 +53,13 @@ interface GraphSnapshot {
   sourceById: Map<string, NodeSource>;
 }
 
+/** The raw merged graph — what the savings estimate is computed from. */
+function loadMerged(): ReturnType<typeof mergeBrains> {
+  return mergeBrains(loadSafe(paths.project), loadSafe(paths.global));
+}
+
 function loadGraph(): GraphSnapshot {
-  const merged = mergeBrains(loadSafe(paths.project), loadSafe(paths.global));
+  const merged = loadMerged();
   const related = new Map<string, string[]>();
   for (const e of merged.edges) {
     (related.get(e.from) ?? related.set(e.from, []).get(e.from)!).push(e.to);
@@ -100,6 +108,11 @@ function fileFor(source: NodeSource): string {
 const ACTIVITY_REPLAY_MS = 12 * 60_000; // matches the glow's ~12 min lifetime
 let activityOffset = 0;
 const seenActivityKeys: string[] = [];
+// Tokens the brain saved since this window opened (the launcher's live "+N this
+// session"). Only recall events count — the same ones that bump recallCount —
+// so this is exactly the increment of the lifetime figure.
+let sessionSaved = 0;
+let launcher: BrainLauncherProvider | null = null;
 
 function toViewEvents(events: ActivityEvent[]): ViewActivityEvent[] {
   return events.map((e) => ({ at: e.at, kind: e.kind, ids: e.ids, seedCount: e.seedCount }));
@@ -125,6 +138,15 @@ function relayActivity(): void {
     if (fresh.length === 0) return;
     logLine(`activity: ${fresh.map((e) => `${e.kind}(${e.ids.length})`).join(' ')}`);
     for (const w of channelViews) post(w, { type: 'activity', events: toViewEvents(fresh) });
+
+    // The watcher fires whether or not a panel is open, so the launcher's
+    // savings readout keeps ticking with the graph closed.
+    const byId = new Map<string, BrainNode>(loadMerged().nodes.map((n) => [n.id, n]));
+    const gained = eventSavings(fresh, byId);
+    if (gained > 0) {
+      sessionSaved += gained;
+      launcher?.refresh();
+    }
   } catch (err) {
     logLine(`activity relay failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -438,17 +460,21 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // Activity-bar LAUNCHER: the nav-bar icon never renders the graph in the
-  // sidebar — becoming visible just opens the full editor tab. The tiny
-  // sidebar panel only shows the viewsWelcome "Open Brain" hint.
-  const launcher = vscode.window.createTreeView('nffBrain.launcher', {
-    treeDataProvider: {
-      getTreeItem: (e: vscode.TreeItem) => e,
-      getChildren: () => [], // always empty → viewsWelcome content shows
-    },
+  // sidebar — becoming visible just opens the full editor tab. The sidebar
+  // itself is the scoreboard: Open Brain, plus the estimated context tokens
+  // recall has saved. With an empty/absent brain it stays empty so the
+  // viewsWelcome hint shows instead.
+  launcher = new BrainLauncherProvider(() => {
+    const merged = loadMerged();
+    return { nodes: merged.nodes, edgeCount: merged.edges.length, sessionSaved };
+  });
+  const launcherView = vscode.window.createTreeView('nffBrain.launcher', {
+    treeDataProvider: launcher,
   });
   context.subscriptions.push(
     launcher,
-    launcher.onDidChangeVisibility((e) => {
+    launcherView,
+    launcherView.onDidChangeVisibility((e) => {
       if (e.visible) void vscode.commands.executeCommand('nffBrain.open');
     }),
   );
@@ -471,6 +497,7 @@ export function activate(context: vscode.ExtensionContext): void {
     debounce = setTimeout(() => {
       refreshStatus();
       broadcastGraph();
+      launcher?.refresh(); // recallCount bumps move the savings figure
       brainFs.notifyBrainChanged(); // open node docs reload from the new truth
     }, 150);
   };
