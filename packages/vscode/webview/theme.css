@@ -85,3 +85,56 @@ body {
 .nb-icon-btn:hover {
   background: var(--nb-hover);
 }
+
+/* ── living-graph activity glow ──────────────────────────────────────────────
+   A blurred ink square behind nodes the agent recently looked at. Monochrome
+   on purpose: intensity carries the signal, hue stays ink-on-paper. Decay
+   lives in --nb-glow-i (re-set every ~10s by React); breathing period arrives
+   as an inline animation-duration; the arrival ripple is a per-node
+   animation-delay. Base opacity 0 + 'both' fill keeps delayed halos dark
+   until their wave reaches them. */
+.nb-glow {
+  fill: var(--nb-ink);
+  pointer-events: none;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: nb-breathe 3200ms ease-in-out infinite;
+  opacity: 0;
+}
+.nb-glow--fresh {
+  animation:
+    nb-arrive 900ms ease-out both,
+    nb-breathe 3200ms ease-in-out 900ms infinite;
+}
+
+/* "The agent just looked at me": flare in slightly oversized, settle. */
+@keyframes nb-arrive {
+  0% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+  25% {
+    opacity: calc(var(--nb-glow-i) * 0.95);
+  }
+  100% {
+    opacity: calc(var(--nb-glow-i) * 0.6);
+    transform: scale(1);
+  }
+}
+
+/* Idle heartbeat while the heat decays; duration slows as the node cools. */
+@keyframes nb-breathe {
+  0%,
+  100% {
+    opacity: calc(var(--nb-glow-i) * 0.22);
+  }
+  50% {
+    opacity: calc(var(--nb-glow-i) * 0.75);
+  }
+}
+
+/* Hidden panel (retainContextWhenHidden): kill all glow animation. */
+.nb-anim-off .nb-glow {
+  animation: none;
+  opacity: 0;
+}

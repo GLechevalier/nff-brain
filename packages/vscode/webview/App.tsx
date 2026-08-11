@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { rankNodes } from '@nff-brain/core/score';
 import type { ExtToWeb, ViewNode, WebToExt } from '../src/protocol';
 import { BrainGraph, type BrainGraphHandle } from './BrainGraph';
+import { useActivityGlow } from './useActivityGlow';
 
 // The Brain graph, ported from nff-dashboard's BrainTab. The old in-webview
 // "Memory Document" panel is gone: clicking a node asks the extension host to
@@ -31,6 +32,9 @@ export function App() {
   const graphRef = useRef<BrainGraphHandle>(null);
   const noticeTimer = useRef<number | null>(null);
 
+  // Living-graph heat: which nodes the agent recently looked at, and how hot.
+  const { glow, visible, onActivity } = useActivityGlow(nodes);
+
   // ── extension bridge ────────────────────────────────────────────────────────
   useEffect(() => {
     function onMessage(ev: MessageEvent<ExtToWeb>) {
@@ -45,12 +49,14 @@ export function App() {
         noticeTimer.current = window.setTimeout(() => setNotice(null), 4000);
       } else if (msg.type === 'busy') {
         setBusy(msg.on);
+      } else if (msg.type === 'activity') {
+        onActivity(msg.events, msg.replay === true);
       }
     }
     window.addEventListener('message', onMessage);
     vscode.postMessage({ type: 'ready' });
     return () => window.removeEventListener('message', onMessage);
-  }, []);
+  }, [onActivity]);
 
   // Hide the pan/zoom hint when the panel gets cramped.
   useEffect(() => {
@@ -94,6 +100,7 @@ export function App() {
   return (
     <div
       ref={containerRef}
+      className={visible ? undefined : 'nb-anim-off'}
       style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', background: 'var(--nb-paper)' }}
     >
       <div
@@ -163,6 +170,7 @@ export function App() {
           selectedId={selectedId}
           hoveredId={hoveredId}
           matchedIds={matchedIds}
+          glow={glow}
           onSelect={openNode}
           onHover={setHoveredId}
           emptyState={

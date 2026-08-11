@@ -21,14 +21,33 @@ function read(): any {
 describe('hooksConfig', () => {
   it('installs into a missing settings file', () => {
     const r = installHooks(settingsPath);
-    expect(r.installed.sort()).toEqual(['SessionEnd', 'SessionStart']);
+    expect(r.installed.sort()).toEqual(['SessionEnd', 'SessionStart', 'UserPromptSubmit']);
     const s = read();
     expect(s.hooks.SessionStart[0].hooks[0].command).toContain('nff-brain recall');
     expect(s.hooks.SessionEnd[0].hooks[0].command).toContain('nff-brain distill');
+    // The prompt hook is a DEFAULT now (it feeds the graph's activity glow),
+    // no longer gated behind --auto-model.
+    expect(s.hooks.UserPromptSubmit[0].hooks[0].command).toContain('nff-brain novelty');
     // Distill MUST carry a timeout: without one Claude Code cancels the
     // SessionEnd hook before the ~25s LLM call finishes.
     expect(s.hooks.SessionEnd[0].hooks[0].timeout).toBe(DISTILL_TIMEOUT_S);
     expect(s.hooks.SessionStart[0].hooks[0].timeout).toBeUndefined();
+  });
+
+  it('adds the prompt hook to a pre-existing install that lacks it', () => {
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {
+          SessionStart: [{ hooks: [{ type: 'command', command: 'nff-brain recall --stdin-hook' }] }],
+          SessionEnd: [{ hooks: [{ type: 'command', command: DISTILL_COMMAND, timeout: DISTILL_TIMEOUT_S }] }],
+        },
+      }),
+    );
+    const r = installHooks(settingsPath);
+    expect(r.installed).toEqual(['UserPromptSubmit']);
+    expect(read().hooks.UserPromptSubmit[0].hooks[0].command).toContain('nff-brain novelty');
   });
 
   it('patches a timeout onto a pre-timeout distill install', () => {
@@ -68,9 +87,10 @@ describe('hooksConfig', () => {
     installHooks(settingsPath);
     const r2 = installHooks(settingsPath);
     expect(r2.installed).toEqual([]);
-    expect(r2.skipped.sort()).toEqual(['SessionEnd', 'SessionStart']);
+    expect(r2.skipped.sort()).toEqual(['SessionEnd', 'SessionStart', 'UserPromptSubmit']);
     const s = read();
     expect(s.hooks.SessionStart).toHaveLength(1);
+    expect(s.hooks.UserPromptSubmit).toHaveLength(1);
   });
 
   it('uninstall removes only nff-brain entries', () => {

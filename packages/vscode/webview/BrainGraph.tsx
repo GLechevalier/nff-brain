@@ -3,6 +3,7 @@ import { forwardRef, useImperativeHandle, useMemo } from 'react';
 import type { ViewEdge, ViewNode } from '../src/protocol';
 import { spaceOutNodes } from './brainSpacing';
 import { usePanZoom, type FitBox } from './usePanZoom';
+import type { GlowInfo } from './useActivityGlow';
 
 // The brain knowledge-graph renderer, ported from nff-dashboard's
 // BrainGraph.tsx. Pure SVG; node x/y are board coordinates; a minimum-spacing
@@ -36,13 +37,15 @@ interface BrainGraphProps {
   hoveredId: string | null;
   /** Search results: null/undefined = search inactive, everything full opacity. */
   matchedIds?: ReadonlySet<string> | null;
+  /** Live-activity heat: nodes the agent recently looked at glow and breathe. */
+  glow?: ReadonlyMap<string, GlowInfo>;
   onSelect: (id: string) => void;
   onHover: (id: string | null) => void;
   emptyState?: React.ReactNode;
 }
 
 export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function BrainGraph(
-  { nodes, edges, selectedId, hoveredId, matchedIds, onSelect, onHover, emptyState },
+  { nodes, edges, selectedId, hoveredId, matchedIds, glow, onSelect, onHover, emptyState },
   ref,
 ) {
   // The central hub is pinned during spacing so the graph keeps its anchor.
@@ -104,7 +107,9 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
     [resetView, centerOn, laidOut],
   );
 
-  const nodeMap = Object.fromEntries(nodes.map((n) => [n.id, laidOut[n.id]]));
+  // Memoized: the glow's 10s decay tick re-renders this component, and
+  // rebuilding the map every render would allocate for nothing.
+  const nodeMap = useMemo(() => Object.fromEntries(nodes.map((n) => [n.id, laidOut[n.id]])), [nodes, laidOut]);
 
   if (nodes.length === 0 && emptyState) {
     return (
@@ -136,6 +141,11 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
       }}
     >
       <rect x={0} y={0} width="100%" height="100%" fill={PAPER} />
+      <defs>
+        <filter id="nb-blur" x="-75%" y="-75%" width="250%" height="250%">
+          <feGaussianBlur stdDeviation="5" />
+        </filter>
+      </defs>
       <g transform={`translate(${view.tx} ${view.ty}) scale(${view.scale})`}>
         {edges.map((edge, i) => {
           const from = nodeMap[edge.from];
@@ -169,6 +179,37 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
             </g>
           );
         })}
+        {/* Activity halos — BEHIND the ink squares so a hot node glows around
+            its edges. Square (not round) to keep the ink-on-paper geometry.
+            All motion is CSS keyframes; React only sets --nb-glow-i and the
+            timing parameters, at most every 10s. */}
+        {glow &&
+          nodes.map((node) => {
+            const g = glow.get(node.id);
+            const p = nodeMap[node.id];
+            if (!g || !p) return null;
+            const pad = 6;
+            return (
+              <rect
+                key={`glow-${node.id}`}
+                className={`nb-glow${g.fresh ? ' nb-glow--fresh' : ''}`}
+                x={p.x - node.size - pad}
+                y={p.y - node.size - pad}
+                width={(node.size + pad) * 2}
+                height={(node.size + pad) * 2}
+                filter="url(#nb-blur)"
+                style={
+                  {
+                    '--nb-glow-i': String(g.intensity),
+                    // Fresh: two delays — the arrival flash rides the wave, the
+                    // breathing starts once the 900ms flash hands over.
+                    animationDelay: g.fresh ? `${g.delayMs}ms, ${g.delayMs + 900}ms` : undefined,
+                    animationDuration: g.fresh ? undefined : `${g.periodMs}ms`,
+                  } as React.CSSProperties
+                }
+              />
+            );
+          })}
         {nodes.map((node) => {
           const p = nodeMap[node.id];
           if (!p) return null;

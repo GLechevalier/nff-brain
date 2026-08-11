@@ -41,6 +41,13 @@ function brain(): any {
   return JSON.parse(fs.readFileSync(path.join(ws, '.nff-brain', 'brain.json'), 'utf8'));
 }
 
+/** Last event appended to the workspace's activity stream (the glow feed). */
+function lastActivity(wsDir = ws): any {
+  const raw = fs.readFileSync(path.join(wsDir, '.nff-brain', 'activity.jsonl'), 'utf8').trim();
+  const lines = raw.split('\n');
+  return JSON.parse(lines[lines.length - 1]);
+}
+
 beforeAll(() => {
   expect(fs.existsSync(CLI), `built CLI missing at ${CLI} — run npm run build -w nff-brain`).toBe(true);
 
@@ -119,6 +126,11 @@ describe('e2e (mocked claude)', () => {
     expect(lesson.origin).toBe('agent');
     expect(lesson.sourceSession).toBe('sess-e2e');
     expect(b.edges.some((e: any) => e.from === 'login-cookie-fix' && e.to === 'build-rules')).toBe(true);
+    // The glow feed saw the write.
+    const act = lastActivity();
+    expect(act.kind).toBe('distill');
+    expect(act.ids).toContain('login-cookie-fix');
+    expect(act.sessionId).toBe('sess-e2e');
   });
 
   it('recall prints the preamble and bumps recall counts', () => {
@@ -129,6 +141,10 @@ describe('e2e (mocked claude)', () => {
     expect(r.stdout).toContain('↳ related:');
     const b = brain();
     expect(b.nodes.find((n: any) => n.id === 'login-cookie-fix').recallCount).toBeGreaterThan(0);
+    const act = lastActivity();
+    expect(act.kind).toBe('recall');
+    expect(act.ids).toContain('login-cookie-fix');
+    expect(act.seedCount).toBe(act.ids.length); // small brain → whole-graph bypass
   });
 
   it('recall as a SessionStart hook reads cwd from stdin', () => {
@@ -180,6 +196,9 @@ describe('e2e (mocked claude)', () => {
     const r = runCli(['search', 'deploy']);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('deploy-procedure');
+    const act = lastActivity();
+    expect(act.kind).toBe('search');
+    expect(act.ids).toContain('deploy-procedure');
     const empty = runCli(['search']);
     expect(empty.status).toBe(1);
     expect(empty.stderr).toContain('usage: nff-brain search');
@@ -281,6 +300,9 @@ describe('e2e ingest-graphify + expand (mocked claude)', () => {
     expect(r.stdout).toContain('auth_login — repo-a/auth/login.py (code)');
     expect(r.stdout).toContain('session_store — repo-a/auth/session.py (code)');
     expect(r.stdout).toContain('auth_login -calls-> session_store');
+    const act = lastActivity();
+    expect(act.kind).toBe('expand');
+    expect(act.ids).toEqual(['gf-flow-login-flow']);
   });
 
   it('recall surfaces codebase-map nodes with the expand hint', () => {
@@ -374,6 +396,12 @@ describe('e2e novelty / model-request', () => {
     // The tmpdir-name query matches nothing in the brain → max novelty → frontier.
     expect(req.model).toBe('opus');
     expect(req.novelty).toBe(1);
+    // 8-node brain → whole-graph recall event, all seeds.
+    const act = lastActivity(nws);
+    expect(act.kind).toBe('recall');
+    expect(act.ids).toHaveLength(8);
+    expect(act.seedCount).toBe(8);
+    expect(act.sessionId).toBe('sess-nov');
   });
 
   it('novelty --stdin-hook stays silent and skips the write when the model is unchanged', () => {
@@ -405,6 +433,11 @@ describe('e2e novelty / model-request', () => {
     expect(req.model).toBe('haiku');
     expect(req.novelty).toBeLessThan(0.35);
     expect(req.top[0].id).toBe('docker-restart');
+    // The per-prompt heartbeat: the prompt's anchor nodes hit the glow feed.
+    const act = lastActivity(nws);
+    expect(act.kind).toBe('prompt');
+    expect(act.ids[0]).toBe('docker-restart');
+    expect(act.sessionId).toBe('sess-nov');
   });
 
   it('the NFF_BRAIN_SKIP guard blocks the hook write', () => {

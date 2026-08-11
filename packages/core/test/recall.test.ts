@@ -46,6 +46,7 @@ describe('recallBrain', () => {
     const edges: BrainEdge[] = [{ from: 'a', to: 'b', strength: 0.8 }];
     const r = recallBrain({ nodes, edges }, 'anything at all');
     expect(r.nodes).toHaveLength(2);
+    expect(r.seedCount).toBe(2); // whole-graph bypass: everything is a "seed"
     expect(r.preamble).toContain('## Your learned skills & playbooks');
     expect(r.preamble).toContain('- [strategy] Alpha: aaa');
     expect(r.preamble).toContain('↳ related: Beta');
@@ -63,6 +64,10 @@ describe('recallBrain', () => {
     expect(ids).toContain('docker-fix');
     expect(ids).toContain('neighbor'); // pulled in by the edge, not the text
     expect(r.nodes.length).toBeLessThanOrEqual(12);
+    // Seeds come first; the edge-expanded neighbor sits past seedCount.
+    expect(r.seedCount).toBeGreaterThan(0);
+    expect(r.seedCount).toBeLessThanOrEqual(6);
+    expect(ids.indexOf('neighbor')).toBeGreaterThanOrEqual(r.seedCount);
   });
 
   it('returns empty when nothing matches (above bypass size)', () => {

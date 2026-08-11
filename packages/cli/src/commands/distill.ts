@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import {
+  appendActivity,
   applyDelta,
   buildDistillPrompt,
   extractJson,
