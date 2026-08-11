@@ -26,6 +26,11 @@ import type { ExtToWeb, NodeSource, ViewEdge, ViewNode, WebToExt } from './proto
 
 let channelViews: Set<vscode.Webview>;
 let paths: BrainPaths;
+let out: vscode.OutputChannel;
+
+function logLine(msg: string): void {
+  out?.appendLine(`[${new Date().toISOString()}] ${msg}`);
+}
 
 function loadSafe(p: string): BrainFile | null {
   try {
@@ -265,31 +270,42 @@ function wireWebview(webview: vscode.Webview, extensionUri: vscode.Uri, disposab
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  out = vscode.window.createOutputChannel('nff-brain');
+  context.subscriptions.push(out);
   channelViews = new Set();
   const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
   paths = resolveBrainPaths(cwd);
+  logLine(`activated — workspace=${cwd} project=${paths.project} global=${paths.global}`);
 
   let panel: vscode.WebviewPanel | null = null;
 
   context.subscriptions.push(
     vscode.commands.registerCommand('nffBrain.open', () => {
-      if (panel) {
-        panel.reveal();
-        return;
+      try {
+        logLine('nffBrain.open invoked');
+        if (panel) {
+          panel.reveal();
+          return;
+        }
+        panel = vscode.window.createWebviewPanel('nffBrain', 'nff-brain', vscode.ViewColumn.One, {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+        });
+        // The capybara mascot as the editor-tab icon (instead of the generic file glyph).
+        panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'capybara.png');
+        const disposables: vscode.Disposable[] = [];
+        wireWebview(panel.webview, context.extensionUri, disposables);
+        panel.onDidDispose(() => {
+          channelViews.delete(panel!.webview);
+          for (const d of disposables) d.dispose();
+          panel = null;
+        });
+        logLine('panel created');
+      } catch (err) {
+        const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+        logLine(`nffBrain.open FAILED: ${msg}`);
+        void vscode.window.showErrorMessage(`nff-brain failed to open: ${msg}`);
       }
-      panel = vscode.window.createWebviewPanel('nffBrain', 'nff-brain', vscode.ViewColumn.One, {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-      });
-      // The capybara mascot as the editor-tab icon (instead of the generic file glyph).
-      panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'capybara.png');
-      const disposables: vscode.Disposable[] = [];
-      wireWebview(panel.webview, context.extensionUri, disposables);
-      panel.onDidDispose(() => {
-        channelViews.delete(panel!.webview);
-        for (const d of disposables) d.dispose();
-        panel = null;
-      });
     }),
     vscode.commands.registerCommand('nffBrain.refresh', () => broadcastGraph()),
   );
