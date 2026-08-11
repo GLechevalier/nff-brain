@@ -1,0 +1,296 @@
+# nff-brain — Reference Documentation
+
+Local-first knowledge-graph memory for Claude Code. This document is the full
+reference: the data model, how each part of the session loop works, every CLI
+command, the graphify codebase-map bridge, and the knobs you can turn. For a
+quick start, see the [README](../README.md).
+
+---
+
+## 1. Mental model
+
+nff-brain maintains a **knowledge graph in a plain JSON file** and wires it into
+Claude Code through two hooks:
+
+```
+SessionStart ──► nff-brain recall  ──► relevant subgraph printed into context
+                                        (LLM-free, instant, fail-open)
+
+  … you work with Claude Code normally …
+
+SessionEnd ────► nff-brain distill ──► one `claude -p` call turns the transcript
+                                        into new/refined nodes (fail-open)
+```
+
+Three kinds of knowledge live in the same graph, distinguished by `origin`:
+
+| origin | Created by | Consolidation | Meaning |
+|---|---|---|---|
+| `seed` | `init`, `add`, VS Code | never auto-evicted or auto-merged | curated knowledge |
+| `agent` | `distill` | folded/pruned when the graph grows | learned lessons |
+| `graphify` | `ingest-graphify` | never folded/pruned; **replaced wholesale on re-import** | codebase map |
+
+## 2. Files on disk
+
+| Path | What |
+|---|---|
+| `<workspace>/.nff-brain/brain.json` | project brain (the default target of every command) |
+| `~/.nff-brain/brain.json` | global brain (`--global` flag) |
+| `<workspace>/.nff-brain/brain.json.lock/` | lock **directory** (mkdir is atomic everywhere); stale after 10 s |
+| `<workspace>/.nff-brain/last-recall.log`, `last-distill.log` | fail-open hook logs — first place to look when a hook "did nothing" |
+| `.claude/settings.json` | where `install-hooks` merges the two hook entries |
+
+The workspace root is found by walking up from the cwd until a `.nff-brain`,
+`.claude`, or `.git` directory appears. Writes are atomic (temp file + fsync +
+rename, with a Windows EPERM retry loop). Recall reads a **merged view** of
+project + global brains — the project wins on id collision.
+
+## 3. The graph model
+
+```jsonc
+{
+  "version": 1,
+  "updatedAt": "2026-08-10T…",
+  "nodes": [{
+    "id": "docker-restart-procedure",   // kebab slug, ≤ 60 chars
+    "title": "Docker restart procedure",// ≤ 80 chars
+    "category": "rules",                // core | analysis | rules | strategy
+    "content": "When containers wedge, force-recreate them because …", // ≤ 1200 chars
+    "color": "#4ade80", "x": 400, "y": 300, "size": 16,  // board placement
+    "origin": "agent",                  // seed | agent | graphify
+    "sourceSession": "…",               // distill only: which session taught it
+    "lastUpdated": "…", "recallCount": 3, "lastRecalledAt": "…",
+    "graphifyRef": {                    // graphify origin only — see §6
+      "graph": "graphify-out/graph.json",
+      "kind": "community",              // community | node | hyperedge
+      "key": 0,
+      "children": ["auth_login", "session_store", "…"]
+    }
+  }],
+  "edges": [{ "from": "a", "to": "b", "strength": 0.8 }]  // undirected, 0..1
+}
+```
+
+Categories map to colors and glyphs everywhere (CLI, VS Code):
+`core` #00ffcc ◈ · `analysis` #22d3ee ⊕ · `rules` #4ade80 ▦ · `strategy` #a78bfa ↑.
+
+`recallCount` is the value signal: recalled nodes get bumped, and consolidation
+always evicts/folds the **least-recalled** nodes first.
+
+## 4. The session loop in detail
+
+### Recall (SessionStart, LLM-free)
+
+- Graphs with **≤ 40 nodes** are injected whole — no retrieval at all.
+- Bigger graphs run two-step GraphRAG:
+  1. **Seed** — lexical scoring (token overlap + trigram similarity) of the task
+     text against every node; top 6 above a 0.05 floor.
+  2. **Expand** — the strongest edges pull in neighbors until 12 nodes total.
+- Node content is trimmed to 600 chars in the preamble.
+- Every included node's `recallCount` is bumped.
+- Codebase-map nodes are rendered with an `(expand: nff-brain expand <id>)`
+  hint plus a one-line footer explaining the drill-down (§6).
+
+### Distill (SessionEnd, one `claude -p` call)
+
+- Transcripts under **200 chars** are skipped (trivial sessions).
+- The prompt carries the task text, the transcript (capped at 12 000 chars), and
+  the current node list; the model returns strict JSON. **At most 3 new nodes**
+  per session; reusing an existing id refines that node in place.
+- The LLM call runs **outside** the file lock; only the fast delta-apply runs
+  under it.
+- After applying, the graph is pruned to **400 nodes** — counting and evicting
+  only `agent` nodes (seeds are immortal, graphify nodes don't count, `core`
+  category is protected).
+- Hard fail-open: any error logs to `.nff-brain/last-distill.log` and exits 0.
+
+### Consolidation (`nff-brain merge`)
+
+- Default: **fold least-used** — ~25 % of the coldest `agent` nodes fold into
+  their nearest surviving neighbor (strongest edge → most similar text → the
+  hub). Content is appended, edges repointed — knowledge is kept, not deleted.
+  A floor of 8 nodes is always kept.
+- `--llm`: additionally a trigram shortlist of near-duplicate pairs is judged by
+  the LLM; confirmed pairs are merged with LLM-authored combined text.
+- `seed` and `graphify` nodes are never victims; `graphify` nodes also never
+  *absorb* folded content (it would vanish on the next re-import).
+
+## 5. CLI reference
+
+Every command targets the project brain; add `--global` for `~/.nff-brain`.
+`--key value` and `--key=value` are both accepted.
+
+### Setup
+
+| Command | Notes |
+|---|---|
+| `init [--hooks] [--global]` | creates the brain with a hub node; if `CLAUDE.md`/`AGENTS.md` exists, splits it into `seed` nodes via one `claude -p` call. `--hooks` also runs install-hooks. |
+| `install-hooks [--global]` | merges the two hook entries into `.claude/settings.json` (never clobbers; one-time backup at `settings.json.bak-nff-brain`). The SessionEnd entry carries `timeout: 120` — required, Claude Code otherwise cancels the distill before the LLM answers. |
+| `uninstall-hooks [--global]` | removes exactly the entries whose command contains `nff-brain`. |
+| `doctor` | checks the claude CLI, brain files, stale locks, hooks, model in effect. Exit code reflects health. |
+| `upgrade` / `--version` | `npm install -g nff-brain@latest` / print version. |
+
+### Session loop (normally run by the hooks)
+
+| Command | Notes |
+|---|---|
+| `recall [--query q] [--stdin-hook]` | print the preamble (exactly what Claude sees). `--stdin-hook` reads the Claude Code hook payload from stdin. |
+| `distill [--transcript p] [--session id] [--model m] [--stdin-hook]` | distill a transcript into nodes. |
+
+### Graph editing
+
+| Command | Notes |
+|---|---|
+| `list` | all nodes, merged project + global view |
+| `search <query> [--limit 10]` | rank nodes by relevance |
+| `show <id>` | one node's memory document |
+| `add --title T --content C [--category c] [--id i]` | add a curated (`seed`) node |
+| `edit <id> [--title T] [--content C] [--category c]` | edit any node |
+| `rm <id>` | delete a node and its edges |
+| `link <a> <b> [--strength 0.6]` / `unlink <a> <b>` | connect / disconnect |
+| `reinforce <a> <b> [--delta 0.1]` | strengthen a connection |
+| `merge [--ratio 0.25] [--llm] [--model m]` | consolidate (§4) |
+
+### Codebase map (graphify bridge)
+
+| Command | Notes |
+|---|---|
+| `ingest-graphify [--dir graphify-out] [--max-per-repo 10] [--no-llm] [--model m] [--global]` | import a graphify graph — see §6 |
+| `expand <id>` | list a codebase-map node's underlying code entities live from graph.json |
+
+## 6. The graphify codebase-map bridge
+
+[graphify](https://github.com/safishamsi/graphify) (`/graphify` in Claude Code)
+turns a folder of code/docs into an entity-level knowledge graph
+(`graphify-out/graph.json` — often thousands of nodes). The brain deliberately
+stays tiny, so `ingest-graphify` imports only a **compressed layer** whose goal
+is to bridge *user intent* to *code meaning and organization*: each imported
+node explains what a part of the system is for and points at the exact
+entities/files that implement it.
+
+### What gets imported — at most `--max-per-repo` (default 10) nodes per repo
+
+Candidates are attributed to a repo by the top-level path segment of their
+members' source files (majority vote), then selected round-robin
+area → flow → god with per-kind slot caps, leftover slots backfilled with more
+areas:
+
+| Kind | Source | Slot cap | id prefix | category |
+|---|---|---|---|---|
+| **area** | a graphify community (label from `GRAPH_REPORT.md`; `"Module Group N"` placeholders fall back to a title derived from the community's top hubs) | 5 | `gf-area-` | `analysis` |
+| **flow** | a named hyperedge (e.g. *"PKCE OAuth Server Flow"*), ranked by confidence then size | 3 | `gf-flow-` | `strategy` |
+| **god** | a hub entity by total degree (≥ 3 connections) | 2 | `gf-god-` | `core` |
+
+Dropped candidates are logged per repo (`nff: kept 10 of 343 candidates`).
+
+### Node content = intent + pointers
+
+Each node's content is:
+
+1. **Intent** — 1–3 sentences written by **one batched `claude -p` call** (all
+   nodes in a single prompt): what this part of the system is *for*, why it
+   exists, what an agent should know before touching it. Strictly fail-open —
+   if claude is missing, times out, or returns junk (or with `--no-llm`), the
+   import still succeeds with mechanical summaries.
+2. **Mechanical pointers** — key member entities with their source files, and a
+   `↳ graphify <community N | node id | hyperedge id> — nff-brain expand <id>`
+   line.
+
+Every node also carries a machine-readable **`graphifyRef`** (graph path
+relative to the workspace root, kind, key, child graphify-node ids) — the
+first-class bridge that `expand` and future tools resolve.
+
+### Guarantees
+
+- **Wholesale replace:** re-running `ingest-graphify` deletes every
+  `origin: 'graphify'` node and writes the fresh set. Idempotent; keeps the map
+  in sync after `/graphify --update`. Seeds/lessons and their edges are never
+  touched.
+- **Never folded:** graphify nodes are excluded from every consolidation path —
+  as victims *and* as survivors — because anything merged into one would be
+  silently lost on the next re-import.
+- **No budget pressure:** they don't count toward the 400-node distill cap.
+- Edges are imported too: god ↔ its area (0.9), flow ↔ its majority area
+  (confidence), and the strongest cross-community area ↔ area links (top 2 per
+  area).
+
+### The drill-down
+
+```
+$ nff-brain expand gf-flow-pkce-oauth-server-flow
+PKCE OAuth Server Flow — hyperedge pkce_oauth_server_flow (9 entities)
+  GET /authorize handler — nff-rs/nff/src/oauth.rs (code)
+  pkce_challenge() S256 — nff-rs/nff/src/oauth.rs (code)
+  …
+relations:
+  GET /authorize handler -calls-> bind_callback_server()
+  POST /token handler PKCE S256 -calls-> pkce_challenge() S256
+```
+
+`expand` resolves the node's `graphifyRef` against the *current* graph.json, so
+it reflects the latest graphify run; stale child ids are reported. Recall
+advertises the command on every codebase-map node it surfaces, so agents
+discover the bridge without being told.
+
+### Typical loop & gotchas
+
+```sh
+/graphify --update            # (in Claude Code) refresh the entity graph
+nff-brain ingest-graphify     # re-import the compressed map
+```
+
+- Re-running with `--no-llm` **overwrites** previously LLM-written intent with
+  mechanical summaries — run without the flag to restore it.
+- If `expand` says the graph is missing, the graph.json moved or was cleaned —
+  re-run `/graphify`, then `ingest-graphify`.
+
+## 7. Environment variables
+
+| Variable | Default | Effect |
+|---|---|---|
+| `NFF_BRAIN_MODEL` | `haiku` | model for every `claude -p` call (`init`, `distill`, `merge --llm`, `ingest-graphify`); per-call `--model` wins |
+| `NFF_BRAIN_TIMEOUT_MS` | `60000` | hard timeout for each `claude -p` call (process tree is killed on expiry) |
+| `NFF_BRAIN_CLAUDE_BIN` | `claude` | claude binary override (tests use a shim) |
+| `NFF_BRAIN_SKIP` | — | set to `1` in the env of nff-brain's own `claude -p` children; both hooks exit immediately when they see it. **Recursion guard — never remove.** |
+
+## 8. VS Code extension
+
+- **Open**: `nff-brain: Open Brain` from the command palette, the status-bar
+  `brain` item, or the activity-bar side view.
+- The graph is pure inline SVG (no chart libraries), themed via VS Code color
+  variables; a search bar filters nodes live.
+- Clicking a node opens it as a **native markdown editor tab** (an
+  `nffbrain:` virtual document). Saving writes title/category/body/links back
+  to `brain.json` under the store lock. The meta line shows
+  `curated` / `learned` / `codebase map` by origin.
+- The ⤵ Merge button runs the same fold pass as `nff-brain merge`.
+
+## 9. Development
+
+```sh
+npm ci
+npm run build     # CLI (tsup) + VS Code extension (esbuild)
+npx vitest run    # unit + e2e (e2e runs the BUILT CLI against a mocked claude)
+```
+
+Layout: `packages/core` (types, store, recall, distill, mergePass,
+ingestGraphify, hooksConfig — all shared logic, dependency-light),
+`packages/cli` (the `nff-brain` bin; hand-rolled flag parser in `util.ts` —
+**new value-taking flags must be added to `VALUE_FLAGS`**), `packages/vscode`
+(extension + webview; `F5` launches the Extension Development Host).
+
+The e2e suite fakes claude with `packages/cli/test/fixtures/claude-shim.mjs`,
+which branches on marker phrases in the prompt (`memory architect` = init,
+`memory distiller` = distill, `graph explainer` = ingest-graphify);
+`SHIM_MODE=hang` never answers, which is how fail-open is proven.
+
+## 10. Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| Nothing recalled at session start | `nff-brain recall --query "…"` manually; `.nff-brain/last-recall.log`; `nff-brain doctor` |
+| Brain never learns | `.nff-brain/last-distill.log`. Most common cause historically: the SessionEnd hook missing its `timeout: 120` — `install-hooks` repairs old installs in place. |
+| `timed out after 60000ms` in logs | slow model/login — raise `NFF_BRAIN_TIMEOUT_MS` |
+| `timed out waiting for lock` | a crashed process left `brain.json.lock/`; it is stolen automatically after 10 s, or delete the directory |
+| Hook seems to run twice / recursively | `NFF_BRAIN_SKIP` guard missing from env — see §7 |
+| `expand` says graph not found | re-run `/graphify`, then `nff-brain ingest-graphify` |
