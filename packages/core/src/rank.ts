@@ -21,9 +21,34 @@ import type { SimHit } from './vector.js';
 
 export const DEFAULT_RRF_K = 60;
 export const DEFAULT_RRF_WEIGHTS: readonly [number, number] = [1, 1];
-/** Absolute cosine below which a semantic candidate is never considered. */
-export const DEFAULT_SEMANTIC_FLOOR = 0.72;
-/** ...and it must also be within this much of the best cosine seen. */
+
+/**
+ * Absolute cosine below which a semantic candidate is never considered.
+ *
+ * MEASURED, not guessed — and it is specific to the model AND its query prefix.
+ * Sampled over the 14-node dev brain with Xenova/bge-small-en-v1.5 and the bge
+ * retrieval prefix, `nff-brain search --limit 8` with the floor disabled:
+ *
+ *   true positives        0.59 – 0.73   (6 paraphrase queries, no token overlap)
+ *   plausible runners-up  0.52 – 0.55
+ *   unrelated query       0.38 – 0.42   ("how do I bake sourdough bread")
+ *
+ * 0.55 admits every true positive and excludes the noise floor by a wide
+ * margin. Do NOT copy a number from a blog post: absolute cosine scales differ
+ * per model, per prefix, and somewhat per corpus. To re-tune after changing
+ * NFF_BRAIN_EMBED_MODEL, repeat the measurement:
+ *   NFF_BRAIN_SEMANTIC_FLOOR=0 nff-brain search "<paraphrase>" --limit 8
+ * and put the floor between the worst true positive and the best noise hit.
+ */
+export const DEFAULT_SEMANTIC_FLOOR = 0.55;
+
+/**
+ * ...and a candidate must also be within this much of the best cosine seen.
+ * This is the scale-free half of the gate: it trims tangential runners-up when
+ * there IS a strong leader, and it is what stops a query with no real match
+ * (where everything is bunched near the noise floor) from promoting whichever
+ * node happened to come first.
+ */
 export const SEMANTIC_FLOOR_BAND = 0.1;
 
 export interface HybridHit<T> {

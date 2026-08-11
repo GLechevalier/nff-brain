@@ -7,6 +7,7 @@
 // re-ingest (so nothing may ever be merged INTO them).
 
 import { extractJson } from './distill.js';
+import { NFF_PROMPT_MARKERS } from './promptMarkers.js';
 import { removeNode, upsertEdge, upsertNode } from './store.js';
 import {
   clampStrength,
@@ -205,7 +206,8 @@ function clip(text: string, max = CONTENT_MAX): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-function uniqueId(base: string, taken: Set<string>, fallbackSuffix: string): string {
+/** Claim `base` as an id, disambiguating with a suffix if it is already taken. */
+export function uniqueId(base: string, taken: Set<string>, fallbackSuffix: string): string {
   let id = base;
   if (taken.has(id)) id = slug(`${base}-${fallbackSuffix}`);
   let i = 2;
@@ -519,7 +521,7 @@ export function buildExplainPrompt(subjects: ExplainSubject[]): string {
     return lines.join('\n');
   });
   return [
-    `You are the graph explainer for a coding agent's memory. Below are high-level`,
+    `${NFF_PROMPT_MARKERS.explainer} for a coding agent's memory. Below are high-level`,
     `entries imported from a code knowledge graph. For EACH entry, write 1-3 sentences`,
     `of CODE INTENT: what this part of the system is FOR, why it exists, and what an`,
     `agent should know before touching it. Do NOT restate the member list — capture`,

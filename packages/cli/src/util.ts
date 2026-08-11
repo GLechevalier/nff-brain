@@ -8,9 +8,12 @@ export interface Args {
   flags: Record<string, string | boolean>;
 }
 
+// A flag that takes a VALUE must be listed here, or `--since 7d` parses as
+// boolean `since` plus a stray positional "7d" — a silent no-op.
 const VALUE_FLAGS = new Set([
   'query', 'transcript', 'session', 'title', 'category', 'content', 'id', 'strength', 'delta', 'ratio', 'model', 'limit',
   'dir', 'max-per-repo',
+  'since', 'project', 'min-confidence', 'concurrency', 'max-new',
 ]);
 
 export function parseArgs(argv: string[]): Args {

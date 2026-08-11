@@ -118,12 +118,13 @@ export async function indexBrain(
   brainPath: string,
   brain: BrainFile,
   embed: EmbedBatch,
-  opts: { model: string; dim?: number; force?: boolean } = { model: '' },
+  opts: { model: string; dim?: number; force?: boolean },
 ): Promise<IndexResult> {
   const model = opts.model;
   const existing = loadVectors(brainPath);
   const plan = vectorPlan(brain, existing, model);
-  const targets = opts.force ? brain.nodes : brain.nodes.filter((n) => plan.stale.includes(n.id));
+  const stale = new Set(plan.stale);
+  const targets = opts.force ? brain.nodes : brain.nodes.filter((n) => stale.has(n.id));
 
   const nodes: Record<string, VectorEntry> = {};
   if (!opts.force && existing && existing.model === model) {

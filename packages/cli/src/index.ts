@@ -2,6 +2,8 @@ import { cmdDistill } from './commands/distill.js';
 import { cmdDoctor } from './commands/doctor.js';
 import { cmdLink, cmdReinforce, cmdUnlink } from './commands/edges.js';
 import { cmdInstallHooks, cmdUninstallHooks } from './commands/hooks.js';
+import { cmdImport } from './commands/import.js';
+import { cmdIndex } from './commands/indexVectors.js';
 import { cmdExpand, cmdIngestGraphify } from './commands/ingestGraphify.js';
 import { cmdInit } from './commands/init.js';
 import { cmdMerge } from './commands/merge.js';
@@ -9,6 +11,7 @@ import { cmdAdd, cmdEdit, cmdList, cmdRm, cmdShow } from './commands/nodes.js';
 import { cmdNovelty } from './commands/novelty.js';
 import { cmdRecall } from './commands/recall.js';
 import { cmdSearch } from './commands/search.js';
+import { cmdSemantic } from './commands/semantic.js';
 import { cmdUpgrade } from './commands/upgrade.js';
 import { cliVersion } from './util.js';
 
@@ -17,7 +20,15 @@ const HELP = `nff-brain — local-first knowledge-graph memory for Claude Code
 usage: nff-brain <command> [options]
 
 setup
-  init [--hooks] [--global]        create the brain; ingest CLAUDE.md/AGENTS.md via claude -p
+  init [--hooks] [--global] [--import]
+                                   create the brain; ingest CLAUDE.md/AGENTS.md via claude -p
+  import [--limit 40] [--since 7d] [--all] [--project P] [--min-confidence 0.5]
+         [--concurrency 4] [--model m] [--force] [--yes]
+                                   mine PAST Claude Code sessions for durable memories, decisions,
+                                   preferences, open tasks and past failures → .nff-brain/import-preview.md
+                                   (writes nothing to the brain; sends transcript excerpts to claude -p)
+  import --apply [--max-new 60] [--force]
+                                   commit the items still checked in that preview
   install-hooks [--global] [--auto-model]
                                    wire SessionStart recall + SessionEnd distill into .claude/settings.json;
                                    --auto-model also wires UserPromptSubmit novelty scoring (model switching)
@@ -35,7 +46,9 @@ session loop (normally run by the hooks)
 
 graph
   list                             all nodes (merged project + global view)
-  search <query> [--limit 10]      rank nodes by relevance to a query
+  search <query> [--limit 10] [--semantic|--lexical] [--explain]
+                                   rank nodes by relevance to a query; hybrid lexical +
+                                   embedding similarity when semantic search is enabled
   show <id>                        one node's memory document
   add --title T --content C [--category core|analysis|rules|strategy|decision|preference|task] [--id i]
   edit <id> [--title T] [--content C] [--category c]
@@ -44,6 +57,13 @@ graph
   unlink <a> <b>                   remove a connection
   reinforce <a> <b> [--delta 0.1]  strengthen a connection
   merge [--ratio 0.25] [--llm]     fold least-used nodes into neighbours; --llm also dedups
+
+semantic search (optional — search works without it)
+  semantic [status|install|uninstall]
+                                   manage the local embedding runtime (~400 MB, one-time,
+                                   installed into ~/.nff-brain/runtime — never a package dep)
+  index [--global] [--all] [--force] [--check] [--json]
+                                   embed nodes into .nff-brain/vectors.json (only stale ones)
 
 codebase map (graphify bridge)
   ingest-graphify [--dir graphify-out] [--max-per-repo 10] [--no-llm]
@@ -55,6 +75,7 @@ Writes target <workspace>/.nff-brain/brain.json; add --global for ~/.nff-brain/b
 
 const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   init: cmdInit,
+  import: cmdImport,
   recall: cmdRecall,
   distill: cmdDistill,
   novelty: cmdNovelty,
@@ -70,6 +91,8 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   unlink: cmdUnlink,
   reinforce: cmdReinforce,
   merge: cmdMerge,
+  semantic: cmdSemantic,
+  index: cmdIndex,
   'ingest-graphify': cmdIngestGraphify,
   expand: cmdExpand,
   doctor: () => cmdDoctor(),

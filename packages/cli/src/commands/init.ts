@@ -3,7 +3,9 @@ import * as path from 'node:path';
 import {
   CATEGORIES,
   CATEGORY_HINTS,
+  NFF_PROMPT_MARKERS,
   applyDelta,
+  discoverSessions,
   extractJson,
   loadBrain,
   mutateBrain,
@@ -32,7 +34,7 @@ function buildInitPrompt(docText: string, known: BrainNode[], hubId: string): st
     ? known.map((n) => `- id="${n.id}" [${n.category}] ${n.title}`).join('\n')
     : '(none yet)';
   return [
-    `You are the memory architect for a coding agent working on this project.`,
+    `${NFF_PROMPT_MARKERS.architect} for a coding agent working on this project.`,
     `Below is the project's flat memory document (CLAUDE.md / AGENTS.md). Split it into a`,
     `knowledge graph of durable, reusable knowledge: conventions, procedures, gotchas,`,
     `architecture facts, rules. Group related guidance into one node; drop filler.`,
@@ -131,4 +133,28 @@ export async function cmdInit(argv: string[]): Promise<void> {
   } else {
     console.log(`next: nff-brain install-hooks   (wires SessionStart recall + SessionEnd distill)`);
   }
+
+  // 4. Past Claude Code sessions are the fastest path to a brain worth having:
+  // an empty graph only fills up as NEW sessions end, so a fresh install feels
+  // useless for days while the history to fix that is already on disk.
+  await offerHistoryImport(args);
+}
+
+async function offerHistoryImport(args: Args): Promise<void> {
+  let available = 0;
+  try {
+    // One bounded probe — cheap enough to run on every init.
+    available = discoverSessions({ cwd: process.cwd(), limit: 1 }).sessions.length;
+  } catch {
+    return; // history discovery must never break init
+  }
+  if (available === 0) return;
+
+  if (args.flags.import === true) {
+    await cmdImport(args.flags.global === true ? ['--global'] : []);
+    return;
+  }
+  console.log('');
+  console.log('past Claude Code sessions were found for this folder.');
+  console.log('turn them into memories now:   nff-brain import');
 }

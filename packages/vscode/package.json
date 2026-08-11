@@ -80,6 +80,17 @@
           "type": "boolean",
           "default": true,
           "description": "Show a status-bar message whenever nff-brain switches the session model."
+        },
+        "nffBrain.semanticSearch": {
+          "type": "string",
+          "enum": ["auto", "on", "off"],
+          "enumDescriptions": [
+            "Use embeddings when the runtime is installed and a vector index exists.",
+            "Always attempt embeddings (loads the model on the first search).",
+            "Lexical search only — never load the embedding model."
+          ],
+          "default": "auto",
+          "description": "Blend embedding similarity into the graph search box, so queries match meaning and not just keywords. Requires the optional runtime: run `nff-brain semantic install` then `nff-brain index`. Lexical results always render first; the model loads lazily on the first search and adds ~100-200 MB to the extension host."
         }
       }
     }

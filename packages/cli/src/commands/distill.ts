@@ -14,6 +14,7 @@ import {
   runClaude,
   type RawDelta,
 } from '@nff-brain/core';
+import { refreshVectors } from '../semanticRefresh.js';
 import { flagStr, logToBrainDir, parseArgs, parseHookPayload, readStdin } from '../util.js';
 
 // SessionEnd hook: distill the session transcript into brain nodes. HARD
@@ -23,6 +24,10 @@ import { flagStr, logToBrainDir, parseArgs, parseHookPayload, readStdin } from '
 
 const MAX_TOTAL_NODES = 400;
 const MIN_TRANSCRIPT_CHARS = 200; // don't distill trivial/empty sessions
+
+// "semantic is simply off" is the overwhelmingly common case — logging it every
+// session would bury the failures that actually matter in last-distill.log.
+const SILENT_REFRESH = new Set(['disabled', 'semantic off', 'no vector index', 'runtime absent', 'already current']);
 
 export async function cmdDistill(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
@@ -93,6 +98,18 @@ export async function cmdDistill(argv: string[]): Promise<void> {
       'last-distill.log',
       `distilled ${written.size} node(s) [${[...written].join(', ')}]${pruned ? `, pruned ${pruned}` : ''}`,
     );
+
+    // New nodes ⇒ the vector sidecar is stale. No-op (microseconds) unless the
+    // user has opted into semantic search; never throws. See semanticRefresh.ts
+    // for the SessionEnd timeout budget.
+    if (written.size > 0 || pruned > 0) {
+      const vec = await refreshVectors(target);
+      if (vec.ran) logToBrainDir(target, 'last-distill.log', `re-embedded ${vec.embedded} node(s)`);
+      else if (vec.reason && !SILENT_REFRESH.has(vec.reason)) {
+        logToBrainDir(target, 'last-distill.log', `vector refresh skipped: ${vec.reason}`);
+      }
+    }
+
     if (!isHook) {
       console.log(`distilled ${written.size} node(s): ${[...written].join(', ') || '(none)'}`);
     }

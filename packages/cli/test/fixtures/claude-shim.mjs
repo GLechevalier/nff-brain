@@ -34,6 +34,45 @@ process.stdin.on('end', () => {
         edges: [{ from: 'login-cookie-fix', to: 'build-rules', strength: 0.6 }],
       }),
     );
+  } else if (prompt.includes('memory archaeologist')) {
+    // import: mine a past session. Keyed on a marker planted in the synthetic
+    // transcript so different sessions answer differently — that lets the e2e
+    // assert the cross-session cluster boost and the low-confidence path.
+    const shared = {
+      title: 'Retry renameSync on Windows EPERM',
+      content: 'Defender briefly locks the destination, so the atomic save must retry the rename.',
+      confidence: 0.5,
+    };
+    if (prompt.includes('MARKER-ALPHA')) {
+      process.stdout.write(
+        JSON.stringify({
+          memories: [shared],
+          decisions: [
+            { title: 'Bundle the CLI with tsup', content: 'Rollup needed hand-written externals config, tsup does not.', confidence: 0.8 },
+          ],
+          preferences: [],
+          tasks: [{ title: 'Eyeball the sidebar in VS Code', content: 'Implemented but never visually confirmed.', confidence: 0.3 }],
+          failures: [],
+        }),
+      );
+    } else if (prompt.includes('MARKER-BETA')) {
+      // Same lesson, different wording — must cluster with ALPHA's and boost.
+      process.stdout.write(
+        JSON.stringify({
+          memories: [
+            { ...shared, title: 'Retry renameSync when Windows throws EPERM' },
+          ],
+          decisions: [],
+          preferences: [
+            { title: 'Prefers terse commit messages', content: 'Asks for one-line subjects with no body unless the change is subtle.', confidence: 0.7 },
+          ],
+          tasks: [],
+          failures: [],
+        }),
+      );
+    } else {
+      process.stdout.write('{"memories":[],"decisions":[],"preferences":[],"tasks":[],"failures":[]}');
+    }
   } else if (prompt.includes('graph explainer')) {
     // ingest-graphify: batched intent explanations keyed by brain node id
     process.stdout.write(

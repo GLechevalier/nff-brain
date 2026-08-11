@@ -205,6 +205,116 @@ describe('e2e (mocked claude)', () => {
   });
 });
 
+// ── semantic search (optional tier, NEVER installed in CI) ───────────────────
+//
+// CI runs {ubuntu, windows} × node {18,20,22} and must never download a ~400 MB
+// native runtime or a model. So these tests all assert the OFF path: search
+// keeps working, nothing errors, and nothing exits non-zero. NFF_BRAIN_RUNTIME_DIR
+// is pointed at an empty dir so a developer who HAS installed the runtime
+// locally still exercises the same "not installed" branch.
+
+describe('e2e semantic search (runtime absent)', () => {
+  let emptyRuntime: string;
+  const off = () => ({ env: { NFF_BRAIN_RUNTIME_DIR: emptyRuntime, NFF_BRAIN_TRANSFORMERS: '' } });
+
+  beforeAll(() => {
+    emptyRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'nff-brain-e2e-rt-'));
+  });
+
+  afterAll(() => {
+    fs.rmSync(emptyRuntime, { recursive: true, force: true });
+  });
+
+  it('search output is unchanged when semantic is unavailable', () => {
+    const r = runCli(['search', 'deploy'], off());
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('deploy-procedure');
+    // The pure-lexical format: "0.62  id  [category] title" — no lex/sem columns.
+    expect(r.stdout).not.toContain('lex   sem');
+    expect(r.stdout.split('\n')[0]).toMatch(/^\d\.\d{2}\s{2}\S+/);
+  });
+
+  it('--lexical forces the lexical path and matches the default output', () => {
+    const auto = runCli(['search', 'deploy'], off());
+    const lex = runCli(['search', 'deploy', '--lexical'], off());
+    expect(lex.status).toBe(0);
+    expect(lex.stdout).toBe(auto.stdout);
+  });
+
+  it('--semantic explains itself instead of failing', () => {
+    const r = runCli(['search', 'deploy', '--semantic'], off());
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('deploy-procedure'); // still ranked
+    expect(r.stdout).toContain('semantic install');
+  });
+
+  it('index exits 0 and writes no sidecar when the runtime is absent', () => {
+    const r = runCli(['index'], off());
+    expect(r.status).toBe(0); // scripts and the distill tail depend on this
+    expect(r.stdout).toContain('semantic search is not enabled');
+    expect(fs.existsSync(path.join(ws, '.nff-brain', 'vectors.json'))).toBe(false);
+  });
+
+  it('index --check reports staleness without needing the runtime', () => {
+    const r = runCli(['index', '--check'], off());
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/project: \d+ current, \d+ stale/);
+  });
+
+  it('semantic status reports "not installed" and exits 0', () => {
+    const r = runCli(['semantic', 'status'], off());
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('not installed');
+    expect(r.stdout).toContain('nff-brain semantic install');
+  });
+
+  it('semantic rejects an unknown subcommand', () => {
+    const r = runCli(['semantic', 'frobnicate'], off());
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('unknown subcommand');
+  });
+
+  it('doctor reports semantic as off without flipping its exit code', () => {
+    const r = runCli(['doctor'], off());
+    expect(r.stdout).toContain('semantic search');
+    expect(r.stdout).toContain('off (lexical only)');
+    // The `·` marker, not `✗` — optional by construction.
+    expect(r.stdout).toMatch(/· semantic search/);
+  });
+});
+
+// ── build artifacts ──────────────────────────────────────────────────────────
+
+describe('built artifacts stay free of the optional runtime', () => {
+  // embed.ts hides its dynamic import behind new Function, and both bundlers
+  // mark the package external. If either regresses, esbuild rewrites the
+  // import into a require() shim in the CJS extension bundle — which cannot
+  // load an ESM-only package, and fails only at runtime in a user's VS Code.
+  const PKG = '@huggingface/transformers';
+  const artifacts = [
+    path.resolve(here, '..', 'dist', 'index.js'),
+    path.resolve(here, '..', '..', 'vscode', 'dist', 'extension.js'),
+    path.resolve(here, '..', '..', 'vscode', 'dist', 'webview.js'),
+  ];
+
+  it.each(artifacts)('%s does not statically link the runtime', (file) => {
+    if (!fs.existsSync(file)) return; // vscode bundles need `npm run build`
+    const src = fs.readFileSync(file, 'utf8');
+    expect(src).not.toContain(`require("${PKG}")`);
+    expect(src).not.toContain(`require('${PKG}')`);
+    expect(src).not.toContain(`from"${PKG}"`);
+    expect(src).not.toContain(`from "${PKG}"`);
+  });
+
+  it('the webview bundle contains no embedding code at all', () => {
+    const file = path.resolve(here, '..', '..', 'vscode', 'dist', 'webview.js');
+    if (!fs.existsSync(file)) return;
+    const src = fs.readFileSync(file, 'utf8');
+    expect(src).not.toContain(PKG);
+    expect(src).not.toContain('onnxruntime');
+  });
+});
+
 // ── ingest-graphify + expand ─────────────────────────────────────────────────
 
 function writeGraphifyFixture(): void {

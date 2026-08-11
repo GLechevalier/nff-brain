@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fuseRanked } from '../src/rank.js';
+import { DEFAULT_SEMANTIC_FLOOR, fuseRanked } from '../src/rank.js';
 import { rankNodes } from '../src/score.js';
 
 function node(id: string, title: string, content: string) {
@@ -69,19 +69,36 @@ describe('fuseRanked — fusion', () => {
   });
 
   it('drops semantic candidates below the absolute floor', () => {
-    // 0.60 is the unrelated-text baseline for this model family — never a match.
-    const hits = fuseRanked('powershell quoting', NODES, [{ id: 'fleet-dns', sim: 0.6 }]);
+    // ~0.40 is the measured unrelated-query baseline for bge-small — never a
+    // match. See DEFAULT_SEMANTIC_FLOOR for the sampled distribution.
+    const hits = fuseRanked('powershell quoting', NODES, [{ id: 'fleet-dns', sim: 0.42 }]);
     expect(hits.map((h) => h.node.id)).not.toContain('fleet-dns');
+  });
+
+  it('admits a candidate at the measured true-positive level', () => {
+    const hits = fuseRanked('boxes dropping off the network', NODES, [{ id: 'fleet-dns', sim: 0.59 }]);
+    expect(hits.map((h) => h.node.id)).toContain('fleet-dns');
   });
 
   it('drops semantic candidates far below the best cosine, even above the floor', () => {
     const hits = fuseRanked('powershell quoting', NODES, [
-      { id: 'pg-migrations', sim: 0.95 },
-      { id: 'fleet-dns', sim: 0.74 }, // above 0.72, but 0.21 behind the leader
+      { id: 'pg-migrations', sim: 0.88 },
+      { id: 'fleet-dns', sim: 0.6 }, // above the 0.55 floor, but 0.28 behind the leader
     ]);
     const ids = hits.map((h) => h.node.id);
     expect(ids).toContain('pg-migrations');
     expect(hits.find((h) => h.node.id === 'fleet-dns')?.semantic ?? 0).toBe(0);
+  });
+
+  it('uses the floor constant, so re-tuning it cannot silently drift', () => {
+    const justUnder = DEFAULT_SEMANTIC_FLOOR - 0.01;
+    const justOver = DEFAULT_SEMANTIC_FLOOR + 0.01;
+    expect(fuseRanked('quoting', NODES, [{ id: 'fleet-dns', sim: justUnder }]).map((h) => h.node.id)).not.toContain(
+      'fleet-dns',
+    );
+    expect(fuseRanked('quoting', NODES, [{ id: 'fleet-dns', sim: justOver }]).map((h) => h.node.id)).toContain(
+      'fleet-dns',
+    );
   });
 
   it('ignores semantic hits for ids that are not in the node list', () => {

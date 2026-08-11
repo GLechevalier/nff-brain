@@ -49,83 +49,119 @@ function readJson(file: string): Record<string, unknown> | null {
   }
 }
 
-/** Pick the ESM entry from a package.json's exports/module/main, in that order. */
-function esmEntry(pkgDir: string, pkg: Record<string, unknown>): string {
-  const exp = pkg.exports as unknown;
-  const fromExports = (() => {
-    if (!exp || typeof exp !== 'object') return null;
-    const root = (exp as Record<string, unknown>)['.'] ?? exp;
-    if (typeof root === 'string') return root;
-    if (!root || typeof root !== 'object') return null;
-    const r = root as Record<string, unknown>;
-    for (const key of ['import', 'node', 'default']) {
-      const v = r[key];
-      if (typeof v === 'string') return v;
-      if (v && typeof v === 'object') {
-        const nested = (v as Record<string, unknown>)['default'] ?? (v as Record<string, unknown>)['import'];
-        if (typeof nested === 'string') return nested;
-      }
+// Condition priority for picking an entry out of an `exports` map. ORDER IS
+// LOAD-BEARING: "node" must beat "import", or transformers.js hands back its
+// BROWSER build, which treats env.cacheDir as a URL base and fails with
+// "Failed to parse URL from /models/...". "require" is deliberately absent — we
+// load through import().
+const CONDITIONS = ['node', 'import', 'default'];
+
+/**
+ * Resolve a conditional exports value to a relative path. Conditions nest
+ * arbitrarily ({ node: { import: { types, default } } }), so this recurses
+ * rather than peeking one level down.
+ */
+function pickCondition(v: unknown): string | null {
+  if (typeof v === 'string') return v;
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  for (const c of CONDITIONS) {
+    if (c in o) {
+      const r = pickCondition(o[c]);
+      if (r) return r;
     }
-    return null;
-  })();
+  }
+  return null;
+}
+
+/** Pick the Node ESM entry from a package.json's exports/module/main. */
+function esmEntry(pkgDir: string, pkg: Record<string, unknown>): string {
+  const exp = pkg.exports;
+  // A bare exports object with no "." key IS the root condition set.
+  const root = exp && typeof exp === 'object' ? ((exp as Record<string, unknown>)['.'] ?? exp) : exp;
   const rel =
-    fromExports ??
+    pickCondition(root) ??
     (typeof pkg.module === 'string' ? pkg.module : null) ??
     (typeof pkg.main === 'string' ? pkg.main : null) ??
     'index.js';
   return path.resolve(pkgDir, rel);
 }
 
+/** Turn a package directory into a resolved status, or null if unusable. */
+function fromPackageDir(pkgDir: string, dir: string): RuntimeStatus | null {
+  const manifest = path.join(pkgDir, 'package.json');
+  const pkg = readJson(manifest);
+  if (!pkg) return null;
+  const entry = esmEntry(pkgDir, pkg);
+  if (!fs.existsSync(entry)) return null;
+  return {
+    installed: true,
+    entry,
+    version: typeof pkg.version === 'string' ? pkg.version : null,
+    dir,
+    detail: null,
+  };
+}
+
 /**
- * Resolve the embedding package, or null. Never throws.
+ * Resolve the embedding package. Never throws.
  *
- * Order: explicit override → the runtime home → a bare specifier (monorepo /
- * dev installs, and how the opt-in integration test finds a devDependency).
+ * Order: explicit override → the runtime home → node_modules near cwd (monorepo
+ * / dev installs, and how the opt-in integration test finds a devDependency).
+ *
+ * NOTE: we probe the filesystem rather than require.resolve'ing
+ * `<pkg>/package.json`. Modern packages ship an `exports` map, and unless it
+ * explicitly lists "./package.json" Node REFUSES that subpath with a
+ * "Cannot find module" that looks exactly like "not installed" —
+ * @huggingface/transformers is one of them. Resolving the manifest by hand also
+ * lets us pick the ESM entry deliberately instead of getting whatever the
+ * `require` condition points at.
  */
 export function resolveTransformers(): RuntimeStatus {
   const dir = runtimeDir();
   const override = process.env.NFF_BRAIN_TRANSFORMERS;
   if (override) {
+    // Accept either the package directory or the entry file itself.
+    const asDir = fs.existsSync(path.join(override, 'package.json')) ? fromPackageDir(override, dir) : null;
+    if (asDir) return { ...asDir, detail: 'NFF_BRAIN_TRANSFORMERS' };
     if (fs.existsSync(override)) {
       return { installed: true, entry: override, version: null, dir, detail: 'NFF_BRAIN_TRANSFORMERS' };
     }
-    return { installed: false, entry: null, version: null, dir, detail: `NFF_BRAIN_TRANSFORMERS points at a missing path: ${override}` };
+    return {
+      installed: false,
+      entry: null,
+      version: null,
+      dir,
+      detail: `NFF_BRAIN_TRANSFORMERS points at a missing path: ${override}`,
+    };
   }
 
-  // createRequire, NOT import.meta.resolve — the latter is Node 20+ and CI
-  // covers Node 18.
-  const bases = [path.join(dir, 'index.js'), path.join(process.cwd(), 'index.js')];
-  let lastDetail: string | null = null;
-  for (const base of bases) {
-    try {
-      const req = createRequire(pathToFileURL(base));
-      const manifest = req.resolve(`${PACKAGE}/package.json`);
-      const pkgDir = path.dirname(manifest);
-      const pkg = readJson(manifest);
-      if (!pkg) {
-        lastDetail = `unreadable ${manifest}`;
-        continue;
-      }
-      const entry = esmEntry(pkgDir, pkg);
-      if (!fs.existsSync(entry)) {
-        lastDetail = `entry missing: ${entry}`;
-        continue;
-      }
-      return {
-        installed: true,
-        entry,
-        version: typeof pkg.version === 'string' ? pkg.version : null,
-        dir,
-        detail: null,
-      };
-    } catch (err) {
-      lastDetail = err instanceof Error ? err.message.split('\n')[0]! : String(err);
+  const segments = PACKAGE.split('/');
+  const direct = fromPackageDir(path.join(dir, 'node_modules', ...segments), dir);
+  if (direct) return direct;
+
+  // Dev/monorepo fallback. createRequire, NOT import.meta.resolve — the latter
+  // is Node 20+ and CI covers Node 18.
+  let lastDetail: string | null = `not found under ${path.join(dir, 'node_modules')}`;
+  try {
+    const req = createRequire(pathToFileURL(path.join(process.cwd(), 'index.js')));
+    // Resolve the ENTRY (allowed by every exports map), then walk up to the
+    // package root by looking for the manifest.
+    let cur = path.dirname(req.resolve(PACKAGE));
+    for (let i = 0; i < 6; i++) {
+      const found = fromPackageDir(cur, dir);
+      if (found) return found;
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
     }
+  } catch (err) {
+    lastDetail = err instanceof Error ? err.message.split('\n')[0]! : String(err);
   }
   return { installed: false, entry: null, version: null, dir, detail: lastDetail };
 }
 
-export interface InstallResult {
+export interface RuntimeInstallResult {
   ok: boolean;
   /** The exact command run, so a failure is self-diagnosing (Windows paths). */
   command: string;
@@ -136,7 +172,7 @@ export interface InstallResult {
  * npm-install the embedding runtime into its own home. Returns rather than
  * throws — callers print the command and the output on failure.
  */
-export function installRuntime(opts: { spec?: string; timeoutMs?: number } = {}): InstallResult {
+export function installRuntime(opts: { spec?: string; timeoutMs?: number } = {}): RuntimeInstallResult {
   const dir = runtimeDir();
   const spec = opts.spec ?? PACKAGE_SPEC;
   fs.mkdirSync(dir, { recursive: true });

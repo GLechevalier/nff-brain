@@ -38,6 +38,8 @@ Three kinds of knowledge live in the same graph, distinguished by `origin`:
 | `~/.nff-brain/brain.json` | global brain (`--global` flag) |
 | `<workspace>/.nff-brain/brain.json.lock/` | lock **directory** (mkdir is atomic everywhere); stale after 10 s |
 | `<workspace>/.nff-brain/last-recall.log`, `last-distill.log` | fail-open hook logs — first place to look when a hook "did nothing" |
+| `<workspace>/.nff-brain/vectors.json` | optional embedding sidecar (§11) — derived data, git-ignored, safe to delete |
+| `~/.nff-brain/runtime/`, `~/.nff-brain/models/` | optional embedding runtime + model weights (§11); absent unless `semantic install` ran |
 | `.claude/settings.json` | where `install-hooks` merges the two hook entries |
 
 The workspace root is found by walking up from the cwd until a `.nff-brain`,
@@ -142,7 +144,7 @@ Every command targets the project brain; add `--global` for `~/.nff-brain`.
 | Command | Notes |
 |---|---|
 | `list` | all nodes, merged project + global view |
-| `search <query> [--limit 10]` | rank nodes by relevance |
+| `search <query> [--limit 10] [--semantic\|--lexical] [--explain]` | rank nodes by relevance; hybrid lexical + embedding when semantic search is enabled (§11) |
 | `show <id>` | one node's memory document |
 | `add --title T --content C [--category c] [--id i]` | add a curated (`seed`) node |
 | `edit <id> [--title T] [--content C] [--category c]` | edit any node |
@@ -150,6 +152,13 @@ Every command targets the project brain; add `--global` for `~/.nff-brain`.
 | `link <a> <b> [--strength 0.6]` / `unlink <a> <b>` | connect / disconnect |
 | `reinforce <a> <b> [--delta 0.1]` | strengthen a connection |
 | `merge [--ratio 0.25] [--llm] [--model m]` | consolidate (§4) |
+
+### Semantic search (optional — see §11)
+
+| Command | Notes |
+|---|---|
+| `semantic [status\|install\|uninstall]` | manage the local embedding runtime in `~/.nff-brain/runtime`. `install` npm-installs it and prefetches the weights; `status` is the only command that loads the model. |
+| `index [--global] [--all] [--force] [--check] [--json]` | embed nodes into `.nff-brain/vectors.json`, re-embedding only what changed. **Exits 0 when the runtime is absent** so scripts never break; `--check` reports staleness without loading the model. |
 
 ### Codebase map (graphify bridge)
 
@@ -268,6 +277,20 @@ distiller's own model.
 All five fall back to their defaults on a malformed value — a typo can never
 break a hook.
 
+Semantic search (optional — see §11). None of these affect the hooks.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `NFF_BRAIN_SEMANTIC` | `auto` | `auto` = hybrid when the runtime and a vector index both exist; `on` = also explain when it can't; `off` = never |
+| `NFF_BRAIN_EMBED_MODEL` | `Xenova/bge-small-en-v1.5` | embedding model. **Not** `NFF_BRAIN_MODEL` — that is the distiller's `claude -p` model. Changing this invalidates the whole index and needs the floor re-tuned |
+| `NFF_BRAIN_RUNTIME_DIR` | `~/.nff-brain/runtime` | where `semantic install` puts the embedding runtime |
+| `NFF_BRAIN_EMBED_CACHE_DIR` | `~/.nff-brain/models` | model weight cache (mirrors the worker's `BRAIN_EMBED_CACHE_DIR`) |
+| `NFF_BRAIN_TRANSFORMERS` | — | explicit path to the package dir or entry file; bypasses resolution |
+| `NFF_BRAIN_EMBED_OFFLINE` | — | `1` forbids any network fetch; a cache miss then fails fast to lexical instead of downloading |
+| `NFF_BRAIN_SEMANTIC_FLOOR` | `0.55` | minimum cosine for a semantic candidate — **model-specific**, see §11 for how it was measured |
+| `NFF_BRAIN_HYBRID_K` | `60` | RRF constant; larger = flatter, less top-heavy |
+| `NFF_BRAIN_HYBRID_WEIGHTS` | `1,1` | `lexical,semantic` weights in the fusion |
+
 ## 8. VS Code extension
 
 - **Open**: `nff-brain: Open Brain` from the command palette, the status-bar
@@ -309,3 +332,81 @@ which branches on marker phrases in the prompt (`memory architect` = init,
 | `timed out waiting for lock` | a crashed process left `brain.json.lock/`; it is stolen automatically after 10 s, or delete the directory |
 | Hook seems to run twice / recursively | `NFF_BRAIN_SKIP` guard missing from env — see §7 |
 | `expand` says graph not found | re-run `/graphify`, then `nff-brain ingest-graphify` |
+| Search misses obvious paraphrases | semantic search is probably off — `nff-brain doctor`, then §11 |
+| `doctor` says "installed but unusable" | the native onnxruntime binary would not load (musl/Alpine, ARM32, old glibc). `nff-brain semantic status` prints the real error. Search still works, lexically. |
+| Semantic results look stale after editing a node | the sidecar is keyed by content hash — run `nff-brain index` |
+
+## 11. Semantic search (optional)
+
+Lexical ranking (§3) is excellent at ids, slugs and acronyms and blind to
+paraphrase: *"how much money is this actually saving me"* shares no tokens and
+no trigrams with *"Model token savings as avoided rediscovery cost"*. Semantic
+search closes that gap by embedding every node and fusing cosine similarity
+with the lexical score.
+
+```
+nff-brain semantic install     # one-time, ~400 MB runtime + ~33 MB weights
+nff-brain index                # embed nodes → .nff-brain/vectors.json
+nff-brain search "how much money is this actually saving me"
+```
+
+```
+lex   sem   id                                   node
+ ·    0.59  token-savings-counterfactual-model  [core] Model token savings as avoided rediscovery cost
+```
+
+`·` means that signal did not rank the node at all — above, the hit is purely
+semantic. Use `--lexical` to force the old behaviour, `--semantic` to be told
+why it is unavailable, and `--explain` for a legend.
+
+**It is genuinely optional.** The published CLI has zero runtime dependencies
+and the VSIX ships `--no-dependencies`; the embedding runtime is npm-installed
+on demand into `~/.nff-brain/runtime` and resolved at runtime. Absent, broken,
+or the wrong CPU architecture, every code path falls back to lexical ranking —
+`index` still exits 0, and `doctor` reports semantic with a `·`, never a `✗`.
+
+### What it does not touch
+
+The hooks stay lexical and stay fast: `recall` (SessionStart) and `novelty`
+(UserPromptSubmit) gain no import, no file read and no model load. That is
+deliberate — `novelty` derives coverage as `topScore / 0.35` against the frozen
+lexical scale (§3), and feeding it cosines would saturate coverage at 1.0 for
+every query and pin the model ladder forever. `score.ts` carries a freeze
+contract comment; `score.test.ts` pins exact values as a tripwire.
+
+### How the ranking works
+
+Fusion is **Reciprocal Rank Fusion**, not a weighted sum, because the two
+scores are not commensurable — a mid-range cosine would otherwise outrank a
+genuine lexical hit. Each list contributes `weight / (60 + rank)`.
+
+A semantic candidate must clear both an absolute floor (`0.55`) and a relative
+one (within `0.10` of the best cosine seen). Those numbers are **specific to the
+model and its query prefix**, and were measured, not copied — over the 14-node
+dev brain with `Xenova/bge-small-en-v1.5`:
+
+| | cosine |
+|---|---|
+| true positives (6 paraphrase queries, no token overlap) | 0.59 – 0.73 |
+| plausible runners-up | 0.52 – 0.55 |
+| unrelated query (*"how do I bake sourdough bread"*) | 0.38 – 0.42 |
+
+To re-tune after changing `NFF_BRAIN_EMBED_MODEL`, repeat the measurement and
+put the floor between the worst true positive and the best noise hit:
+
+```
+NFF_BRAIN_SEMANTIC_FLOOR=0 nff-brain search "<paraphrase>" --limit 8
+```
+
+### Storage
+
+Vectors live in `.nff-brain/vectors.json` beside each brain, **never inside
+`brain.json`** — that file is pretty-printed, hand-editable, round-trips through
+the `nffbrain:` markdown editor, and is parsed on every hook invocation. The
+sidecar holds base64 little-endian float32 (~840 KB at the 400-node cap), is
+git-ignored automatically, and is pure derived data: deleting it costs one
+`nff-brain index`, never a node. `brain.json` stays schema version 1, so older
+CLIs keep working.
+
+Each entry is keyed by `sha256(model + title + content)`, so `index` re-embeds
+only what actually changed and a model switch invalidates everything.

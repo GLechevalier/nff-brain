@@ -17,6 +17,7 @@ import {
   type CommunityLabel,
   type GraphifyGraph,
 } from '@nff-brain/core';
+import { refreshVectors } from '../semanticRefresh.js';
 import { fail, flagNum, flagStr, parseArgs } from '../util.js';
 
 // `nff-brain ingest-graphify` — compress a graphify knowledge graph
@@ -76,6 +77,11 @@ export async function cmdIngestGraphify(argv: string[]): Promise<void> {
   }
 
   const { removed } = mutateBrain(target, (brain) => applyGraphifyImport(brain, imported));
+
+  // A graphify re-ingest replaces every gf-* node wholesale — a guaranteed
+  // sidecar invalidation. No-op unless semantic search is on; never throws.
+  const vec = await refreshVectors(target);
+  if (vec.ran) console.log(`re-embedded ${vec.embedded} node(s) for semantic search`);
 
   const count = (prefix: string): number => imported.nodes.filter((n) => n.id.startsWith(prefix)).length;
   console.log(

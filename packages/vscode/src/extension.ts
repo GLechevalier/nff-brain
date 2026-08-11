@@ -16,6 +16,11 @@ import {
   resolveBrainPaths,
   slug,
   upsertNode,
+  embedQuery,
+  encodeVector,
+  loadVectors,
+  queryVectors,
+  resolveTransformers,
   type ActivityEvent,
   type BrainFile,
   type BrainNode,
@@ -98,6 +103,47 @@ function broadcastGraph(): void {
 
 function fileFor(source: NodeSource): string {
   return source === 'project' ? paths.project : paths.global;
+}
+
+// ── semantic search ─────────────────────────────────────────────────────────
+// The host owns the model (node-only native runtime) and the vector sidecar.
+// The webview does pure cosine on vectors we push it, and posts embedQuery for
+// each settled keystroke. Everything here is best-effort: if semantic is off,
+// broken, or slow, the webview's lexical results simply stand.
+
+function semanticSetting(): 'auto' | 'on' | 'off' {
+  const v = vscode.workspace.getConfiguration('nffBrain').get<string>('semanticSearch', 'auto');
+  return v === 'on' || v === 'off' ? v : 'auto';
+}
+
+/** Auto = on iff the runtime resolves AND a vector index exists. */
+function semanticEnabled(): boolean {
+  const mode = semanticSetting();
+  if (mode === 'off') return false;
+  if (!resolveTransformers().installed) return false;
+  return mode === 'on' || loadVectors(paths.project) !== null || loadVectors(paths.global) !== null;
+}
+
+function pushVectors(webview: vscode.Webview): void {
+  try {
+    if (!semanticEnabled()) {
+      post(webview, { type: 'vectors', enabled: false, dim: 0, entries: [] });
+      return;
+    }
+    const { vectors, dim } = queryVectors(paths);
+    // ~2 KB of base64 per node — ~840 KB at the 400-node cap. Fine as a
+    // one-shot push; do NOT move this onto broadcastGraph's 150 ms debounce.
+    const entries = [...vectors].map(([id, v]) => ({ id, v: encodeVector(v) }));
+    post(webview, { type: 'vectors', enabled: entries.length > 0, dim, entries });
+    logLine(`semantic: pushed ${entries.length} vector(s), dim ${dim}`);
+  } catch (err) {
+    post(webview, { type: 'vectors', enabled: false, dim: 0, entries: [] });
+    logLine(`semantic: vector push failed — ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function pushVectorsAll(): void {
+  for (const w of channelViews) pushVectors(w);
 }
 
 // ── activity relay: .nff-brain/activity.jsonl → webview glow ─────────────────
@@ -203,6 +249,7 @@ async function handleMessage(msg: WebToExt, webview: vscode.Webview): Promise<vo
     switch (msg.type) {
       case 'ready': {
         broadcastGraph();
+        pushVectors(webview);
         // A panel opening late still shows what the agent recently looked at,
         // glowing at its decayed intensity (real timestamps, no arrival flash).
         try {
@@ -211,6 +258,25 @@ async function handleMessage(msg: WebToExt, webview: vscode.Webview): Promise<vo
         } catch {
           /* replay is best-effort */
         }
+        return;
+      }
+
+      case 'embedQuery': {
+        // Model load is lazy and happens HERE — on the first search keystroke,
+        // never at activate(). A warm session is ~100–200 MB RSS in a host
+        // shared with every other extension, so we do not pay it for users who
+        // never search. Any failure answers null and the webview keeps its
+        // lexical ordering.
+        let v: string | null = null;
+        try {
+          if (semanticEnabled()) {
+            const vec = await embedQuery(msg.query);
+            if (vec) v = encodeVector(vec);
+          }
+        } catch (err) {
+          logLine(`semantic: embedQuery failed — ${err instanceof Error ? err.message : String(err)}`);
+        }
+        post(webview, { type: 'queryVector', seq: msg.seq, v });
         return;
       }
 
@@ -507,6 +573,28 @@ export function activate(context: vscode.ExtensionContext): void {
   watcher.onDidCreate(onDiskChange);
   watcher.onDidDelete(onDiskChange);
   context.subscriptions.push(watcher);
+
+  // Vector sidecar → webview. Separate from the brain watcher on purpose: this
+  // payload is ~840 KB at the node cap, so it must not ride the 150 ms graph
+  // debounce that fires on every recallCount bump. `nff-brain index` writing
+  // the sidecar is the only thing that changes it.
+  let vectorDebounce: NodeJS.Timeout | null = null;
+  const onVectorsChange = () => {
+    if (vectorDebounce) clearTimeout(vectorDebounce);
+    vectorDebounce = setTimeout(pushVectorsAll, 500);
+  };
+  const vectorWatcher = vscode.workspace.createFileSystemWatcher('**/.nff-brain/vectors.json');
+  vectorWatcher.onDidChange(onVectorsChange);
+  vectorWatcher.onDidCreate(onVectorsChange);
+  vectorWatcher.onDidDelete(onVectorsChange);
+  context.subscriptions.push(vectorWatcher);
+
+  // Flipping nffBrain.semanticSearch takes effect without a reload.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('nffBrain.semanticSearch')) pushVectorsAll();
+    }),
+  );
 
   // Auto-model requests from the hooks (session-start baseline + per-prompt).
   const modelWatcher = vscode.workspace.createFileSystemWatcher('**/.nff-brain/model-request.json');

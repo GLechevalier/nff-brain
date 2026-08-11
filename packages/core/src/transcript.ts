@@ -47,7 +47,7 @@ export function readTranscript(filePath: string, maxChars = 12_000): string {
  * The window boundaries land mid-line, so the head's last line and the tail's
  * first line are dropped as partial. Returns `null` if the file can't be read.
  */
-function readEnds(
+export function readFileEnds(
   filePath: string,
   headBytes: number,
   tailBytes: number,
@@ -127,7 +127,7 @@ export interface TranscriptWindowOptions {
 export function readTranscriptWindow(filePath: string, opts: TranscriptWindowOptions = {}): string {
   const headChars = opts.headChars ?? 4_000;
   const tailChars = opts.tailChars ?? 8_000;
-  const ends = readEnds(filePath, opts.headBytes ?? 512 * 1024, opts.tailBytes ?? 1024 * 1024);
+  const ends = readFileEnds(filePath, opts.headBytes ?? 512 * 1024, opts.tailBytes ?? 1024 * 1024);
   if (!ends) return '';
 
   const headAll = conversationLines(ends.head);

@@ -40,11 +40,29 @@ export interface ViewEdge {
   strength: number;
 }
 
+// Semantic search rides the same channel. The MODEL never runs in the webview:
+// it is node-only (native onnxruntime) and the webview CSP forbids wasm-eval
+// anyway. The host owns the model and the vector sidecar; the webview receives
+// precomputed unit vectors once, does pure cosine locally (vector.ts is
+// browser-safe), and asks the host to embed each QUERY. Lexical results render
+// instantly meanwhile, so semantic can only ever improve the ordering.
+export interface ViewVectorEntry {
+  id: string;
+  /** base64 little-endian float32, unit-normalised — see core/src/vector.ts. */
+  v: string;
+}
+
 // extension → webview
 export type ExtToWeb =
   | { type: 'graph'; nodes: ViewNode[]; edges: ViewEdge[]; projectName: string }
   | { type: 'notice'; text: string }
   | { type: 'busy'; on: boolean }
+  // Pushed on `ready` and whenever vectors.json changes — never on the 150 ms
+  // broadcastGraph debounce. `enabled: false` means "semantic is off", which is
+  // a normal state, not an error.
+  | { type: 'vectors'; enabled: boolean; dim: number; entries: ViewVectorEntry[] }
+  // Reply to embedQuery. `seq` lets the webview drop answers to stale keystrokes.
+  | { type: 'queryVector'; seq: number; v: string | null }
   // replay: true = history sent on panel open — glow at decayed intensity, no
   // arrival flash. Otherwise a live event that just happened.
   | { type: 'activity'; events: ViewActivityEvent[]; replay?: boolean };
@@ -55,4 +73,6 @@ export type WebToExt =
   | { type: 'ready' }
   | { type: 'openNode'; id: string }
   | { type: 'createNodeRequest' }
-  | { type: 'merge' };
+  | { type: 'merge' }
+  // Debounced, one per settled keystroke. The host answers with queryVector.
+  | { type: 'embedQuery'; query: string; seq: number };

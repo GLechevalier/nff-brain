@@ -9,6 +9,7 @@ import {
   runMergePass,
   saveBrain,
 } from '@nff-brain/core';
+import { refreshVectors } from '../semanticRefresh.js';
 import { flagNum, flagStr, parseArgs } from '../util.js';
 
 // `nff-brain merge` — consolidate the graph.
@@ -46,6 +47,13 @@ export async function cmdMerge(argv: string[]): Promise<void> {
   }
 
   const folded = ratio > 0 ? mutateBrain(target, (brain) => foldLeastUsed(brain, ratio)) : 0;
+
+  // Merging rewrites and removes nodes, so the vector sidecar is stale. No-op
+  // unless the user opted into semantic search; never throws.
+  if (deduped > 0 || folded > 0) {
+    const vec = await refreshVectors(target);
+    if (vec.ran) console.log(`re-embedded ${vec.embedded} node(s) for semantic search`);
+  }
 
   console.log(
     `merge done: ${deduped} duplicate(s) merged${args.flags.llm ? '' : ' (dedup skipped — pass --llm)'}, ` +

@@ -1,6 +1,17 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { isLockStale, loadBrain, modelLadder, resolveBrainPaths } from '@nff-brain/core';
+import {
+  embedCacheDir,
+  embedModel,
+  isLockStale,
+  loadBrain,
+  loadVectors,
+  modelLadder,
+  resolveBrainPaths,
+  resolveTransformers,
+  vectorPlan,
+} from '@nff-brain/core';
+import type { BrainFile } from '@nff-brain/core';
 import { cliVersion } from '../util.js';
 import { describeHooks } from './hooks.js';
 
@@ -11,6 +22,51 @@ function check(label: string, ok: boolean | null, detail: string): boolean {
   const mark = ok === null ? '·' : ok ? '✓' : '✗';
   console.log(`${mark} ${label}: ${detail}`);
   return ok !== false;
+}
+
+function semanticChecks(brains: { label: string; path: string; brain: BrainFile }[]): void {
+  const rt = resolveTransformers();
+  const model = embedModel();
+  if (!rt.installed) {
+    check(
+      'semantic search',
+      null,
+      'off (lexical only) — `nff-brain semantic install` enables it ' +
+        '(~400 MB runtime + ~33 MB model, one-time)',
+    );
+    return;
+  }
+  check(
+    'semantic search',
+    null,
+    `runtime present — ${model} · ${rt.dir}${rt.version ? ` (v${rt.version})` : ''} · weights ${embedCacheDir()}`,
+  );
+
+  const parts: string[] = [];
+  for (const b of brains) {
+    const vf = loadVectors(b.path);
+    if (!vf) {
+      parts.push(`${b.label} none`);
+      continue;
+    }
+    const plan = vectorPlan(b.brain, vf, model);
+    const total = b.brain.nodes.length;
+    const bits = [`${plan.fresh.length}/${total} current`];
+    if (plan.stale.length) bits.push(`${plan.stale.length} stale`);
+    if (plan.orphaned.length) bits.push(`${plan.orphaned.length} orphaned`);
+    if (vf.model !== model) bits.push(`built with ${vf.model}`);
+    parts.push(`${b.label} ${bits.join(', ')}`);
+  }
+  const anyStale = parts.some((p) => p.includes('stale') || p.includes('none') || p.includes('built with'));
+  check(
+    'vector index',
+    null,
+    `${parts.join(' · ') || 'no brain files'}${anyStale ? ' — run `nff-brain index`' : ''}`,
+  );
+  // `semantic status` is where you pay the model-load cost; doctor points at it
+  // rather than doing it, so a broken native binary shows up there, not here.
+  if (anyStale) return;
+  check('semantic check', null, 'run `nff-brain semantic status` to verify the model actually loads');
 }
 
 export async function cmdDoctor(): Promise<void> {
@@ -46,6 +102,7 @@ export async function cmdDoctor(): Promise<void> {
   ) && healthy;
 
   // Brain files.
+  const brains: { label: string; path: string; brain: BrainFile }[] = [];
   for (const [label, p] of [
     ['project brain', paths.project],
     ['global brain', paths.global],
@@ -56,6 +113,7 @@ export async function cmdDoctor(): Promise<void> {
     }
     try {
       const brain = loadBrain(p)!;
+      brains.push({ label: label.split(' ')[0]!, path: p, brain });
       healthy = check(label, true, `${p} — ${brain.nodes.length} node(s), ${brain.edges.length} edge(s)`) && healthy;
     } catch (err) {
       healthy = check(label, false, `${p} — ${err instanceof Error ? err.message : String(err)}`) && healthy;
@@ -65,6 +123,12 @@ export async function cmdDoctor(): Promise<void> {
       healthy = check(`${label} lock`, !stale, stale ? `stale lock at ${p}.lock — safe to delete` : 'held (an operation is running)') && healthy;
     }
   }
+
+  // Semantic search (optional tier). Always reported with the `·` marker: it is
+  // optional by construction, so it must NEVER flip the exit code. And it must
+  // never load the model — resolveTransformers is a path check and loadVectors
+  // reads one small JSON, so doctor stays sub-second.
+  semanticChecks(brains);
 
   // Hooks.
   for (const h of describeHooks()) {

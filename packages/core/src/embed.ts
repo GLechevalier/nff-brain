@@ -43,6 +43,22 @@ function queryPrefix(model: string): string {
 // of the package name.
 const dynamicImport = new Function('u', 'return import(u)') as (u: string) => Promise<any>;
 
+async function importRuntime(url: string): Promise<any> {
+  try {
+    return await dynamicImport(url);
+  } catch (err) {
+    // Test runners (vitest, and anything else evaluating modules in a vm
+    // context) refuse import() from inside a new Function body with "A dynamic
+    // import callback was not specified." Real Node never hits this. Fall back
+    // to a plain dynamic import so the opt-in integration test can exercise the
+    // model: bundlers may rewrite THIS call, but it is unreachable in a shipped
+    // Node process, and the specifier is a variable so no literal package
+    // require appears in either artifact.
+    if (!/dynamic import callback/i.test(String(err))) throw err;
+    return await import(/* @vite-ignore */ url);
+  }
+}
+
 type Extractor = (texts: string[]) => Promise<Float32Array[]>;
 
 let pipelinePromise: Promise<Extractor | null> | null = null;
@@ -66,16 +82,24 @@ async function loadExtractor(): Promise<Extractor | null> {
     return null;
   }
   try {
-    const mod = await dynamicImport(pathToFileURL(runtime.entry).href);
+    const mod = await importRuntime(pathToFileURL(runtime.entry).href);
     const { pipeline, env } = mod as {
       pipeline: (task: string, model: string, opts?: Record<string, unknown>) => Promise<unknown>;
       env: Record<string, unknown>;
     };
+    // transformers.js has TWO separate model sources and they are easy to
+    // confuse: `cacheDir` holds hub downloads (what `semantic install`
+    // prefetches), while `localModelPath` (default "/models/") expects a
+    // hand-unpacked model tree. Setting allowRemoteModels=false makes it look
+    // ONLY in localModelPath — i.e. never in the cache we just filled — and it
+    // fails with "file was not found locally at /models/...". So: cache first,
+    // remote only on a miss, and no local-tree lookup at all.
     env.cacheDir = embedCacheDir();
-    // After `semantic install` has prefetched the weights, nothing should ever
-    // reach the network at search time — an offline machine must degrade to
-    // lexical instantly, not hang on a fetch.
-    env.allowRemoteModels = process.env.NFF_BRAIN_EMBED_ALLOW_REMOTE === '1';
+    env.allowLocalModels = false;
+    // Weights are prefetched at install time, so in practice nothing reaches
+    // the network at search time. NFF_BRAIN_EMBED_OFFLINE=1 makes that a hard
+    // guarantee: a cache miss then fails fast (→ lexical) instead of fetching.
+    env.allowRemoteModels = process.env.NFF_BRAIN_EMBED_OFFLINE !== '1';
     const model = embedModel();
     const extractor = (await pipeline('feature-extraction', model, { dtype: 'q8' })) as (
       input: string[],

@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // Subpath imports on purpose: the core barrel pulls node:fs/node:child_process
 // and would break the browser (webview) bundle. score.ts / rank.ts / vector.ts
 // are the dependency-free trio — the webview may import those three and
@@ -8,6 +8,7 @@ import { fuseRanked } from '@nff-brain/core/rank';
 import type { ExtToWeb, ViewNode, WebToExt } from '../src/protocol';
 import { BrainGraph, type BrainGraphHandle } from './BrainGraph';
 import { useActivityGlow } from './useActivityGlow';
+import { useSemanticSearch } from './useSemanticSearch';
 
 // The Brain graph, ported from nff-dashboard's BrainTab. The old in-webview
 // "Memory Document" panel is gone: clicking a node asks the extension host to
@@ -37,6 +38,11 @@ export function App() {
   // Living-graph heat: which nodes the agent recently looked at, and how hot.
   const { glow, visible, onActivity } = useActivityGlow(nodes);
 
+  // Semantic half of the search box. Stable identity so the hook's debounce
+  // effect doesn't re-fire on every render.
+  const postToHost = useCallback((msg: WebToExt) => vscode.postMessage(msg), []);
+  const semantic = useSemanticSearch({ query, post: postToHost });
+
   // ── extension bridge ────────────────────────────────────────────────────────
   useEffect(() => {
     function onMessage(ev: MessageEvent<ExtToWeb>) {
@@ -53,12 +59,14 @@ export function App() {
         setBusy(msg.on);
       } else if (msg.type === 'activity') {
         onActivity(msg.events, msg.replay === true);
+      } else {
+        semantic.onMessage(msg); // vectors / queryVector
       }
     }
     window.addEventListener('message', onMessage);
     vscode.postMessage({ type: 'ready' });
     return () => window.removeEventListener('message', onMessage);
-  }, [onActivity]);
+  }, [onActivity, semantic.onMessage]);
 
   // Hide the pan/zoom hint when the panel gets cramped.
   useEffect(() => {
@@ -75,9 +83,14 @@ export function App() {
   }, [nodes, selectedId]);
 
   // ── node search ─────────────────────────────────────────────────────────────
-  // null semantic list ⇒ identical to the old rankNodes path. Phase 2 feeds
-  // cosine hits in here, sourced from the extension host.
-  const matches = useMemo(() => fuseRanked(query, nodes, null).map((r) => r.node), [nodes, query]);
+  // Lexical ranks SYNCHRONOUSLY on every keystroke; semantic.hits is null until
+  // the host answers with a query vector for this exact text, at which point
+  // the order refines. So the box is never slower than it used to be, and a
+  // missing/broken/disabled model is indistinguishable from the old behaviour.
+  const matches = useMemo(
+    () => fuseRanked(query, nodes, semantic.hits).map((r) => r.node),
+    [nodes, query, semantic.hits],
+  );
   const matchedIds = useMemo(
     () => (query.trim() ? new Set(matches.map((n) => n.id)) : null),
     [matches, query],

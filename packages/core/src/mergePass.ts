@@ -10,6 +10,7 @@
 //   edge → most similar text → the hub). Knowledge is appended, never deleted.
 
 import type { OneShot } from './claude.js';
+import { NFF_PROMPT_MARKERS } from './promptMarkers.js';
 import { trigramSim } from './score.js';
 import { nodeDegree, upsertEdge } from './store.js';
 import type { BrainFile, BrainNode } from './types.js';
@@ -48,7 +49,7 @@ export function chooseSurvivor(
 
 function buildMergePrompt(survivor: BrainNode, loser: BrainNode): string {
   return [
-    `You are the memory curator for a coding agent working on this project.`,
+    `${NFF_PROMPT_MARKERS.curator} for a coding agent working on this project.`,
     `Two knowledge-graph nodes look like near-duplicates. Decide whether they capture`,
     `the SAME durable skill/playbook and, if so, write ONE merged node that keeps every`,
     `distinct, useful detail from both without repetition.`,

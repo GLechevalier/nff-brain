@@ -102,6 +102,10 @@ nff-brain init [--hooks] [--global]     create + seed the brain
 nff-brain doctor                        check claude CLI, brain files, hooks
 nff-brain list | show <id>              inspect the graph
 nff-brain search <query> [--limit 10]   rank nodes by relevance to a query
+                  [--semantic|--lexical] [--explain]
+nff-brain semantic [status|install|uninstall]
+                                        manage the optional embedding runtime
+nff-brain index [--force] [--check]     embed nodes for semantic search
 nff-brain add --title T --content C     add a curated node
 nff-brain edit <id> [--title|--content|--category]
 nff-brain rm <id>                       delete a node and its links
@@ -125,6 +129,33 @@ Distillation defaults to **haiku** — the cheapest model that handles the job.
 Override per call with `--model` (`init`, `distill`, `merge --llm`) or globally
 with the `NFF_BRAIN_MODEL` env var. Recall never calls an LLM. `nff-brain
 doctor` shows the model currently in effect.
+
+### Semantic search (optional)
+
+Search is lexical by default: great at ids and slugs, blind to paraphrase. Turn
+on embeddings and it also matches meaning.
+
+```
+nff-brain semantic install    # one-time, ~400 MB runtime + ~33 MB weights
+nff-brain index               # embed nodes → .nff-brain/vectors.json
+nff-brain search "how much money is this actually saving me"
+```
+
+```
+lex   sem   id                                   node
+ ·    0.59  token-savings-counterfactual-model  [core] Model token savings as avoided rediscovery cost
+```
+
+That hit has **no** lexical overlap with the query — `·` means the lexical side
+never ranked it. Results are fused by reciprocal rank, so exact id matches still
+win when you type one.
+
+This is genuinely optional and genuinely off by default: `nff-brain` itself
+installs with **zero runtime dependencies**, and the embedding runtime lives in
+`~/.nff-brain/runtime`, installed on demand. If it is missing or won't load on
+your platform, everything silently falls back to lexical ranking — nothing
+errors and no command changes its exit code. The session hooks never use it, so
+recall stays fast and offline. See `docs/docs.md` §11.
 
 ## The graph model
 
