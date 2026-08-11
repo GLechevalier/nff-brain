@@ -15,6 +15,12 @@ export const DISTILL_COMMAND = 'nff-brain distill --stdin-hook';
 // and .nff-brain/model-request.json (only ACTED on when the user opted into
 // auto-model in the extension).
 export const NOVELTY_COMMAND = 'nff-brain novelty --stdin-hook';
+// Opt-in (`install-hooks --apply-model`): same hook, but it also writes the
+// chosen tier into .claude/settings.local.json. Visible right there in
+// settings.json so the behaviour is discoverable rather than hidden in an env
+// var. Claude Code binds the model at session creation, so it steers the NEXT
+// session — see writeModelSetting.
+export const APPLY_MODEL_COMMAND = 'nff-brain novelty --stdin-hook --apply-model';
 // Without an explicit timeout Claude Code cancels SessionEnd hooks after a
 // short grace (<20s, proven in print mode) — a real haiku distill takes ~25s,
 // so the brain would silently never learn. 120s covers the 60s inner LLM
@@ -111,7 +117,10 @@ export interface InstallResult {
   backedUpTo?: string;
 }
 
-export function installHooks(settingsPath: string, opts: { autoModel?: boolean } = {}): InstallResult {
+export function installHooks(
+  settingsPath: string,
+  opts: { autoModel?: boolean; applyModel?: boolean } = {},
+): InstallResult {
   const settings = readSettings(settingsPath);
   const result: InstallResult = { installed: [], skipped: [] };
 
@@ -128,7 +137,9 @@ export function installHooks(settingsPath: string, opts: { autoModel?: boolean }
     ['SessionEnd', DISTILL_COMMAND, DISTILL_TIMEOUT_S],
     // Always wired: the prompt hook drives the graph's live activity glow.
     // --auto-model no longer gates installation, only the extension's typing.
-    ['UserPromptSubmit', NOVELTY_COMMAND, undefined],
+    // --apply-model additionally lets it write the `model` setting, which is
+    // the only thing that actually retiers a session (the next one).
+    ['UserPromptSubmit', opts.applyModel ? APPLY_MODEL_COMMAND : NOVELTY_COMMAND, undefined],
   ];
   let patched = false;
   for (const [event, command, timeout] of wanted) {

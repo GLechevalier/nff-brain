@@ -13,6 +13,7 @@ export * from './savings.js';
 export * from './novelty.js';
 export * from './modelRequest.js';
 export * from './modelState.js';
+export * from './noveltyCalibration.js';
 export * from './activity.js';
 export * from './activityStore.js';
 export * from './pool.js';

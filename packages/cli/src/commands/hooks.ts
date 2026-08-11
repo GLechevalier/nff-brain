@@ -18,8 +18,9 @@ function settingsPathFor(argv: string[]): string {
 export async function cmdInstallHooks(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const autoModel = args.flags['auto-model'] === true;
+  const applyModel = args.flags['apply-model'] === true;
   const settingsPath = settingsPathFor(argv);
-  const result = installHooks(settingsPath, { autoModel });
+  const result = installHooks(settingsPath, { autoModel, applyModel });
   if (result.backedUpTo) console.log(`backed up settings to ${result.backedUpTo}`);
   for (const ev of result.installed) console.log(`wired ${ev} hook in ${settingsPath}`);
   for (const ev of result.skipped) console.log(`${ev} hook already present — skipped`);
@@ -31,6 +32,18 @@ export async function cmdInstallHooks(argv: string[]): Promise<void> {
   if (autoModel && (result.installed.includes('UserPromptSubmit') || result.skipped.includes('UserPromptSubmit'))) {
     console.log('\nauto-model: novelty scoring keeps .nff-brain/model-request.json up to date.');
     console.log('Enable the "nffBrain.autoModel" setting in VS Code so the extension types /model for you.');
+    console.log('⚠ That path only works when Claude Code runs in a TERMINAL (claudeCode.useTerminal),');
+    console.log('  which is not the default — in the native panel there is no terminal to type into.');
+  }
+  if (applyModel) {
+    if (result.skipped.includes('UserPromptSubmit')) {
+      console.log('\n⚠ UserPromptSubmit already had an nff-brain hook, so --apply-model was NOT added.');
+      console.log('  Run uninstall-hooks first, or add --apply-model to that command by hand.');
+    } else {
+      console.log('\napply-model: the prompt hook now writes the chosen tier into .claude/settings.local.json.');
+      console.log('Claude Code binds the model at session creation, so each session starts on the tier');
+      console.log('the brain settled at during the previous one. Nothing can retier a running session.');
+    }
   }
 }
 

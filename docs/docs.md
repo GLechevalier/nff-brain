@@ -143,7 +143,8 @@ Every command targets the project brain; add `--global` for `~/.nff-brain`.
 | `init [--hooks] [--global] [--import]` | creates the brain with a hub node; if `CLAUDE.md`/`AGENTS.md` exists, splits it into `seed` nodes via one `claude -p` call. `--hooks` also runs install-hooks; `--import` also runs the history scan (§12), leaving a preview to review — it never commits unreviewed. Without `--import`, init just reports how many past sessions are available. |
 | `import [--limit 40] [--since 7d] [--all] [--project P] [--min-confidence 0.5] [--concurrency 4] [--force] [--yes]` | mine past Claude Code sessions → `.nff-brain/import-preview.md`. Writes **nothing** to the brain. See §12. |
 | `import --apply [--max-new 60] [--force]` | commit the items still checked in that preview. |
-| `install-hooks [--global]` | merges the two hook entries into `.claude/settings.json` (never clobbers; one-time backup at `settings.json.bak-nff-brain`). The SessionEnd entry carries `timeout: 120` — required, Claude Code otherwise cancels the distill before the LLM answers. |
+| `install-hooks [--global] [--apply-model]` | merges the two hook entries into `.claude/settings.json` (never clobbers; one-time backup at `settings.json.bak-nff-brain`). The SessionEnd entry carries `timeout: 120` — required, Claude Code otherwise cancels the distill before the LLM answers. `--apply-model` installs the prompt hook as `novelty --stdin-hook --apply-model` so it also writes the chosen tier into `settings.local.json` (§7). |
+| `model [--write] [--query q] [--from-score] [--json]` | which tier the **next** session should launch on. Defaults to the tier the live sessions settled at; `--from-score` forces a fresh context score. `--write` applies it to `.claude/settings.local.json`, preserving every other key. |
 | `uninstall-hooks [--global]` | removes exactly the entries whose command contains `nff-brain`. |
 | `doctor` | checks the claude CLI, brain files, stale locks, hooks, model in effect. Exit code reflects health. |
 | `upgrade` / `--version` | `npm install -g nff-brain@latest` / print version. |
@@ -286,13 +287,40 @@ distiller's own model.
 | Variable | Default | Effect |
 |---|---|---|
 | `NFF_BRAIN_MODEL_LADDER` | `sonnet,opus,fable` | tiers from cheapest to frontier; the extension types the names verbatim as `/model <name>` |
-| `NFF_BRAIN_NOVELTY_THRESHOLDS` | `0.35,0.7` | novelty cut points between tiers; needs exactly `ladder length − 1` ascending values in (0,1) |
+| `NFF_BRAIN_NOVELTY_THRESHOLDS` | `0.35,0.7` | **static** cut points between tiers; needs exactly `ladder length − 1` ascending values in (0,1). Setting this disables calibration — an explicit choice outranks the calibrator |
+| `NFF_BRAIN_NOVELTY_QUANTILES` | `0.5,0.85` | where the **calibrated** cuts sit in the observed distribution: bottom 50 % of prompts run cheap, top 15 % get the frontier |
+| `NFF_BRAIN_NOVELTY_CALIBRATE` | `1` | set to `0` to keep the static cuts and ignore the sample history |
 | `NFF_BRAIN_MIN_SIGNAL_TOKENS` | `2` | meaningful query tokens below which a prompt carries no opinion and the current tier is held (`ok`, `yes`, `continue`) |
 | `NFF_BRAIN_NOVELTY_HYSTERESIS` | `0.05` | dead band around each cut, so novelty wobbling at a boundary cannot flap tiers |
 | `NFF_BRAIN_DOWNGRADE_STREAK` | `2` | consecutive below-band prompts required before giving up an expensive tier; upgrades are immediate |
 
-All five fall back to their defaults on a malformed value — a typo can never
+All of these fall back to their defaults on a malformed value — a typo can never
 break a hook.
+
+**Calibration.** Novelty is not an absolute quantity: it depends on how big and
+how well-connected the graph is, so fixed cuts mean different things on a
+10-node brain and a 400-node one. Measured on a real 42-node brain, the static
+`0.35/0.7` cuts made the cheapest tier **unreachable** — 30 varied prompts split
+0 / 11 / 19 across the ladder. The hook therefore records each scored prompt's
+novelty in `.nff-brain/novelty-samples.json` (a 200-entry ring buffer) and once
+25 prompts have been seen it places the cuts at quantiles of that distribution
+instead. The same 30 prompts then split 15 / 10 / 5. Cuts that cannot form a
+usable ladder — too few samples, or a distribution so flat the quantiles are not
+strictly ascending — silently fall back to the static values.
+
+**Applying the choice.** `install-hooks --apply-model` lets the prompt hook
+write the chosen tier into `.claude/settings.local.json`'s `model` field, which
+is the only mechanism that actually changes which model Claude Code runs. Every
+other lever was measured and ruled out against Claude Code 2.1.228: no hook
+output can set the model, `terminalSequence` is allowlisted to notification
+escapes, and the VS Code extension exposes no model command.
+
+⚠ **The model binds at session creation and is never re-read** — not even on
+`--resume`. Nothing can retier a session that is already running; each session
+starts on the tier the brain settled at during the previous one. The older
+`--auto-model` path (extension types `/model` into a terminal) additionally
+requires `claudeCode.useTerminal`, which is **not** the default — in the native
+panel there is no terminal to type into.
 
 Semantic search (optional — see §11). None of these affect the hooks.
 
