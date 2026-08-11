@@ -1,10 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import {
+  discoverSessions,
   embedCacheDir,
   embedModel,
   isLockStale,
   loadBrain,
+  loadImportState,
   loadVectors,
   modelLadder,
   resolveBrainPaths,
@@ -129,6 +131,32 @@ export async function cmdDoctor(): Promise<void> {
   // never load the model — resolveTransformers is a path check and loadVectors
   // reads one small JSON, so doctor stays sub-second.
   semanticChecks(brains);
+
+  // Claude Code history — the source `nff-brain import` mines. Informational
+  // only (`·`): having no history is a normal state, not a fault.
+  try {
+    const found = discoverSessions({ cwd: paths.workspaceRoot, limit: 0 });
+    const state = loadImportState(paths.project);
+    const mined = Object.keys(state.sessions).length;
+    if (found.sessions.length || mined) {
+      check(
+        'claude history',
+        null,
+        `${found.sessions.length} importable session(s) for this workspace in ${found.projectsDir}` +
+          `${mined ? ` (${mined} already imported)` : ' — `nff-brain import` turns them into memories'}`,
+      );
+    } else {
+      check(
+        'claude history',
+        null,
+        `no importable sessions under ${found.projectsDir}` +
+          (found.skipped.oneshot ? ` (${found.skipped.oneshot} one-shot \`claude -p\` run(s) skipped)` : '') +
+          ' — set NFF_BRAIN_CLAUDE_HOME if your config lives elsewhere',
+      );
+    }
+  } catch {
+    /* history discovery is best-effort — never fail doctor over it */
+  }
 
   // Hooks.
   for (const h of describeHooks()) {

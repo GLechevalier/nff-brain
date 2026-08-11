@@ -83,6 +83,37 @@ in VS Code as a full editor tab (`nff-brain: Open Brain` from the command
 palette, or the status-bar `brain` item) to watch it live, edit nodes, delete
 them, or reinforce links.
 
+### Start full, not empty
+
+A fresh brain only fills up as new sessions end — so the first days feel empty
+while the history that would fix that is already sitting on your disk.
+`nff-brain import` mines it:
+
+```sh
+nff-brain import          # scan past sessions → .nff-brain/import-preview.md
+# review the file: uncheck anything you don't want, edit freely
+nff-brain import --apply  # commit what is still checked
+```
+
+It reads the Claude Code transcripts in `~/.claude/projects` whose `cwd` matches
+this workspace (newest 40 by default), and extracts five kinds of knowledge:
+durable memories, architectural decisions, developer preferences, unresolved
+tasks, and previous failures. The same lesson found in several sessions is
+merged into one memory and gains confidence for each session it appeared in.
+
+**Nothing is written to the brain until you run `--apply`.** The preview is a
+normal markdown checklist — untick a box, rewrite a title, or delete a block to
+reject it outright.
+
+Re-running is cheap and safe: sessions already mined are skipped, and a proposal
+you have already accepted (or accepted and later deleted) is never offered
+again. `--force` overrides both.
+
+> One `claude -p` call runs per session, each carrying ~12 KB of that
+> transcript. Transcripts can contain secrets and other clients' code — the same
+> trust boundary as the SessionEnd distill hook, but `--all` and `--project`
+> widen it across projects, so both are explicit and `--all` asks first.
+
 <p align="center">
   <img src="public/images/brain-graph.jpg" alt="nff-brain graph view in VS Code" width="800">
 </p>

@@ -18,7 +18,8 @@ import {
   type BrainNode,
   type RawDelta,
 } from '@nff-brain/core';
-import { flagStr, parseArgs } from '../util.js';
+import { flagStr, parseArgs, type Args } from '../util.js';
+import { cmdImport } from './import.js';
 import { cmdInstallHooks } from './hooks.js';
 
 // `nff-brain init` — create the project brain, seeded from CLAUDE.md/AGENTS.md

@@ -22,13 +22,17 @@ SessionEnd ────► nff-brain distill ──► one `claude -p` call turn
                                         into new/refined nodes (fail-open)
 ```
 
-Three kinds of knowledge live in the same graph, distinguished by `origin`:
+Four kinds of knowledge live in the same graph, distinguished by `origin`:
 
 | origin | Created by | Consolidation | Meaning |
 |---|---|---|---|
 | `seed` | `init`, `add`, VS Code | never auto-evicted or auto-merged | curated knowledge |
 | `agent` | `distill` | folded/pruned when the graph grows | learned lessons |
+| `import` | `import` (§12) | folded/pruned like `agent` | mined from past sessions |
 | `graphify` | `ingest-graphify` | never folded/pruned; **replaced wholesale on re-import** | codebase map |
+
+`import` deliberately shares `agent`'s consolidation rules: machine-proposed
+knowledge should not be immortal. Refining a `seed` keeps it a `seed`.
 
 ## 2. Files on disk
 
@@ -57,11 +61,14 @@ project + global brains — the project wins on id collision.
     "id": "docker-restart-procedure",   // kebab slug, ≤ 60 chars
     "title": "Docker restart procedure",// ≤ 80 chars
     "category": "rules",                // core | analysis | rules | strategy
+                                        // | decision | preference | task
     "content": "When containers wedge, force-recreate them because …", // ≤ 1200 chars
     "color": "#4ade80", "x": 400, "y": 300, "size": 16,  // board placement
-    "origin": "agent",                  // seed | agent | graphify
+    "origin": "agent",                  // seed | agent | graphify | import
     "sourceSession": "…",               // distill only: which session taught it
     "lastUpdated": "…", "recallCount": 3, "lastRecalledAt": "…",
+    "confidence": 0.82,                 // import only, 0..1 — see §12
+    "importedFrom": ["sess-a", "sess-b"], // import only: sessions it came from
     "graphifyRef": {                    // graphify origin only — see §6
       "graph": "graphify-out/graph.json",
       "kind": "community",              // community | node | hyperedge
@@ -74,7 +81,14 @@ project + global brains — the project wins on id collision.
 ```
 
 Categories map to colors and glyphs everywhere (CLI, VS Code):
-`core` #00ffcc ◈ · `analysis` #22d3ee ⊕ · `rules` #4ade80 ▦ · `strategy` #a78bfa ↑.
+`core` #00ffcc ◈ · `analysis` #22d3ee ⊕ · `rules` #4ade80 ▦ · `strategy` #a78bfa ↑ ·
+`decision` #fbbf24 ⌘ · `preference` #f472b6 ☺ · `task` #fb923c ☐.
+
+The last three arrived with the history importer (§12) and are first-class
+everywhere: `nff-brain add --category decision`, the distiller may emit them,
+and they round-trip through the markdown editor. Note the palette is only
+*stored* — the VS Code webview renders theme colors and conveys category by the
+glyph alone.
 
 `recallCount` is the value signal: recalled nodes get bumped, and consolidation
 always evicts/folds the **least-recalled** nodes first.
@@ -126,7 +140,9 @@ Every command targets the project brain; add `--global` for `~/.nff-brain`.
 
 | Command | Notes |
 |---|---|
-| `init [--hooks] [--global]` | creates the brain with a hub node; if `CLAUDE.md`/`AGENTS.md` exists, splits it into `seed` nodes via one `claude -p` call. `--hooks` also runs install-hooks. |
+| `init [--hooks] [--global] [--import]` | creates the brain with a hub node; if `CLAUDE.md`/`AGENTS.md` exists, splits it into `seed` nodes via one `claude -p` call. `--hooks` also runs install-hooks; `--import` also runs the history scan (§12), leaving a preview to review — it never commits unreviewed. Without `--import`, init just reports how many past sessions are available. |
+| `import [--limit 40] [--since 7d] [--all] [--project P] [--min-confidence 0.5] [--concurrency 4] [--force] [--yes]` | mine past Claude Code sessions → `.nff-brain/import-preview.md`. Writes **nothing** to the brain. See §12. |
+| `import --apply [--max-new 60] [--force]` | commit the items still checked in that preview. |
 | `install-hooks [--global]` | merges the two hook entries into `.claude/settings.json` (never clobbers; one-time backup at `settings.json.bak-nff-brain`). The SessionEnd entry carries `timeout: 120` — required, Claude Code otherwise cancels the distill before the LLM answers. |
 | `uninstall-hooks [--global]` | removes exactly the entries whose command contains `nff-brain`. |
 | `doctor` | checks the claude CLI, brain files, stale locks, hooks, model in effect. Exit code reflects health. |
@@ -260,6 +276,7 @@ nff-brain ingest-graphify     # re-import the compressed map
 | `NFF_BRAIN_MODEL` | `haiku` | model for every `claude -p` call (`init`, `distill`, `merge --llm`, `ingest-graphify`); per-call `--model` wins |
 | `NFF_BRAIN_TIMEOUT_MS` | `60000` | hard timeout for each `claude -p` call (process tree is killed on expiry) |
 | `NFF_BRAIN_CLAUDE_BIN` | `claude` | claude binary override (tests use a shim) |
+| `NFF_BRAIN_CLAUDE_HOME` | `CLAUDE_CONFIG_DIR`, else `~/.claude` | where `import` looks for Claude Code's session history (§12) |
 | `NFF_BRAIN_SKIP` | — | set to `1` in the env of nff-brain's own `claude -p` children; both hooks exit immediately when they see it. **Recursion guard — never remove.** |
 
 Auto-model (novelty scoring → `.nff-brain/model-request.json`). These pick the
@@ -410,3 +427,115 @@ CLIs keep working.
 
 Each entry is keyed by `sha256(model + title + content)`, so `index` re-embeds
 only what actually changed and a model switch invalidates everything.
+
+## 12. Importing Claude Code history
+
+A fresh brain only grows as new sessions end, so the first days feel empty —
+while the history that would fix that is already on disk. `nff-brain import`
+mines `~/.claude/projects/**/*.jsonl` into memories.
+
+```sh
+nff-brain import          # scan → .nff-brain/import-preview.md   (brain untouched)
+nff-brain import --apply  # commit whatever is still checked
+```
+
+### Two phases, split by a file you read
+
+Phase one writes **nothing** to `brain.json`. It produces two files:
+
+| File | Owner | Holds |
+|---|---|---|
+| `.nff-brain/import-preview.md` | you | checkbox state and any text you rewrote |
+| `.nff-brain/import-pending.json` | the tool | ids, refine targets, provenance, ledger hashes |
+
+The split matters: identity never comes from prose. Fixing a typo in a title
+must not re-slug the node id, because that id was already collision-checked
+against the graph and re-deriving it could silently clobber a different node.
+
+In the markdown you may untick a box, rewrite a title or body, or delete a whole
+block to reject it. A deleted block counts as rejected, never as still-pending.
+
+### What it extracts
+
+Five kinds, mapped onto the seven categories:
+
+| Kind | Category | What counts |
+|---|---|---|
+| memories | `strategy` | durable procedures and gotchas |
+| decisions | `decision` | a choice that was MADE and stuck, with its reason |
+| preferences | `preference` | how this developer wants to work — stated or repeatedly enforced |
+| tasks | `task` | work explicitly deferred and still open |
+| failures | `analysis` | an approach that was tried and did NOT work, and why |
+
+`failure` folds into `analysis` on purpose: "we tried X, it failed because Y"
+*is* an analysis finding, and a separate category would give the palette two
+overlapping buckets with no distinct recall behaviour.
+
+### Confidence
+
+The model self-reports 0..1 (0.9 stated as a rule · 0.7 demonstrated and
+confirmed · 0.4 inferred). That is then tempered by things it cannot see — a
+short session, a user push-back mid-session, a months-old TODO — and finally
+**boosted by repetition**: each extra session proposing the same lesson closes
+30% of the remaining gap to 1, so 0.5 seen in five sessions reads 0.88.
+
+That boost is the whole reason to import in bulk rather than one session at a
+time: the per-session distiller can never see that a lesson recurred.
+
+Confidence decides only which items start **checked** (`--min-confidence`,
+default 0.5). Low-confidence items are still listed, just unticked.
+
+### Dedup, in three places
+
+1. **Across the proposals** — trigram clustering (0.55, same gate as
+   `merge --llm`) folds restatements into one item and unions their sources.
+   Kinds never cross.
+2. **Against the brain** — an exact id hit refines; ≥ 0.72 similarity is a
+   `duplicate` (listed under "Already known", unchecked whatever its
+   confidence); in between is a refine. graphify nodes are excluded — they are
+   replaced wholesale on re-ingest, so refining one would lose the edit.
+3. **Against history** — `.nff-brain/import-state.json` remembers every mined
+   session and a `kind:slug(title)` hash of every accepted proposal. A session
+   is re-read only if it GREW (i.e. was resumed). The hash guard survives you
+   *deleting* the node, which is precisely when re-offering it would be most
+   irritating. `--force` bypasses both, which is how you recover a deleted
+   memory.
+
+### What it refuses to read
+
+- **Its own `claude -p` calls.** Every LLM call nff-brain makes lands in
+  `~/.claude/projects` as its own transcript. They are detected by their opening
+  line (`NFF_PROMPT_MARKERS` in core, shared with the prompt builders so they
+  cannot drift) and skipped — otherwise the brain learns about being a memory
+  distiller. In this repo's own folder they are *all* there is.
+- **Sidechains.** `<sessionId>/subagents/*.jsonl` are fragments of a parent
+  session and would double-count it.
+- **Live sessions.** Anything in `~/.claude/sessions/*.json` that has not exited,
+  plus `CLAUDE_CODE_SESSION_ID` — an in-progress transcript has no conclusions
+  yet. It is picked up on a later run.
+- **One-shots and stubs** — single-turn, untitled, under 4 KB.
+
+### Notes on the on-disk format
+
+Two things bite anyone parsing this tree:
+
+- **The directory encoder is not stable across Claude Code versions.** Both
+  `…-R-D-MCPIOT-…` and `…-R_D-MCPIOT-…` exist for the same path. Encoding is
+  only a fast path here; the truth is the `cwd` field inside the file — which is
+  *not* on the first record (that is usually `queue-operation`).
+- **`ai-title` is rewritten as a session evolves**, ~19 times in a long one. The
+  last one is the good one, which is why the probe reads a tail window too.
+
+Transcripts run to several MB, so metadata comes from bounded 128 KB head +
+64 KB tail reads: 1500 files scan in ~150 ms instead of ~700 ms and 220 MB.
+
+### Cost and privacy
+
+One `claude -p` call per session, 4 at a time, each carrying ~12 KB of
+transcript — so 40 sessions is roughly four minutes and ~500 K input tokens.
+The count and estimate are printed *before* anything is spent.
+
+Transcripts contain secrets, absolute paths, pasted logs and other clients'
+code. This is the same trust boundary as the SessionEnd distill hook, but
+`--all` and `--project` widen it across projects, so both are explicit and
+`--all` prints a per-project breakdown and requires `--yes`.
