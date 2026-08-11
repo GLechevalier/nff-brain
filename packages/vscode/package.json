@@ -40,6 +40,29 @@
         "command": "nffBrain.refresh",
         "title": "nff-brain: Reload Brain From Disk"
       }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nffBrain",
+          "title": "nff-brain",
+          "icon": "media/capybara-mono.svg"
+        }
+      ]
+    },
+    "views": {
+      "nffBrain": [
+        {
+          "id": "nffBrain.launcher",
+          "name": "Brain"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "nffBrain.launcher",
+        "contents": "The brain graph opens as a full editor tab.\n[Open Brain](command:nffBrain.open)"
+      }
     ]
   },
   "scripts": {
