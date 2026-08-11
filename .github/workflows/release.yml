@@ -21,6 +21,11 @@ jobs:
       - run: npm run build
       - run: npx vitest run
 
+      - name: Check tag matches package version
+        run: |
+          V=$(node -p "require('./packages/cli/package.json').version")
+          [ "v$V" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != package v$V"; exit 1; }
+
       - name: Publish CLI to npm
         run: npm publish -w nff-brain --access public
         env:

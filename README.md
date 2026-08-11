@@ -40,6 +40,15 @@ irm https://raw.githubusercontent.com/GLechevalier/nff-brain/main/install.ps1 | 
 **VS Code extension** — install “nff-brain” from the Marketplace (or grab the
 `.vsix` from a GitHub release and `code --install-extension nff-brain-*.vsix`).
 
+### Upgrade
+
+```sh
+nff-brain upgrade          # wraps: npm install -g nff-brain@latest
+```
+
+or just re-run any install command above — `npm install -g` is
+install-or-upgrade. Check what you have with `nff-brain --version`.
+
 ## Quick start
 
 ```sh
@@ -75,6 +84,7 @@ from eviction when the graph is later consolidated.
 nff-brain init [--hooks] [--global]     create + seed the brain
 nff-brain doctor                        check claude CLI, brain files, hooks
 nff-brain list | show <id>              inspect the graph
+nff-brain search <query> [--limit 10]   rank nodes by relevance to a query
 nff-brain add --title T --content C     add a curated node
 nff-brain edit <id> [--title|--content|--category]
 nff-brain rm <id>                       delete a node and its links
@@ -85,10 +95,19 @@ nff-brain merge [--ratio 0.25] [--llm]  consolidate: fold least-used nodes; --ll
 nff-brain recall [--query q]            print the preamble (what Claude sees)
 nff-brain distill --transcript <jsonl>  distill a transcript manually
 nff-brain uninstall-hooks               remove exactly the nff-brain hook entries
+nff-brain upgrade                       npm install -g nff-brain@latest
+nff-brain --version                     print the CLI version
 ```
 
 Everything targets `<workspace>/.nff-brain/brain.json`; add `--global` for the
 user-level brain at `~/.nff-brain/brain.json`. Recall merges both (project wins).
+
+### Model (cost control)
+
+Distillation defaults to **haiku** — the cheapest model that handles the job.
+Override per call with `--model` (`init`, `distill`, `merge --llm`) or globally
+with the `NFF_BRAIN_MODEL` env var. Recall never calls an LLM. `nff-brain
+doctor` shows the model currently in effect.
 
 ## The graph model
 

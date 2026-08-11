@@ -9,7 +9,7 @@ export interface Args {
 }
 
 const VALUE_FLAGS = new Set([
-  'query', 'transcript', 'session', 'title', 'category', 'content', 'id', 'strength', 'delta', 'ratio', 'model',
+  'query', 'transcript', 'session', 'title', 'category', 'content', 'id', 'strength', 'delta', 'ratio', 'model', 'limit',
 ]);
 
 export function parseArgs(argv: string[]): Args {
@@ -112,4 +112,14 @@ export function logToBrainDir(brainPath: string, name: string, message: string):
 export function fail(message: string): never {
   console.error(`nff-brain: ${message}`);
   process.exit(1);
+}
+
+/** CLI version from package.json — one level above the bundled dist/index.js. */
+export function cliVersion(): string {
+  try {
+    const raw = fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+    return (JSON.parse(raw) as { version?: string }).version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }

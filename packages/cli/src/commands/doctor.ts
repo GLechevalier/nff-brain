@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { isLockStale, loadBrain, resolveBrainPaths } from '@nff-brain/core';
+import { cliVersion } from '../util.js';
 import { describeHooks } from './hooks.js';
 
 // `nff-brain doctor` — checks the pieces the hook loop depends on and prints
@@ -15,6 +16,13 @@ function check(label: string, ok: boolean | null, detail: string): boolean {
 export async function cmdDoctor(): Promise<void> {
   const paths = resolveBrainPaths(process.cwd());
   let healthy = true;
+
+  check('nff-brain', null, `v${cliVersion()}`);
+  check(
+    'distill model',
+    null,
+    `${process.env.NFF_BRAIN_MODEL ?? 'haiku (default)'} — override via NFF_BRAIN_MODEL or --model`,
+  );
 
   // claude CLI present (the distiller depends on it; recall does not).
   const bin = process.env.NFF_BRAIN_CLAUDE_BIN ?? 'claude';

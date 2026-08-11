@@ -6,6 +6,9 @@ import { cmdInit } from './commands/init.js';
 import { cmdMerge } from './commands/merge.js';
 import { cmdAdd, cmdEdit, cmdList, cmdRm, cmdShow } from './commands/nodes.js';
 import { cmdRecall } from './commands/recall.js';
+import { cmdSearch } from './commands/search.js';
+import { cmdUpgrade } from './commands/upgrade.js';
+import { cliVersion } from './util.js';
 
 const HELP = `nff-brain — local-first knowledge-graph memory for Claude Code
 
@@ -16,6 +19,8 @@ setup
   install-hooks [--global]         wire SessionStart recall + SessionEnd distill into .claude/settings.json
   uninstall-hooks [--global]       remove exactly the nff-brain hook entries
   doctor                           check claude CLI, brain files, locks, hooks
+  upgrade                          npm install -g nff-brain@latest
+  --version                        print the CLI version
 
 session loop (normally run by the hooks)
   recall [--query q] [--stdin-hook]      print the recalled preamble (LLM-free, fail-open)
@@ -23,6 +28,7 @@ session loop (normally run by the hooks)
 
 graph
   list                             all nodes (merged project + global view)
+  search <query> [--limit 10]      rank nodes by relevance to a query
   show <id>                        one node's memory document
   add --title T --content C [--category core|analysis|rules|strategy] [--id i]
   edit <id> [--title T] [--content C] [--category c]
@@ -42,6 +48,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   'install-hooks': cmdInstallHooks,
   'uninstall-hooks': cmdUninstallHooks,
   list: () => cmdList(),
+  search: cmdSearch,
   show: cmdShow,
   add: cmdAdd,
   edit: cmdEdit,
@@ -51,12 +58,17 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   reinforce: cmdReinforce,
   merge: cmdMerge,
   doctor: () => cmdDoctor(),
+  upgrade: () => cmdUpgrade(),
 };
 
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
     process.stdout.write(HELP);
+    return;
+  }
+  if (cmd === '--version' || cmd === '-v' || cmd === 'version') {
+    process.stdout.write(`${cliVersion()}\n`);
     return;
   }
   const fn = COMMANDS[cmd];

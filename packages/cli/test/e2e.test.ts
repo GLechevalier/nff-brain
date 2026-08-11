@@ -161,5 +161,27 @@ describe('e2e (mocked claude)', () => {
     const r = runCli(['doctor']);
     expect(r.stdout).toContain('project brain');
     expect(r.stdout).toContain('node(s)');
+    expect(r.stdout).toContain('distill model');
+    expect(r.stdout).toContain('haiku (default)');
+  });
+
+  it('--version prints the package version', () => {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.resolve(here, '..', 'package.json'), 'utf8'),
+    ) as { version: string };
+    for (const flag of ['--version', '-v']) {
+      const r = runCli([flag]);
+      expect(r.status).toBe(0);
+      expect(r.stdout.trim()).toBe(pkg.version);
+    }
+  });
+
+  it('search ranks seeded nodes and rejects an empty query', () => {
+    const r = runCli(['search', 'deploy']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('deploy-procedure');
+    const empty = runCli(['search']);
+    expect(empty.status).toBe(1);
+    expect(empty.stderr).toContain('usage: nff-brain search');
   });
 });
