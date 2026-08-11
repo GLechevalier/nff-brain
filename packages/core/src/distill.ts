@@ -4,8 +4,17 @@
 // rules: refine-by-id, capped new-node growth, edges only between real nodes.
 
 import type { OneShot } from './claude.js';
+import { NFF_PROMPT_MARKERS } from './promptMarkers.js';
 import { upsertEdge, upsertNode } from './store.js';
-import { asCategory, placeNode, slug, type BrainFile, type BrainNode } from './types.js';
+import {
+  CATEGORIES,
+  CATEGORY_HINTS,
+  asCategory,
+  placeNode,
+  slug,
+  type BrainFile,
+  type BrainNode,
+} from './types.js';
 
 export interface RawNode {
   id?: unknown;
@@ -50,7 +59,7 @@ export function buildDistillPrompt(p: DistillPromptParams): string {
     : '(none yet)';
 
   return [
-    `You are the memory distiller for a coding agent working on this project.`,
+    `${NFF_PROMPT_MARKERS.distill} for a coding agent working on this project.`,
     `A session just finished. Extract ONLY durable, reusable knowledge worth keeping as the`,
     `agent's future skills/playbooks — procedures, fault→fix mappings, project conventions,`,
     `gotchas, strategies that will help on similar future tasks. IGNORE one-off facts,`,
@@ -60,7 +69,8 @@ export function buildDistillPrompt(p: DistillPromptParams): string {
     `Return STRICT JSON only (no prose, no code fence) of shape:`,
     `{"nodes":[{"id","title","category","content"}],"edges":[{"from","to","strength"}]}`,
     `Rules:`,
-    `- category must be one of: core | analysis | rules | strategy.`,
+    `- category must be one of: ${CATEGORIES.join(' | ')}`,
+    ...CATEGORIES.map((c) => `    ${c} — ${CATEGORY_HINTS[c]}`),
     `- content = an actionable procedure/lesson in 1-4 sentences ("When X, do Y because Z").`,
     `- To REFINE existing knowledge, reuse that node's exact id (see KNOWN NODES). Otherwise`,
     `  invent a short kebab-case id. At most ${p.maxNewNodes} NEW nodes.`,

@@ -1,4 +1,4 @@
-import { appendActivity, rankNodes, resolveBrainPaths } from '@nff-brain/core';
+import { appendActivity, fuseRanked, resolveBrainPaths } from '@nff-brain/core';
 import { fail, flagNum, parseArgs } from '../util.js';
 import { loadMerged } from './nodes.js';
 
@@ -13,7 +13,9 @@ export async function cmdSearch(argv: string[]): Promise<void> {
     console.log('brain is empty — run `nff-brain init`');
     return;
   }
-  const ranked = rankNodes(query, merged.nodes, { limit: flagNum(args, 'limit') ?? 10 });
+  // null semantic list ⇒ byte-identical to the old rankNodes path. Phase 1
+  // swaps in real cosine hits here; nothing else about this command changes.
+  const ranked = fuseRanked(query, merged.nodes, null, { limit: flagNum(args, 'limit') ?? 10 });
   if (ranked.length === 0) {
     console.log(`(no matches for "${query}")`);
     return;
@@ -23,7 +25,7 @@ export async function cmdSearch(argv: string[]): Promise<void> {
     ids: ranked.map((r) => r.node.id),
   });
   const width = Math.min(40, Math.max(...ranked.map((r) => r.node.id.length)) + 2);
-  for (const { node, score } of ranked) {
-    console.log(`${score.toFixed(2)}  ${node.id.padEnd(width)} [${node.category}] ${node.title}`);
+  for (const { node, fused } of ranked) {
+    console.log(`${fused.toFixed(2)}  ${node.id.padEnd(width)} [${node.category}] ${node.title}`);
   }
 }

@@ -5,7 +5,7 @@
 // text between them and `## Links`, and the node's edges from the links list.
 // Dependency-free (no node:fs) — safe for any bundle.
 
-import { asCategory, clampStrength, type BrainNode, type Category } from './types.js';
+import { CATEGORIES, asCategory, clampStrength, type BrainNode, type Category } from './types.js';
 
 export interface MdLink {
   id: string;
@@ -20,6 +20,11 @@ export interface ParsedNodeMd {
   links: MdLink[];
 }
 
+// Built from CATEGORIES, never hardcoded: a literal alternation here silently
+// dropped any newer category back to the 'strategy' default on re-parse, so a
+// no-op save in the VS Code editor rewrote the node's category.
+const META_CATEGORY = new RegExp(`category:\\s*(${CATEGORIES.join('|')})\\b`, 'i');
+
 const LINKS_HEADING = /^##\s+links\b/i;
 const LINK_LINE = /\[\[([^\]\s]+)\]\](?:[^0-9]*([0-9]*\.?[0-9]+))?/;
 
@@ -30,7 +35,14 @@ export function serializeNodeMd(
 ): string {
   const meta = [
     `category: ${node.category}`,
-    node.origin === 'seed' ? 'curated' : node.origin === 'graphify' ? 'codebase map' : 'learned',
+    node.origin === 'seed'
+      ? 'curated'
+      : node.origin === 'graphify'
+        ? 'codebase map'
+        : node.origin === 'import'
+          ? 'imported from history'
+          : 'learned',
+    ...(typeof node.confidence === 'number' ? [`confidence ${node.confidence.toFixed(2)}`] : []),
     `recalled ${node.recallCount ?? 0}×`,
     `updated ${node.lastUpdated}`,
     ...(extra?.source ? [`source ${extra.source}`] : []),
@@ -47,6 +59,9 @@ export function serializeNodeMd(
     ``,
     `> ${meta}`,
     `> _Edit title, category, body or links, then save — changes write back to the brain._`,
+    // No literal "category:" here — this line lives in the same blockquote and
+    // would match META_CATEGORY if the real meta line above were ever deleted.
+    `> _one of: ${CATEGORIES.join(' | ')}_`,
     ``,
     node.content.trim(),
     ``,
@@ -96,7 +111,7 @@ export function parseNodeMd(text: string): ParsedNodeMd {
     }
     if (line.trimStart().startsWith('>')) {
       // Meta blockquote: category is the one editable field in it.
-      const m = line.match(/category:\s*(core|analysis|rules|strategy)/i);
+      const m = line.match(META_CATEGORY);
       if (m && !sawCategory) {
         category = asCategory(m[1].toLowerCase());
         sawCategory = true;

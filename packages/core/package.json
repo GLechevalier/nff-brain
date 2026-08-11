@@ -8,6 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./score": "./src/score.ts",
+    "./vector": "./src/vector.ts",
+    "./rank": "./src/rank.ts",
     "./activity": "./src/activity.ts"
   }
 }

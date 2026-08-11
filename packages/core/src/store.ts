@@ -46,15 +46,18 @@ export function loadBrain(filePath: string): BrainFile | null {
   };
 }
 
-/** Atomic save: write temp file in the same dir, fsync, rename over the target. */
-export function saveBrain(filePath: string, brain: BrainFile): void {
-  brain.updatedAt = new Date().toISOString();
+/**
+ * Atomic write: temp file in the same dir, fsync, rename over the target, with
+ * the Windows EPERM/EBUSY retry loop (Defender and indexers briefly hold files).
+ * Shared by saveBrain and the vector sidecar — do not reimplement the retry.
+ */
+export function writeFileAtomic(filePath: string, text: string): void {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `.brain.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
   const fd = fs.openSync(tmp, 'w');
   try {
-    fs.writeSync(fd, JSON.stringify(brain, null, 2) + '\n');
+    fs.writeSync(fd, text);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
@@ -77,6 +80,12 @@ export function saveBrain(filePath: string, brain: BrainFile): void {
     /* best effort */
   }
   throw lastErr;
+}
+
+/** Atomic save: write temp file in the same dir, fsync, rename over the target. */
+export function saveBrain(filePath: string, brain: BrainFile): void {
+  brain.updatedAt = new Date().toISOString();
+  writeFileAtomic(filePath, JSON.stringify(brain, null, 2) + '\n');
 }
 
 function lockDir(filePath: string): string {

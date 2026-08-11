@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LADDER, DEFAULT_THRESHOLDS, modelLadder, pickModel, scoreNovelty } from '../src/index.js';
+import {
+  DEFAULT_DOWNGRADE_STREAK,
+  DEFAULT_HYSTERESIS,
+  DEFAULT_LADDER,
+  DEFAULT_THRESHOLDS,
+  MIN_SIGNAL_TOKENS,
+  applyHysteresis,
+  modelLadder,
+  pickModel,
+  policyOptions,
+  scoreNovelty,
+} from '../src/index.js';
 import type { BrainEdge, BrainNode } from '../src/index.js';
 
 function node(id: string, title: string, content: string, extra: Partial<BrainNode> = {}): BrainNode {
@@ -104,7 +115,7 @@ describe('scoreNovelty', () => {
     );
     expect(r.top[0].id).toBe('docker-restart');
     expect(r.novelty).toBeLessThan(0.35);
-    expect(r.model).toBe('haiku');
+    expect(r.model).toBe('sonnet');
   });
 
   it('a matching but weak periphery node stays novel → frontier model', () => {
@@ -116,7 +127,7 @@ describe('scoreNovelty', () => {
     const r = scoreNovelty({ nodes: [weak, other], edges }, 'quantum telemetry probe experiments');
     expect(r.top[0].id).toBe('weak');
     expect(r.novelty).toBeGreaterThanOrEqual(0.7);
-    expect(r.model).toBe('opus');
+    expect(r.model).toBe('fable');
   });
 
   it('a middling anchor lands on the middle tier', () => {
@@ -132,7 +143,7 @@ describe('scoreNovelty', () => {
     expect(r.top[0].id).toBe('mid');
     expect(r.novelty).toBeGreaterThanOrEqual(0.35);
     expect(r.novelty).toBeLessThan(0.7);
-    expect(r.model).toBe('sonnet');
+    expect(r.model).toBe('opus');
   });
 
   it('weak lexical coverage keeps novelty high even when the matched node is strong', () => {
@@ -154,5 +165,153 @@ describe('scoreNovelty', () => {
     });
     expect(r.model).toBe('b');
     expect(r.ladder).toEqual(['a', 'b']);
+  });
+});
+
+describe('scoreNovelty signal gate', () => {
+  const graph = {
+    nodes: [node('docker-restart', 'Docker restart procedure', 'force-recreate wedged containers')],
+    edges: [] as BrainEdge[],
+  };
+
+  it('flags continuation prompts as having no signal', () => {
+    // These are the ones that used to demand the frontier model: they score
+    // novelty 1 not because the brain is ignorant but because there is nothing
+    // in them to match.
+    for (const prompt of ['', 'ok', 'yes', 'continue', 'go ahead', 'the and for']) {
+      const r = scoreNovelty(graph, prompt);
+      expect(r.hasSignal, prompt).toBe(false);
+      expect(r.signalTokens, prompt).toBeLessThan(MIN_SIGNAL_TOKENS);
+    }
+  });
+
+  it('a real two-token task has signal', () => {
+    const r = scoreNovelty(graph, 'restart docker');
+    expect(r.hasSignal).toBe(true);
+    expect(r.signalTokens).toBe(2);
+  });
+
+  it('counts only meaningful tokens (stopwords and short words dropped)', () => {
+    // "do"/"it" are under 3 chars, "the"/"for" are stopwords → docker, wedged.
+    expect(scoreNovelty(graph, 'do it for the docker wedged').signalTokens).toBe(2);
+  });
+
+  it('a long unfamiliar prompt still has signal and still escalates', () => {
+    // The gate must not swallow real novelty: this one IS new territory, and
+    // the frontier model is the right answer.
+    const r = scoreNovelty(graph, 'design a quantum telemetry cascade subsystem from scratch');
+    expect(r.hasSignal).toBe(true);
+    expect(r.novelty).toBeGreaterThanOrEqual(0.7);
+    expect(r.model).toBe('fable');
+  });
+
+  it('respects a minSignalTokens override', () => {
+    expect(scoreNovelty(graph, 'restart docker', { minSignalTokens: 3 }).hasSignal).toBe(false);
+    expect(scoreNovelty(graph, 'ok', { minSignalTokens: 0 }).hasSignal).toBe(true);
+  });
+});
+
+describe('policyOptions', () => {
+  it('defaults without env', () => {
+    expect(policyOptions({})).toEqual({
+      margin: DEFAULT_HYSTERESIS,
+      downgradeStreak: DEFAULT_DOWNGRADE_STREAK,
+      minSignalTokens: MIN_SIGNAL_TOKENS,
+    });
+  });
+
+  it('reads overrides', () => {
+    expect(
+      policyOptions({
+        NFF_BRAIN_NOVELTY_HYSTERESIS: '0.1',
+        NFF_BRAIN_DOWNGRADE_STREAK: '3',
+        NFF_BRAIN_MIN_SIGNAL_TOKENS: '4',
+      }),
+    ).toEqual({ margin: 0.1, downgradeStreak: 3, minSignalTokens: 4 });
+  });
+
+  it('falls back silently on malformed values — a typo must never break a hook', () => {
+    const bad = policyOptions({
+      NFF_BRAIN_NOVELTY_HYSTERESIS: 'wide', // non-numeric
+      NFF_BRAIN_DOWNGRADE_STREAK: '0', // must be >= 1
+      NFF_BRAIN_MIN_SIGNAL_TOKENS: '-1', // must be >= 0
+    });
+    expect(bad).toEqual({
+      margin: DEFAULT_HYSTERESIS,
+      downgradeStreak: DEFAULT_DOWNGRADE_STREAK,
+      minSignalTokens: MIN_SIGNAL_TOKENS,
+    });
+    // A margin big enough to invert the cuts is refused too.
+    expect(policyOptions({ NFF_BRAIN_NOVELTY_HYSTERESIS: '0.9' }).margin).toBe(DEFAULT_HYSTERESIS);
+    // Fractional streaks are not a thing.
+    expect(policyOptions({ NFF_BRAIN_DOWNGRADE_STREAK: '2.5' }).downgradeStreak).toBe(DEFAULT_DOWNGRADE_STREAK);
+  });
+});
+
+describe('applyHysteresis', () => {
+  const ladder = [...DEFAULT_LADDER];
+  const thresholds = [...DEFAULT_THRESHOLDS];
+  const apply = (prev: { model: string; belowStreak: number } | null, novelty: number) =>
+    applyHysteresis(prev, novelty, ladder, thresholds);
+
+  it('adopts the raw pick with no history', () => {
+    expect(apply(null, 0.9)).toEqual({ model: 'fable', belowStreak: 0 });
+    expect(apply(null, 0.1)).toEqual({ model: 'sonnet', belowStreak: 0 });
+  });
+
+  it('adopts the raw pick when the remembered tier is not on the ladder', () => {
+    // Someone edited NFF_BRAIN_MODEL_LADDER mid-session.
+    expect(apply({ model: 'haiku', belowStreak: 1 }, 0.9)).toEqual({ model: 'fable', belowStreak: 0 });
+  });
+
+  it('holds inside the upgrade band and moves outside it', () => {
+    const prev = { model: 'sonnet', belowStreak: 0 };
+    expect(apply(prev, 0.38).model).toBe('sonnet'); // 0.38 < 0.35 + 0.05
+    expect(apply(prev, 0.4).model).toBe('sonnet'); // exactly at the edge — not past it
+    expect(apply(prev, 0.42).model).toBe('opus'); // clear of the band
+  });
+
+  it('upgrades straight to the tier novelty asks for, skipping rungs', () => {
+    expect(apply({ model: 'sonnet', belowStreak: 0 }, 0.95)).toEqual({ model: 'fable', belowStreak: 0 });
+  });
+
+  it('holds inside the downgrade band without arming the streak', () => {
+    const prev = { model: 'fable', belowStreak: 0 };
+    expect(apply(prev, 0.66)).toEqual({ model: 'fable', belowStreak: 0 }); // 0.66 >= 0.70 - 0.05
+  });
+
+  it('needs two consecutive below-band prompts to give up a tier', () => {
+    const first = apply({ model: 'fable', belowStreak: 0 }, 0.2);
+    expect(first).toEqual({ model: 'fable', belowStreak: 1 }); // armed, not fired
+    const second = apply(first, 0.2);
+    expect(second).toEqual({ model: 'sonnet', belowStreak: 0 });
+  });
+
+  it('a single in-band prompt resets the streak', () => {
+    const armed = apply({ model: 'fable', belowStreak: 0 }, 0.2);
+    expect(armed.belowStreak).toBe(1);
+    const reset = apply(armed, 0.8); // back up in fable territory
+    expect(reset).toEqual({ model: 'fable', belowStreak: 0 });
+    // …so the next low prompt starts counting from scratch.
+    expect(apply(reset, 0.2)).toEqual({ model: 'fable', belowStreak: 1 });
+  });
+
+  it('honours a custom streak length', () => {
+    let s = { model: 'fable', belowStreak: 0 };
+    for (let i = 0; i < 2; i++) {
+      s = applyHysteresis(s, 0.1, ladder, thresholds, { downgradeStreak: 3 });
+      expect(s.model).toBe('fable');
+    }
+    expect(applyHysteresis(s, 0.1, ladder, thresholds, { downgradeStreak: 3 }).model).toBe('sonnet');
+  });
+
+  it('reproduces the agreed five-prompt trace', () => {
+    const seen: string[] = [];
+    let s: { model: string; belowStreak: number } | null = null;
+    for (const novelty of [0.8, 0.2, 0.18, 0.38, 0.42]) {
+      s = apply(s, novelty);
+      seen.push(s.model);
+    }
+    expect(seen).toEqual(['fable', 'fable', 'sonnet', 'sonnet', 'opus']);
   });
 });

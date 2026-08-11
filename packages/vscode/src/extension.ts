@@ -77,6 +77,7 @@ function loadGraph(): GraphSnapshot {
     lastUpdated: n.lastUpdated,
     recallCount: n.recallCount ?? 0,
     lastRecalledAt: n.lastRecalledAt,
+    confidence: n.confidence,
     source: merged.sourceById.get(n.id) ?? 'project',
     relatedIds: related.get(n.id) ?? [],
   }));

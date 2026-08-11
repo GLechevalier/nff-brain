@@ -75,7 +75,12 @@ export interface BrainSavings {
  * actually happened.
  */
 export function brainSavings(nodes: readonly BrainNode[]): BrainSavings {
-  const byOrigin: Record<BrainNode['origin'], number> = { seed: 0, agent: 0, graphify: 0 };
+  const byOrigin: Record<BrainNode['origin'], number> = {
+    seed: 0,
+    agent: 0,
+    graphify: 0,
+    import: 0,
+  };
   let total = 0;
   let injections = 0;
   for (const n of nodes) {

@@ -19,8 +19,10 @@ interface SpacedNode {
 // Extra vertical room for the title label rendered below each node square.
 const LABEL_PAD = 14;
 
-// Stable 32-bit string hash (FNV-1a) — for deterministic tie-breaks.
-function hash(str: string): number {
+// Stable 32-bit string hash (FNV-1a) — for deterministic tie-breaks. Exported
+// (the only change from the dashboard port) so the drift animation can derive a
+// per-node direction from the same hash instead of duplicating it.
+export function hash(str: string): number {
   let h = 2166136261;
   for (let i = 0; i < str.length; i++) {
     h ^= str.charCodeAt(i);

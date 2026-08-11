@@ -6,10 +6,13 @@ import {
   loadBrain,
   mergeBrains,
   mutateBrain,
+  pruneSessions,
+  readModelState,
   recallBrain,
   resolveBrainPaths,
   scoreNovelty,
   writeModelRequest,
+  writeModelState,
 } from '@nff-brain/core';
 import { flagStr, logToBrainDir, parseArgs, parseHookPayload, readStdin, type HookPayload } from '../util.js';
 
@@ -69,16 +72,28 @@ export async function cmdRecall(argv: string[]): Promise<void> {
     if (isHook) {
       try {
         const nov = scoreNovelty(merged, query);
+        const ts = new Date().toISOString();
         writeModelRequest(paths.project, {
           version: 1,
           sessionId: payload.session_id,
           cwd: paths.workspaceRoot,
           model: nov.model,
           novelty: nov.novelty,
-          ts: new Date().toISOString(),
+          ts,
           source: 'session-start',
           top: nov.top,
         });
+        // Seed this session's tier so the first scored prompt has something to
+        // apply hysteresis against, and clear out sessions that have long since
+        // ended — SessionStart is the natural once-per-session moment for it.
+        const state = pruneSessions(readModelState(paths.project));
+        state.sessions[payload.session_id ?? 'default'] = {
+          model: nov.model,
+          novelty: nov.novelty,
+          belowStreak: 0,
+          ts,
+        };
+        writeModelState(paths.project, state);
       } catch (err) {
         logToBrainDir(paths.project, 'last-recall.log', `model request failed: ${String(err)}`);
       }

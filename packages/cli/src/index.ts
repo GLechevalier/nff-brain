@@ -37,7 +37,7 @@ graph
   list                             all nodes (merged project + global view)
   search <query> [--limit 10]      rank nodes by relevance to a query
   show <id>                        one node's memory document
-  add --title T --content C [--category core|analysis|rules|strategy] [--id i]
+  add --title T --content C [--category core|analysis|rules|strategy|decision|preference|task] [--id i]
   edit <id> [--title T] [--content C] [--category c]
   rm <id>                          delete a node and its edges
   link <a> <b> [--strength 0.6]    connect two nodes

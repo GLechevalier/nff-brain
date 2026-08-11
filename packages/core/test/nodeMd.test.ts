@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseNodeMd, serializeNodeMd } from '../src/index.js';
+import { CATEGORIES, parseNodeMd, serializeNodeMd } from '../src/index.js';
 import type { BrainNode } from '../src/index.js';
 
 function node(id: string, extra: Partial<BrainNode> = {}): BrainNode {
@@ -50,6 +50,28 @@ describe('nodeMd', () => {
     expect(parsed.category).toBe('strategy'); // default when meta removed
     expect(parsed.content).toBe('Body only.');
     expect(parsed.links).toEqual([{ id: 'far', strength: 1 }]); // clamped, deduped
+  });
+
+  // Regression: the meta-line category regex used to be a hardcoded
+  // (core|analysis|rules|strategy) alternation, so a node in any newer category
+  // failed to match on re-parse and silently fell back to 'strategy' — meaning a
+  // no-op save in the VS Code editor rewrote the node's category.
+  it.each(CATEGORIES)('round-trips the %s category unchanged', (category) => {
+    const md = serializeNodeMd(node('x', { category }), []);
+    expect(parseNodeMd(md).category).toBe(category);
+  });
+
+  it('does not read the category hint line as the category', () => {
+    // The hint lives in the same blockquote as the real meta line; if the user
+    // deletes the meta line, we must fall back to the default, not to whatever
+    // category happens to be listed first in the hint.
+    const md = serializeNodeMd(node('x', { category: 'decision' }), []);
+    const withoutMeta = md
+      .split('\n')
+      .filter((l) => !l.startsWith('> category:'))
+      .join('\n');
+    expect(withoutMeta).toContain('one of:'); // the hint survived
+    expect(parseNodeMd(withoutMeta).category).toBe('strategy');
   });
 
   it('parses empty links placeholder as no links', () => {

@@ -1,6 +1,17 @@
 // Lexical relevance scoring — the local stand-in for the worker's Postgres
 // FTS + pg_trgm seed step. Zero dependencies: token overlap + character-trigram
 // Dice similarity. trigramSim doubles as the merge-candidate gate (~0.55).
+//
+// ── FROZEN SCALE ────────────────────────────────────────────────────────────
+// tokenize, trigramSim, scoreNode and rankNodes are FROZEN. Their numeric
+// outputs are load-bearing calibration constants elsewhere:
+//   • novelty.ts divides the top score by 0.35, and DEFAULT_THRESHOLDS
+//     [0.35, 0.7] are cut points on that derived scale;
+//   • mergePass.ts gates merge candidates on trigramSim >= 0.55 (and > 0.1).
+// Semantic similarity is NEVER blended into these numbers. It only reorders and
+// extends candidate lists, and it does so in rank.ts under new names. Changing
+// a coefficient here silently re-tunes the model ladder and the merge pass —
+// score.test.ts pins exact values as a tripwire.
 
 const STOPWORDS = new Set([
   'the', 'and', 'for', 'are', 'was', 'were', 'with', 'that', 'this', 'these', 'those',

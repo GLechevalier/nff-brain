@@ -1,7 +1,7 @@
 import type React from 'react';
 import { forwardRef, useImperativeHandle, useMemo } from 'react';
 import type { ViewEdge, ViewNode } from '../src/protocol';
-import { spaceOutNodes } from './brainSpacing';
+import { hash, spaceOutNodes } from './brainSpacing';
 import { usePanZoom, type FitBox } from './usePanZoom';
 import type { GlowInfo } from './useActivityGlow';
 
@@ -11,7 +11,18 @@ import type { GlowInfo } from './useActivityGlow';
 // change from the dashboard: literal monochrome colors became VS Code theme
 // variables (--nb-*), so the look inverts correctly in dark themes.
 
-const CATEGORY_ICON = { core: '◈', analysis: '⊕', rules: '▦', strategy: '↑' } as const;
+// Category is conveyed SOLELY by this glyph (the webview renders theme colors,
+// not node.color), so every category in core's CATEGORIES needs one. Fall back
+// to '·' rather than rendering a blank square if the two ever drift.
+const CATEGORY_ICON: Record<ViewNode['category'], string> = {
+  core: '◈',
+  analysis: '⊕',
+  rules: '▦',
+  strategy: '↑',
+  decision: '⌘',
+  preference: '☺',
+  task: '☐',
+};
 
 const INK = 'var(--nb-ink)';
 const PAPER = 'var(--nb-paper)';
@@ -23,6 +34,21 @@ function edgeStyle(strength: number): { offsets: number[]; width: number; dash?:
   if (strength >= 0.75) return { offsets: [-1.5, 1.5], width: 1 }; // double
   if (strength >= 0.63) return { offsets: [0], width: 1.5 }; // single solid
   return { offsets: [0], width: 0.75, dash: '4 4' }; // dotted
+}
+
+// Drift parameters for one hot node. The halo wrapper and the node group both
+// take this SAME object, so they stay in phase and the glow never detaches from
+// its square. Two bits of the id hash pick one of four wander directions; the
+// period and wave delay are the halo's own, so motion and light breathe together.
+function driftVars(id: string, g: GlowInfo): React.CSSProperties {
+  const h = hash(id);
+  return {
+    '--nb-glow-i': String(g.intensity),
+    '--nb-jx': h & 1 ? '1' : '-1',
+    '--nb-jy': h & 2 ? '1' : '-1',
+    '--nb-drift-period': `${g.periodMs}ms`,
+    animationDelay: `${g.delayMs}ms`,
+  } as React.CSSProperties;
 }
 
 export interface BrainGraphHandle {
@@ -190,24 +216,28 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
             if (!g || !p) return null;
             const pad = 6;
             return (
-              <rect
-                key={`glow-${node.id}`}
-                className={`nb-glow${g.fresh ? ' nb-glow--fresh' : ''}`}
-                x={p.x - node.size - pad}
-                y={p.y - node.size - pad}
-                width={(node.size + pad) * 2}
-                height={(node.size + pad) * 2}
-                filter="url(#nb-blur)"
-                style={
-                  {
-                    '--nb-glow-i': String(g.intensity),
-                    // Fresh: two delays — the arrival flash rides the wave, the
-                    // breathing starts once the 900ms flash hands over.
-                    animationDelay: g.fresh ? `${g.delayMs}ms, ${g.delayMs + 900}ms` : undefined,
-                    animationDuration: g.fresh ? undefined : `${g.periodMs}ms`,
-                  } as React.CSSProperties
-                }
-              />
+              // Drift lives on a wrapper, not the halo itself: the halo already
+              // animates transform (nb-arrive scales it), and a second transform
+              // animation on one element would clobber it. Nesting composes them.
+              <g key={`glow-${node.id}`} className="nb-drift" style={driftVars(node.id, g)}>
+                <rect
+                  className={`nb-glow${g.fresh ? ' nb-glow--fresh' : ''}`}
+                  x={p.x - node.size - pad}
+                  y={p.y - node.size - pad}
+                  width={(node.size + pad) * 2}
+                  height={(node.size + pad) * 2}
+                  filter="url(#nb-blur)"
+                  style={
+                    {
+                      '--nb-glow-i': String(g.intensity),
+                      // Fresh: two delays — the arrival flash rides the wave, the
+                      // breathing starts once the 900ms flash hands over.
+                      animationDelay: g.fresh ? `${g.delayMs}ms, ${g.delayMs + 900}ms` : undefined,
+                      animationDuration: g.fresh ? undefined : `${g.periodMs}ms`,
+                    } as React.CSSProperties
+                  }
+                />
+              </g>
             );
           })}
         {nodes.map((node) => {
@@ -216,11 +246,15 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
           const isSelected = node.id === selectedId;
           const isHovered = node.id === hoveredId && !isSelected;
           const dimmed = matchedIds != null && !matchedIds.has(node.id);
+          // Hot nodes wander; cold ones carry no class at all, so a quiet graph
+          // is exactly as static as before.
+          const g = glow?.get(node.id);
           return (
             <g
               key={node.id}
               opacity={dimmed ? 0.2 : 1}
-              style={{ cursor: 'pointer' }}
+              className={g ? 'nb-drift' : undefined}
+              style={{ cursor: 'pointer', ...(g ? driftVars(node.id, g) : null) }}
               // Guard against a pan-drag that ends over a node mis-selecting it.
               onClick={() => {
                 if (!movedRef.current) onSelect(node.id);
@@ -246,7 +280,7 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
                 fontFamily="var(--nb-mono)"
                 style={{ pointerEvents: 'none', userSelect: 'none' }}
               >
-                {CATEGORY_ICON[node.category]}
+                {CATEGORY_ICON[node.category] ?? '·'}
               </text>
               <text
                 x={p.x}

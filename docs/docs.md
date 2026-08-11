@@ -253,6 +253,21 @@ nff-brain ingest-graphify     # re-import the compressed map
 | `NFF_BRAIN_CLAUDE_BIN` | `claude` | claude binary override (tests use a shim) |
 | `NFF_BRAIN_SKIP` | — | set to `1` in the env of nff-brain's own `claude -p` children; both hooks exit immediately when they see it. **Recursion guard — never remove.** |
 
+Auto-model (novelty scoring → `.nff-brain/model-request.json`). These pick the
+**session** model and are unrelated to `NFF_BRAIN_MODEL` above, which is the
+distiller's own model.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `NFF_BRAIN_MODEL_LADDER` | `sonnet,opus,fable` | tiers from cheapest to frontier; the extension types the names verbatim as `/model <name>` |
+| `NFF_BRAIN_NOVELTY_THRESHOLDS` | `0.35,0.7` | novelty cut points between tiers; needs exactly `ladder length − 1` ascending values in (0,1) |
+| `NFF_BRAIN_MIN_SIGNAL_TOKENS` | `2` | meaningful query tokens below which a prompt carries no opinion and the current tier is held (`ok`, `yes`, `continue`) |
+| `NFF_BRAIN_NOVELTY_HYSTERESIS` | `0.05` | dead band around each cut, so novelty wobbling at a boundary cannot flap tiers |
+| `NFF_BRAIN_DOWNGRADE_STREAK` | `2` | consecutive below-band prompts required before giving up an expensive tier; upgrades are immediate |
+
+All five fall back to their defaults on a malformed value — a typo can never
+break a hook.
+
 ## 8. VS Code extension
 
 - **Open**: `nff-brain: Open Brain` from the command palette, the status-bar

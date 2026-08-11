@@ -10,14 +10,31 @@
 import { scoreNode, tokenize } from './score.js';
 import type { BrainEdge, BrainNode } from './types.js';
 
-export const DEFAULT_LADDER = ['haiku', 'sonnet', 'opus'] as const;
+export const DEFAULT_LADDER = ['sonnet', 'opus', 'fable'] as const;
 export const DEFAULT_THRESHOLDS = [0.35, 0.7] as const;
+
+/**
+ * Below this many meaningful query tokens a prompt carries no opinion about the
+ * model. "ok" tokenizes to nothing and "yes"/"continue" to a single token that
+ * matches nothing — without this floor they score novelty 1 and demand the
+ * frontier model, which is backwards: a continuation is the most FAMILIAR
+ * moment in a session. Novelty 1 must mean "the brain looked and found
+ * nothing", not "there was nothing to look with".
+ */
+export const MIN_SIGNAL_TOKENS = 2;
+
+/** Dead band around each cut, so novelty wobbling at a boundary can't flap tiers. */
+export const DEFAULT_HYSTERESIS = 0.05;
+
+/** Consecutive below-band prompts required before giving up an expensive tier. */
+export const DEFAULT_DOWNGRADE_STREAK = 2;
 
 export interface NoveltyOptions {
   k?: number; // seed nodes considered
   minScore?: number; // lexical relevance floor
   ladder?: string[];
   thresholds?: number[];
+  minSignalTokens?: number;
 }
 
 export interface NoveltyContributor {
@@ -34,9 +51,11 @@ export interface NoveltyResult {
   ladder: string[];
   thresholds: number[];
   top: NoveltyContributor[];
+  signalTokens: number; // meaningful (non-stopword, 3+ char) query tokens
+  hasSignal: boolean; // enough of them to have an opinion at all
 }
 
-const NOVELTY_DEFAULTS = { k: 6, minScore: 0.05 };
+const NOVELTY_DEFAULTS = { k: 6, minScore: 0.05, minSignalTokens: MIN_SIGNAL_TOKENS };
 
 function clamp01(x: number): number {
   return Math.min(1, Math.max(0, x));
@@ -77,12 +96,90 @@ export function modelLadder(env: Record<string, string | undefined> = process.en
   return { ladder, thresholds };
 }
 
+/**
+ * Policy knobs from the environment, same silent-fallback stance as
+ * modelLadder: a typo in an env var can never break a hook.
+ */
+export function policyOptions(env: Record<string, string | undefined> = process.env): {
+  margin: number;
+  downgradeStreak: number;
+  minSignalTokens: number;
+} {
+  const num = (raw: string | undefined, fallback: number, ok: (n: number) => boolean): number => {
+    const n = Number(raw);
+    return raw !== undefined && Number.isFinite(n) && ok(n) ? n : fallback;
+  };
+  return {
+    // A margin at/above 0.5 could invert the cuts — keep it a dead band, not a rewrite.
+    margin: num(env.NFF_BRAIN_NOVELTY_HYSTERESIS, DEFAULT_HYSTERESIS, (n) => n >= 0 && n < 0.5),
+    downgradeStreak: num(env.NFF_BRAIN_DOWNGRADE_STREAK, DEFAULT_DOWNGRADE_STREAK, (n) => Number.isInteger(n) && n >= 1),
+    minSignalTokens: num(env.NFF_BRAIN_MIN_SIGNAL_TOKENS, MIN_SIGNAL_TOKENS, (n) => Number.isInteger(n) && n >= 0),
+  };
+}
+
 /** First tier whose cut point the novelty stays under; past every cut → last (frontier). */
 export function pickModel(novelty: number, ladder: string[], thresholds: number[]): string {
   for (let i = 0; i < thresholds.length; i++) {
     if (novelty < thresholds[i]) return ladder[i];
   }
   return ladder[ladder.length - 1];
+}
+
+/** What applyHysteresis needs to remember between prompts — see modelState.ts. */
+export interface PrevTier {
+  model: string;
+  belowStreak: number;
+}
+
+export interface HysteresisOptions {
+  margin?: number;
+  downgradeStreak?: number;
+}
+
+/**
+ * Damped tier selection. pickModel alone flaps: novelty wobbling either side of
+ * a cut flips the tier on alternating prompts, and every flip types /model into
+ * the user's terminal. So a move must clear the cut by `margin`, and a
+ * DOWNGRADE must additionally hold for `downgradeStreak` prompts in a row —
+ * abandoning an expensive model mid-task on one fluke prompt throws away the
+ * context that model is already carrying.
+ *
+ * Upgrades jump straight to the tier novelty asks for rather than climbing one
+ * rung per prompt: a genuinely novel task should reach the frontier at once.
+ */
+export function applyHysteresis(
+  prev: PrevTier | null | undefined,
+  novelty: number,
+  ladder: string[],
+  thresholds: number[],
+  opts: HysteresisOptions = {},
+): { model: string; belowStreak: number } {
+  const margin = opts.margin ?? DEFAULT_HYSTERESIS;
+  const downgradeStreak = Math.max(1, opts.downgradeStreak ?? DEFAULT_DOWNGRADE_STREAK);
+  const raw = pickModel(novelty, ladder, thresholds);
+
+  const prevIdx = prev ? ladder.indexOf(prev.model) : -1;
+  // No history, or the ladder changed under us (env edit) — adopt the raw pick.
+  if (prevIdx === -1) return { model: raw, belowStreak: 0 };
+
+  const rawIdx = ladder.indexOf(raw);
+  if (rawIdx === prevIdx) return { model: prev!.model, belowStreak: 0 };
+
+  if (rawIdx > prevIdx) {
+    // Upgrade: clear the cut just above the current tier by the full margin.
+    const cut = thresholds[prevIdx];
+    return novelty > cut + margin
+      ? { model: raw, belowStreak: 0 }
+      : { model: prev!.model, belowStreak: 0 };
+  }
+
+  // Downgrade: below the cut just under the current tier, for N prompts running.
+  const cut = thresholds[prevIdx - 1];
+  if (novelty >= cut - margin) return { model: prev!.model, belowStreak: 0 };
+  const streak = (prev!.belowStreak ?? 0) + 1;
+  return streak >= downgradeStreak
+    ? { model: raw, belowStreak: 0 }
+    : { model: prev!.model, belowStreak: streak };
 }
 
 /**
@@ -107,16 +204,21 @@ export function scoreNovelty(
       ? { ladder: options.ladder, thresholds: options.thresholds }
       : modelLadder();
   const opts = { ...NOVELTY_DEFAULTS, ...options };
+  // Counted before any early return so callers can tell "found nothing" from
+  // "had nothing to look with" — both score 1, only the first means novel.
+  const queryTokens = tokenize(taskText);
+  const signalTokens = queryTokens.size;
   const done = (novelty: number, top: NoveltyContributor[]): NoveltyResult => ({
     novelty,
     model: pickModel(novelty, ladder, thresholds),
     ladder,
     thresholds,
     top,
+    signalTokens,
+    hasSignal: signalTokens >= opts.minSignalTokens,
   });
 
   // Nothing known, or nothing to judge → brand-new territory.
-  const queryTokens = tokenize(taskText);
   if (graph.nodes.length === 0 || queryTokens.size === 0) return done(1, []);
 
   // One pass over the edges for per-node degree and strongest incident edge.

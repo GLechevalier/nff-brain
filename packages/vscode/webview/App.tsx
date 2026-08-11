@@ -1,8 +1,10 @@
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-// Subpath import on purpose: the core barrel pulls node:fs/node:child_process
-// and would break the browser (webview) bundle. score.ts is dependency-free.
-import { rankNodes } from '@nff-brain/core/score';
+// Subpath imports on purpose: the core barrel pulls node:fs/node:child_process
+// and would break the browser (webview) bundle. score.ts / rank.ts / vector.ts
+// are the dependency-free trio — the webview may import those three and
+// nothing else from core (enforced by webviewImports.test.ts).
+import { fuseRanked } from '@nff-brain/core/rank';
 import type { ExtToWeb, ViewNode, WebToExt } from '../src/protocol';
 import { BrainGraph, type BrainGraphHandle } from './BrainGraph';
 import { useActivityGlow } from './useActivityGlow';
@@ -73,7 +75,9 @@ export function App() {
   }, [nodes, selectedId]);
 
   // ── node search ─────────────────────────────────────────────────────────────
-  const matches = useMemo(() => rankNodes(query, nodes).map((r) => r.node), [nodes, query]);
+  // null semantic list ⇒ identical to the old rankNodes path. Phase 2 feeds
+  // cosine hits in here, sourced from the extension host.
+  const matches = useMemo(() => fuseRanked(query, nodes, null).map((r) => r.node), [nodes, query]);
   const matchedIds = useMemo(
     () => (query.trim() ? new Set(matches.map((n) => n.id)) : null),
     [matches, query],

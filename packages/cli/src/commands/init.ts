@@ -1,6 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
+  CATEGORIES,
+  CATEGORY_HINTS,
   applyDelta,
   extractJson,
   loadBrain,
@@ -38,7 +40,8 @@ function buildInitPrompt(docText: string, known: BrainNode[], hubId: string): st
     `Return STRICT JSON only (no prose, no code fence) of shape:`,
     `{"nodes":[{"id","title","category","content"}],"edges":[{"from","to","strength"}]}`,
     `Rules:`,
-    `- category must be one of: core | analysis | rules | strategy.`,
+    `- category must be one of: ${CATEGORIES.join(' | ')}`,
+    ...CATEGORIES.map((c) => `    ${c} — ${CATEGORY_HINTS[c]}`),
     `- content = actionable guidance in 1-4 sentences, self-contained.`,
     `- To REFINE existing knowledge, reuse that node's exact id (see KNOWN NODES). Otherwise`,
     `  invent a short kebab-case id. At most ${MAX_INIT_NODES} nodes total.`,

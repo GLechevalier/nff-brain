@@ -3,18 +3,22 @@
 
 export type NodeSource = 'project' | 'global';
 
+// Category/origin literals are duplicated from core on purpose — this file must
+// stay value-free and dependency-free (it is bundled into the browser webview).
+// Keep in sync with CATEGORIES / BrainNode['origin'] in core/src/types.ts.
 export interface ViewNode {
   id: string;
   title: string;
-  category: 'core' | 'analysis' | 'rules' | 'strategy';
+  category: 'core' | 'analysis' | 'rules' | 'strategy' | 'decision' | 'preference' | 'task';
   content: string;
   x: number;
   y: number;
   size: number;
-  origin: 'seed' | 'agent' | 'graphify';
+  origin: 'seed' | 'agent' | 'graphify' | 'import';
   lastUpdated: string;
   recallCount: number;
   lastRecalledAt?: string; // ISO — seeds the glow when a panel opens late
+  confidence?: number; // 0..1, present on imported nodes
   source: NodeSource;
   relatedIds: string[];
 }

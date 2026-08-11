@@ -1,12 +1,15 @@
 import * as path from 'node:path';
 import {
+  applyHysteresis,
   appendActivity,
   loadBrain,
   mergeBrains,
-  readModelRequest,
+  policyOptions,
+  readModelState,
   resolveBrainPaths,
   scoreNovelty,
   writeModelRequest,
+  writeModelState,
 } from '@nff-brain/core';
 import { flagStr, logToBrainDir, parseArgs, parseHookPayload, readStdin, type HookPayload } from '../util.js';
 
@@ -67,15 +70,37 @@ export async function cmdNovelty(argv: string[]): Promise<void> {
           sessionId: payload.session_id,
         });
       }
-      const prev = readModelRequest(paths.project);
-      if (prev?.model === nov.model) return; // no change — don't retype /model
+      // "ok", "yes", "go ahead" carry no opinion about the model — they only
+      // LOOK novel because there is nothing in them to match. Hold whatever the
+      // session is on rather than escalating on every continuation.
+      if (!nov.hasSignal) return;
+
+      // Per session, not per workspace: two Claude terminals in one folder each
+      // need their own decision, and the streak below has to survive prompts.
+      const key = payload.session_id ?? 'default';
+      const state = readModelState(paths.project);
+      const prev = state.sessions[key] ?? null;
+      const { model, belowStreak } = applyHysteresis(
+        prev,
+        nov.novelty,
+        nov.ladder,
+        nov.thresholds,
+        policyOptions(),
+      );
+      const ts = new Date().toISOString();
+      // Written even when the tier is unchanged — otherwise the streak that
+      // eventually justifies a downgrade can never accumulate.
+      state.sessions[key] = { model, novelty: nov.novelty, belowStreak, ts };
+      writeModelState(paths.project, state);
+
+      if (prev?.model === model) return; // no change — don't retype /model
       writeModelRequest(paths.project, {
         version: 1,
         sessionId: payload.session_id,
         cwd: paths.workspaceRoot,
-        model: nov.model,
+        model,
         novelty: nov.novelty,
-        ts: new Date().toISOString(),
+        ts,
         source: 'prompt',
         top: nov.top,
       });
@@ -95,6 +120,10 @@ export async function cmdNovelty(argv: string[]): Promise<void> {
     const cuts = nov.thresholds.map((t, i) => `<${t} → ${nov.ladder[i]}`).join(', ');
     console.log(`novelty  ${nov.novelty.toFixed(2)}  →  ${nov.model}`);
     console.log(`ladder   ${nov.ladder.join(' → ')}  (${cuts}, else ${nov.ladder[nov.ladder.length - 1]})`);
+    if (!nov.hasSignal) {
+      const n = nov.signalTokens;
+      console.log(`signal   ${n} token${n === 1 ? '' : 's'} — too little to judge; the hook would hold the current model`);
+    }
     if (nov.top.length === 0) {
       console.log('anchors  none — nothing in the brain matches this query');
     } else {

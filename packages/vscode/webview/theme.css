@@ -133,8 +133,48 @@ body {
   }
 }
 
+/* ── living-graph drift ──────────────────────────────────────────────────────
+   Heat also moves the geometry, not just the lighting: a hot node wanders a
+   couple of pixels so activity reads as life. Amplitude rides --nb-glow-i, so
+   a cooling node's sway shrinks to nothing and a cold node (no class) is
+   perfectly still. --nb-jx/--nb-jy are ±1 per node (id hash) for four drift
+   directions; period + delay come from the same values as the halo so the
+   square and its glow stay locked together. */
+.nb-drift {
+  animation: nb-drift var(--nb-drift-period, 3200ms) ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes nb-drift {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  33% {
+    transform: translate(
+      calc(var(--nb-glow-i) * var(--nb-jx) * 2.2px),
+      calc(var(--nb-glow-i) * var(--nb-jy) * 1.1px)
+    );
+  }
+  66% {
+    transform: translate(
+      calc(var(--nb-glow-i) * var(--nb-jx) * -0.9px),
+      calc(var(--nb-glow-i) * var(--nb-jy) * 2px)
+    );
+  }
+}
+
 /* Hidden panel (retainContextWhenHidden): kill all glow animation. */
 .nb-anim-off .nb-glow {
   animation: none;
   opacity: 0;
+}
+.nb-anim-off .nb-drift {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nb-drift {
+    animation: none;
+  }
 }

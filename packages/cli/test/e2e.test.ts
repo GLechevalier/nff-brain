@@ -357,6 +357,13 @@ describe('e2e novelty / model-request', () => {
 
   const request = (): any =>
     JSON.parse(fs.readFileSync(path.join(nws, '.nff-brain', 'model-request.json'), 'utf8'));
+  const state = (): any =>
+    JSON.parse(fs.readFileSync(path.join(nws, '.nff-brain', 'model-state.json'), 'utf8'));
+  const promptHook = (prompt: string, sessionId = 'sess-nov') =>
+    runCli(['novelty', '--stdin-hook'], {
+      stdin: JSON.stringify({ session_id: sessionId, cwd: nws, hook_event_name: 'UserPromptSubmit', prompt }),
+      cwd: nws,
+    });
 
   beforeAll(() => {
     nws = fs.mkdtempSync(path.join(os.tmpdir(), 'nff-brain-e2e-nov-'));
@@ -394,8 +401,10 @@ describe('e2e novelty / model-request', () => {
     expect(req.sessionId).toBe('sess-nov');
     expect(path.resolve(req.cwd)).toBe(path.resolve(nws));
     // The tmpdir-name query matches nothing in the brain → max novelty → frontier.
-    expect(req.model).toBe('opus');
+    expect(req.model).toBe('fable');
     expect(req.novelty).toBe(1);
+    // …and the session's tier is seeded so the first prompt has a baseline.
+    expect(state().sessions['sess-nov']).toMatchObject({ model: 'fable', belowStreak: 0 });
     // 8-node brain → whole-graph recall event, all seeds.
     const act = lastActivity(nws);
     expect(act.kind).toBe('recall');
@@ -418,26 +427,62 @@ describe('e2e novelty / model-request', () => {
     expect(request().ts).toBe(before.ts); // still opus → untouched
   });
 
-  it('novelty --stdin-hook rewrites the request when the prompt lands on a strong anchor', () => {
-    const payload = JSON.stringify({
-      session_id: 'sess-nov',
-      cwd: nws,
-      hook_event_name: 'UserPromptSubmit',
-      prompt: 'docker restart procedure for wedged containers',
-    });
-    const r = runCli(['novelty', '--stdin-hook'], { stdin: payload, cwd: nws });
+  it('a familiar prompt arms the downgrade but does not fire it on the first hit', () => {
+    const before = request();
+    const r = promptHook('docker restart procedure for wedged containers');
     expect(r.status).toBe(0);
     expect(r.stdout).toBe('');
-    const req = request();
-    expect(req.source).toBe('prompt');
-    expect(req.model).toBe('haiku');
-    expect(req.novelty).toBeLessThan(0.35);
-    expect(req.top[0].id).toBe('docker-restart');
-    // The per-prompt heartbeat: the prompt's anchor nodes hit the glow feed.
+    // Hysteresis: one cheap-looking prompt must not drop the session off the
+    // expensive model mid-task, so the request file is untouched…
+    expect(request().ts).toBe(before.ts);
+    // …but the streak is armed and persisted.
+    expect(state().sessions['sess-nov']).toMatchObject({ model: 'fable', belowStreak: 1 });
+    // The per-prompt heartbeat fires regardless — the glow is not an auto-model
+    // feature.
     const act = lastActivity(nws);
     expect(act.kind).toBe('prompt');
     expect(act.ids[0]).toBe('docker-restart');
     expect(act.sessionId).toBe('sess-nov');
+  });
+
+  it('a second familiar prompt in a row completes the downgrade', () => {
+    const r = promptHook('docker restart procedure for wedged containers');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('');
+    const req = request();
+    expect(req.source).toBe('prompt');
+    expect(req.model).toBe('sonnet');
+    expect(req.novelty).toBeLessThan(0.35);
+    expect(req.top[0].id).toBe('docker-restart');
+    expect(state().sessions['sess-nov']).toMatchObject({ model: 'sonnet', belowStreak: 0 });
+  });
+
+  it('a low-signal continuation holds the tier instead of escalating', () => {
+    const before = request();
+    // "ok" tokenizes to nothing: it only LOOKS maximally novel. Escalating here
+    // is the bug this gate exists for.
+    for (const prompt of ['ok', 'yes', 'go ahead']) {
+      const r = promptHook(prompt);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toBe('');
+    }
+    expect(request().ts).toBe(before.ts);
+    expect(state().sessions['sess-nov'].model).toBe('sonnet');
+  });
+
+  it('sessions in one workspace decide independently', () => {
+    // sess-b has no history, so it adopts the raw pick and MUST get its own
+    // request written even though sess-nov already sits on the same tier.
+    const before = request();
+    expect(before.model).toBe('sonnet');
+    const r = promptHook('docker restart procedure for wedged containers', 'sess-b');
+    expect(r.status).toBe(0);
+    const req = request();
+    expect(req.sessionId).toBe('sess-b');
+    expect(req.model).toBe('sonnet');
+    expect(req.ts).not.toBe(before.ts); // written, not skipped
+    // Both sessions tracked separately.
+    expect(Object.keys(state().sessions).sort()).toEqual(['sess-b', 'sess-nov']);
   });
 
   it('the NFF_BRAIN_SKIP guard blocks the hook write', () => {
@@ -458,9 +503,10 @@ describe('e2e novelty / model-request', () => {
     });
     expect(r.status).toBe(0);
     const out = JSON.parse(r.stdout);
-    expect(out.model).toBe('haiku');
-    expect(out.ladder).toEqual(['haiku', 'sonnet', 'opus']);
+    expect(out.model).toBe('sonnet');
+    expect(out.ladder).toEqual(['sonnet', 'opus', 'fable']);
     expect(out.top[0].id).toBe('docker-restart');
+    expect(out.hasSignal).toBe(true);
     const empty = runCli(['novelty'], { cwd: nws });
     expect(empty.status).toBe(1);
   });
