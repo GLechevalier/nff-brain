@@ -57,8 +57,9 @@ nff-brain init --hooks
 | `SessionEnd` | `nff-brain distill --stdin-hook` | One `claude -p` call turns the session transcript into new/refined nodes. Fail-open. |
 
 Then just use Claude Code normally. The brain grows as you work; open the graph
-in VS Code (`nff-brain: Open Brain`, the activity-bar icon, or the status-bar
-item) to watch it live, edit nodes, delete them, or reinforce links.
+in VS Code as a full editor tab (`nff-brain: Open Brain` from the command
+palette, or the status-bar `brain` item) to watch it live, edit nodes, delete
+them, or reinforce links.
 
 ## How recall works
 

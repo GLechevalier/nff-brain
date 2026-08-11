@@ -17,5 +17,5 @@ Pair it with the CLI (`npm i -g nff-brain`, then `nff-brain init --hooks` in
 your project) to wire the Claude Code session hooks. See
 [the repository](https://github.com/GLechevalier/nff-brain) for the full story.
 
-Commands: **nff-brain: Open Brain** (editor tab), plus a Brain view in the
-activity bar and a status-bar shortcut.
+Commands: **nff-brain: Open Brain** opens the graph as a full editor tab; the
+status-bar `brain` item is a one-click shortcut to the same tab.

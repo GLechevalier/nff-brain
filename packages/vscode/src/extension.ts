@@ -292,24 +292,6 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('nffBrain.refresh', () => broadcastGraph()),
   );
 
-  // Sidebar view (activity-bar icon) — same app, compact layout via container width.
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(
-      'nffBrain.sideView',
-      {
-        resolveWebviewView(view) {
-          const disposables: vscode.Disposable[] = [];
-          wireWebview(view.webview, context.extensionUri, disposables);
-          view.onDidDispose(() => {
-            channelViews.delete(view.webview);
-            for (const d of disposables) d.dispose();
-          });
-        },
-      },
-      { webviewOptions: { retainContextWhenHidden: true } },
-    ),
-  );
-
   // Status bar entry when a brain exists (or appears later).
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   status.text = '$(type-hierarchy-sub) brain';

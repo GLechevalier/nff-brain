@@ -39,25 +39,7 @@
         "command": "nffBrain.refresh",
         "title": "nff-brain: Reload Brain From Disk"
       }
-    ],
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "nffBrain",
-          "title": "nff-brain",
-          "icon": "media/brain.svg"
-        }
-      ]
-    },
-    "views": {
-      "nffBrain": [
-        {
-          "type": "webview",
-          "id": "nffBrain.sideView",
-          "name": "Brain"
-        }
-      ]
-    }
+    ]
   },
   "scripts": {
     "build": "node build.mjs",
