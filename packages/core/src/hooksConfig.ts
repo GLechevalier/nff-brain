@@ -8,6 +8,11 @@ import * as path from 'node:path';
 
 export const RECALL_COMMAND = 'nff-brain recall --stdin-hook';
 export const DISTILL_COMMAND = 'nff-brain distill --stdin-hook';
+// Without an explicit timeout Claude Code cancels SessionEnd hooks after a
+// short grace (<20s, proven in print mode) — a real haiku distill takes ~25s,
+// so the brain would silently never learn. 120s covers the 60s inner LLM
+// timeout plus startup slack.
+export const DISTILL_TIMEOUT_S = 120;
 
 const MARKER = 'nff-brain';
 
@@ -79,21 +84,36 @@ export function installHooks(settingsPath: string): InstallResult {
   }
 
   settings.hooks = settings.hooks ?? {};
-  const wanted: Array<[string, string]> = [
-    ['SessionStart', RECALL_COMMAND],
-    ['SessionEnd', DISTILL_COMMAND],
+  const wanted: Array<[string, string, number | undefined]> = [
+    ['SessionStart', RECALL_COMMAND, undefined],
+    ['SessionEnd', DISTILL_COMMAND, DISTILL_TIMEOUT_S],
   ];
-  for (const [event, command] of wanted) {
+  let patched = false;
+  for (const [event, command, timeout] of wanted) {
     const matchers = (settings.hooks[event] = settings.hooks[event] ?? []);
     if (hasMarkerHook(matchers)) {
+      // Repair pre-timeout installs in place: without it the distill hook is
+      // cancelled at session end and nothing is ever learned.
+      if (timeout !== undefined) {
+        for (const m of matchers) {
+          for (const h of m.hooks ?? []) {
+            if (typeof h.command === 'string' && h.command.includes(MARKER) && h.timeout === undefined) {
+              h.timeout = timeout;
+              patched = true;
+            }
+          }
+        }
+      }
       result.skipped.push(event);
       continue;
     }
-    matchers.push({ hooks: [{ type: 'command', command }] });
+    const entry: HookEntry = { type: 'command', command };
+    if (timeout !== undefined) entry.timeout = timeout;
+    matchers.push({ hooks: [entry] });
     result.installed.push(event);
   }
 
-  if (result.installed.length) writeSettings(settingsPath, settings);
+  if (result.installed.length || patched) writeSettings(settingsPath, settings);
   return result;
 }
 

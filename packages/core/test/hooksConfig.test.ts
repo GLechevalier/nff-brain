@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hooksInstalled, installHooks, uninstallHooks } from '../src/index.js';
+import { DISTILL_COMMAND, DISTILL_TIMEOUT_S, hooksInstalled, installHooks, uninstallHooks } from '../src/index.js';
 
 let dir: string;
 let settingsPath: string;
@@ -25,6 +25,23 @@ describe('hooksConfig', () => {
     const s = read();
     expect(s.hooks.SessionStart[0].hooks[0].command).toContain('nff-brain recall');
     expect(s.hooks.SessionEnd[0].hooks[0].command).toContain('nff-brain distill');
+    // Distill MUST carry a timeout: without one Claude Code cancels the
+    // SessionEnd hook before the ~25s LLM call finishes.
+    expect(s.hooks.SessionEnd[0].hooks[0].timeout).toBe(DISTILL_TIMEOUT_S);
+    expect(s.hooks.SessionStart[0].hooks[0].timeout).toBeUndefined();
+  });
+
+  it('patches a timeout onto a pre-timeout distill install', () => {
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: { SessionEnd: [{ hooks: [{ type: 'command', command: DISTILL_COMMAND }] }] },
+      }),
+    );
+    const r = installHooks(settingsPath);
+    expect(r.skipped).toContain('SessionEnd');
+    expect(read().hooks.SessionEnd[0].hooks[0].timeout).toBe(DISTILL_TIMEOUT_S);
   });
 
   it('merges without clobbering existing hooks and unknown keys', () => {
