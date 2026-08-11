@@ -9,6 +9,7 @@ import { cmdInit } from './commands/init.js';
 import { cmdMerge } from './commands/merge.js';
 import { cmdAdd, cmdEdit, cmdList, cmdRm, cmdShow } from './commands/nodes.js';
 import { cmdNovelty } from './commands/novelty.js';
+import { cmdModel } from './commands/model.js';
 import { cmdRecall } from './commands/recall.js';
 import { cmdSearch } from './commands/search.js';
 import { cmdSemantic } from './commands/semantic.js';
@@ -43,6 +44,10 @@ session loop (normally run by the hooks)
   novelty [--query q] [--json] [--stdin-hook]
                                    score how novel a task is vs the brain → suggested session model
                                    (weak/uncovered nodes → frontier model, strong nodes → cheap model)
+  model [--write] [--query q] [--from-score] [--json]
+                                   which tier the NEXT session should launch on; --write applies it
+                                   to .claude/settings.local.json (Claude Code binds the model at
+                                   session creation — nothing can retier a running session)
 
 graph
   list                             all nodes (merged project + global view)
@@ -79,6 +84,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   recall: cmdRecall,
   distill: cmdDistill,
   novelty: cmdNovelty,
+  model: cmdModel,
   'install-hooks': cmdInstallHooks,
   'uninstall-hooks': cmdUninstallHooks,
   list: () => cmdList(),

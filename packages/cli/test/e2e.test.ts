@@ -16,6 +16,10 @@ const SHIM_JS = path.join(here, 'fixtures', 'claude-shim.mjs');
 let ws: string; // fake workspace
 let shimDir: string;
 let shimBin: string;
+// Recall merges the GLOBAL brain into every result, so without an isolated home
+// these tests read whatever is in the developer's own ~/.nff-brain/brain.json
+// and node counts drift with it. Point the spawned CLI at a scratch home.
+let fakeHome: string;
 
 function runCli(
   args: string[],
@@ -31,6 +35,8 @@ function runCli(
       NFF_BRAIN_CLAUDE_BIN: shimBin,
       NFF_BRAIN_TIMEOUT_MS: '5000',
       NFF_BRAIN_SKIP: '', // make sure the recursion guard isn't inherited
+      HOME: fakeHome, // os.homedir(): POSIX
+      USERPROFILE: fakeHome, // os.homedir(): Windows
       ...opts.env,
     },
   });
@@ -51,6 +57,7 @@ function lastActivity(wsDir = ws): any {
 beforeAll(() => {
   expect(fs.existsSync(CLI), `built CLI missing at ${CLI} — run npm run build -w nff-brain`).toBe(true);
 
+  fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'nff-brain-e2e-home-'));
   ws = fs.mkdtempSync(path.join(os.tmpdir(), 'nff-brain-e2e-ws-'));
   fs.mkdirSync(path.join(ws, '.git')); // workspace-root marker
   fs.writeFileSync(
@@ -73,7 +80,7 @@ beforeAll(() => {
 afterAll(async () => {
   // The hang test's killed process tree can hold the temp dirs for a moment on
   // Windows (taskkill is async) — retry rather than fail the suite on cleanup.
-  for (const dir of [ws, shimDir]) {
+  for (const dir of [ws, shimDir, fakeHome]) {
     for (let i = 0; i < 10; i++) {
       try {
         fs.rmSync(dir, { recursive: true, force: true });

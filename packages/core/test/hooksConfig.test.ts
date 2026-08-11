@@ -2,7 +2,16 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DISTILL_COMMAND, DISTILL_TIMEOUT_S, hooksInstalled, installHooks, uninstallHooks } from '../src/index.js';
+import {
+  DISTILL_COMMAND,
+  DISTILL_TIMEOUT_S,
+  hooksInstalled,
+  installHooks,
+  localSettingsPath,
+  readModelSetting,
+  uninstallHooks,
+  writeModelSetting,
+} from '../src/index.js';
 
 let dir: string;
 let settingsPath: string;
@@ -119,5 +128,56 @@ describe('hooksConfig', () => {
     fs.writeFileSync(settingsPath, '{oops');
     expect(() => installHooks(settingsPath)).toThrow();
     expect(fs.readFileSync(settingsPath, 'utf8')).toBe('{oops'); // untouched
+  });
+});
+
+// The model setting is the ONLY lever that actually moves a session's model:
+// no hook output can set it, terminalSequence is allowlisted to notification
+// escapes, and claudeCode.useTerminal defaults to false so there is usually no
+// terminal to type /model into. Verified against Claude Code 2.1.228.
+describe('writeModelSetting', () => {
+  it('creates the file when absent', () => {
+    expect(writeModelSetting(settingsPath, 'fable')).toEqual({ previous: null });
+    expect(read().model).toBe('fable');
+  });
+
+  it('PRESERVES every other key — the permission allowlist lives here', () => {
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({ permissions: { allow: ['Read', 'Bash(git:*)'] }, cleanupPeriodDays: 7, hooks: {} }),
+    );
+    writeModelSetting(settingsPath, 'sonnet');
+    const s = read();
+    expect(s.model).toBe('sonnet');
+    expect(s.permissions.allow).toEqual(['Read', 'Bash(git:*)']);
+    expect(s.cleanupPeriodDays).toBe(7);
+    expect(s.hooks).toEqual({});
+  });
+
+  it('reports the previous tier and skips a no-op rewrite', () => {
+    writeModelSetting(settingsPath, 'opus');
+    const before = fs.statSync(settingsPath).mtimeMs;
+    expect(writeModelSetting(settingsPath, 'opus')).toEqual({ previous: 'opus' });
+    expect(fs.statSync(settingsPath).mtimeMs).toBe(before); // untouched
+    expect(writeModelSetting(settingsPath, 'fable')).toEqual({ previous: 'opus' });
+    expect(read().model).toBe('fable');
+  });
+
+  it('refuses to touch malformed settings rather than destroying them', () => {
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, '{oops');
+    expect(() => writeModelSetting(settingsPath, 'opus')).toThrow();
+    expect(fs.readFileSync(settingsPath, 'utf8')).toBe('{oops');
+  });
+
+  it('readModelSetting reports what Claude Code would launch on', () => {
+    expect(readModelSetting(settingsPath)).toBeNull(); // absent → global default
+    writeModelSetting(settingsPath, 'sonnet');
+    expect(readModelSetting(settingsPath)).toBe('sonnet');
+  });
+
+  it('targets settings.local.json, which is gitignored and machine-local', () => {
+    expect(localSettingsPath('/ws')).toBe(path.join('/ws', '.claude', 'settings.local.json'));
   });
 });

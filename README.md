@@ -3,9 +3,9 @@
   <img src="public/images/tumbnail.png" alt="nff" width="640">
 </p>
 
-# nff-brain, save tokens by picking the right LLM for the right task
+# nff-brain, self-improving context for less token burn
 
-**Coding agents burn too much tokens, switch models dynamically for the right tasks so you stay under your limits.**
+**Coding agents burn too many tokens, so we made a dynamic context tool that lives on Chrome and VSCode to constantly feed your agent.**
 
 <p>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>

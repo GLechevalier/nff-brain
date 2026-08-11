@@ -64,6 +64,38 @@ function writeSettings(filePath: string, settings: SettingsShape): void {
   fs.renameSync(tmp, filePath);
 }
 
+export function localSettingsPath(workspaceRoot: string): string {
+  return path.join(workspaceRoot, '.claude', 'settings.local.json');
+}
+
+/**
+ * Write the chosen tier into Claude Code's `model` setting — the ONLY lever
+ * that actually moves a session's model without a human typing `/model`.
+ *
+ * Verified against Claude Code 2.1.228: a project `model` setting overrides the
+ * global one and binds at session CREATION. It is not re-read afterwards (not
+ * even on `--resume`), so this steers the NEXT session, never the running one.
+ * That is a property of Claude Code, not a limitation of this function.
+ *
+ * Everything else in the file is preserved — settings.local.json is where the
+ * permission allowlist lives and it must survive untouched. Returns the tier
+ * that was already there, or null, so callers can skip no-op writes.
+ */
+export function writeModelSetting(settingsPath: string, model: string): { previous: string | null } {
+  const settings = readSettings(settingsPath);
+  const previous = typeof settings.model === 'string' ? settings.model : null;
+  if (previous === model) return { previous };
+  settings.model = model;
+  writeSettings(settingsPath, settings);
+  return { previous };
+}
+
+/** What Claude Code would launch on today, per this settings file. */
+export function readModelSetting(settingsPath: string): string | null {
+  const settings = readSettings(settingsPath);
+  return typeof settings.model === 'string' ? settings.model : null;
+}
+
 function hasMarkerHook(matchers: HookMatcher[] | undefined): boolean {
   for (const m of matchers ?? []) {
     for (const h of m.hooks ?? []) {
