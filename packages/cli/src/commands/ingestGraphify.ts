@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
+  appendActivity,
   applyExplanations,
   applyGraphifyImport,
   buildExplainPrompt,
@@ -96,6 +97,9 @@ export async function cmdExpand(argv: string[]): Promise<void> {
   const node =
     merged.nodes.find((n) => n.id === rawId) ?? merged.nodes.find((n) => n.id === `gf-${rawId}`);
   if (!node) fail(`no node "${rawId}" — see \`nff-brain list\``);
+  // The agent looked at this node — light it up even if the expansion below
+  // fails (missing graph file etc.).
+  appendActivity(paths.project, { kind: 'expand', ids: [node.id] });
   if (!node.graphifyRef) fail(`node ${node.id} has no graphify link — only ingest-graphify nodes can be expanded`);
 
   const ref = node.graphifyRef;

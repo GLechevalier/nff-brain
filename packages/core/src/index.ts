@@ -6,6 +6,8 @@ export * from './nodeMd.js';
 export * from './recall.js';
 export * from './novelty.js';
 export * from './modelRequest.js';
+export * from './activity.js';
+export * from './activityStore.js';
 export * from './transcript.js';
 export * from './claude.js';
 export * from './distill.js';

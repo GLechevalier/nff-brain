@@ -24,11 +24,12 @@ export async function cmdInstallHooks(argv: string[]): Promise<void> {
   for (const ev of result.installed) console.log(`wired ${ev} hook in ${settingsPath}`);
   for (const ev of result.skipped) console.log(`${ev} hook already present — skipped`);
   if (result.installed.length) {
-    console.log('\nClaude Code will now recall the brain at session start and distill new');
-    console.log('lessons at session end. Restart any open Claude Code session to pick this up.');
+    console.log('\nClaude Code will now recall the brain at session start, light up the graph');
+    console.log('view as prompts touch nodes, and distill new lessons at session end.');
+    console.log('Restart any open Claude Code session to pick this up.');
   }
   if (autoModel && (result.installed.includes('UserPromptSubmit') || result.skipped.includes('UserPromptSubmit'))) {
-    console.log('\nauto-model: novelty scoring will keep .nff-brain/model-request.json up to date.');
+    console.log('\nauto-model: novelty scoring keeps .nff-brain/model-request.json up to date.');
     console.log('Enable the "nffBrain.autoModel" setting in VS Code so the extension types /model for you.');
   }
 }

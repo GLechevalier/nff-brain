@@ -1,4 +1,4 @@
-import { rankNodes } from '@nff-brain/core';
+import { appendActivity, rankNodes, resolveBrainPaths } from '@nff-brain/core';
 import { fail, flagNum, parseArgs } from '../util.js';
 import { loadMerged } from './nodes.js';
 
@@ -18,6 +18,10 @@ export async function cmdSearch(argv: string[]): Promise<void> {
     console.log(`(no matches for "${query}")`);
     return;
   }
+  appendActivity(resolveBrainPaths(process.cwd()).project, {
+    kind: 'search',
+    ids: ranked.map((r) => r.node.id),
+  });
   const width = Math.min(40, Math.max(...ranked.map((r) => r.node.id.length)) + 2);
   for (const { node, score } of ranked) {
     console.log(`${score.toFixed(2)}  ${node.id.padEnd(width)} [${node.category}] ${node.title}`);

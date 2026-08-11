@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import {
+  activityPath,
   asCategory,
   CATEGORIES,
   foldLeastUsed,
@@ -9,14 +10,17 @@ import {
   mergeBrains,
   mutateBrain,
   placeNode,
+  readNewActivity,
+  readRecentActivity,
   resolveBrainPaths,
   slug,
   upsertNode,
+  type ActivityEvent,
   type BrainFile,
   type BrainPaths,
 } from '@nff-brain/core';
 import { BrainFs, BrainLinkProvider, nodeUri, SCHEME } from './brainFs';
-import type { ExtToWeb, NodeSource, ViewEdge, ViewNode, WebToExt } from './protocol';
+import type { ExtToWeb, NodeSource, ViewActivityEvent, ViewEdge, ViewNode, WebToExt } from './protocol';
 
 // The extension host is the SOLE filesystem authority: every mutation goes
 // through core's lock + atomic write, and the webview only renders what it is
@@ -64,6 +68,7 @@ function loadGraph(): GraphSnapshot {
     origin: n.origin,
     lastUpdated: n.lastUpdated,
     recallCount: n.recallCount ?? 0,
+    lastRecalledAt: n.lastRecalledAt,
     source: merged.sourceById.get(n.id) ?? 'project',
     relatedIds: related.get(n.id) ?? [],
   }));
@@ -84,6 +89,45 @@ function broadcastGraph(): void {
 
 function fileFor(source: NodeSource): string {
   return source === 'project' ? paths.project : paths.global;
+}
+
+// ── activity relay: .nff-brain/activity.jsonl → webview glow ─────────────────
+// The CLI (recall/novelty/search/expand/distill) appends one line per "the
+// agent looked at these nodes" moment; we tail-read new lines by byte offset
+// and forward them. Offsets make coalesced watcher fires idempotent; the LRU
+// de-dups the rare offset reset after a rotation/truncation.
+
+const ACTIVITY_REPLAY_MS = 12 * 60_000; // matches the glow's ~12 min lifetime
+let activityOffset = 0;
+const seenActivityKeys: string[] = [];
+
+function toViewEvents(events: ActivityEvent[]): ViewActivityEvent[] {
+  return events.map((e) => ({ at: e.at, kind: e.kind, ids: e.ids, seedCount: e.seedCount }));
+}
+
+function dedupActivity(events: ActivityEvent[]): ActivityEvent[] {
+  const fresh: ActivityEvent[] = [];
+  for (const e of events) {
+    const key = `${e.at}|${e.kind}`;
+    if (seenActivityKeys.includes(key)) continue;
+    seenActivityKeys.push(key);
+    if (seenActivityKeys.length > 64) seenActivityKeys.shift();
+    fresh.push(e);
+  }
+  return fresh;
+}
+
+function relayActivity(): void {
+  try {
+    const { events, nextOffset } = readNewActivity(activityPath(paths.project), activityOffset);
+    activityOffset = nextOffset;
+    const fresh = dedupActivity(events);
+    if (fresh.length === 0) return;
+    logLine(`activity: ${fresh.map((e) => `${e.kind}(${e.ids.length})`).join(' ')}`);
+    for (const w of channelViews) post(w, { type: 'activity', events: toViewEvents(fresh) });
+  } catch (err) {
+    logLine(`activity relay failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /** The editor group holding the graph webview (falls back to the active group). */
@@ -134,9 +178,18 @@ async function handleMessage(msg: WebToExt, webview: vscode.Webview): Promise<vo
   const graph = loadGraph();
   try {
     switch (msg.type) {
-      case 'ready':
+      case 'ready': {
         broadcastGraph();
+        // A panel opening late still shows what the agent recently looked at,
+        // glowing at its decayed intensity (real timestamps, no arrival flash).
+        try {
+          const recent = readRecentActivity(activityPath(paths.project), ACTIVITY_REPLAY_MS);
+          if (recent.length) post(webview, { type: 'activity', events: toViewEvents(recent), replay: true });
+        } catch {
+          /* replay is best-effort */
+        }
         return;
+      }
 
       case 'openNode': {
         const source = graph.sourceById.get(msg.id);
@@ -432,6 +485,24 @@ export function activate(context: vscode.ExtensionContext): void {
   modelWatcher.onDidCreate(handleModelRequest);
   modelWatcher.onDidChange(handleModelRequest);
   context.subscriptions.push(modelWatcher);
+
+  // Live activity → glow. Start at the file's current size: history is not
+  // replayed here (the per-panel 'ready' replay handles that). Debounce is a
+  // short 50ms — latency IS the feature — and offsets make extra fires cheap.
+  try {
+    activityOffset = fs.statSync(activityPath(paths.project)).size;
+  } catch {
+    activityOffset = 0;
+  }
+  let activityDebounce: NodeJS.Timeout | null = null;
+  const onActivityChange = () => {
+    if (activityDebounce) clearTimeout(activityDebounce);
+    activityDebounce = setTimeout(relayActivity, 50);
+  };
+  const activityWatcher = vscode.workspace.createFileSystemWatcher('**/.nff-brain/activity.jsonl');
+  activityWatcher.onDidCreate(onActivityChange);
+  activityWatcher.onDidChange(onActivityChange);
+  context.subscriptions.push(activityWatcher);
   try {
     const globalDir = path.dirname(paths.global);
     if (fs.existsSync(globalDir)) {

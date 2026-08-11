@@ -77,6 +77,16 @@ export async function cmdDistill(argv: string[]): Promise<void> {
       return { written, pruned };
     });
 
+    if (written.size > 0) {
+      // Always the PROJECT activity file, even for --global distills — the
+      // glow belongs to whichever workspace's graph panel is watching.
+      appendActivity(paths.project, {
+        kind: 'distill',
+        ids: [...written],
+        sessionId: sessionId ?? undefined,
+      });
+    }
+
     logToBrainDir(
       target,
       'last-distill.log',

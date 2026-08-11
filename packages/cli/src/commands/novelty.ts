@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import {
+  appendActivity,
   loadBrain,
   mergeBrains,
   readModelRequest,
@@ -56,6 +57,16 @@ export async function cmdNovelty(argv: string[]): Promise<void> {
       const prompt = (payload.prompt ?? '').trim();
       if (!prompt || prompt.startsWith('/')) return; // nothing to judge / slash command
       const nov = scoreNovelty(merged, prompt);
+      // The per-prompt heartbeat for the graph webview: which nodes this
+      // prompt made the brain think of. Emitted unconditionally (BEFORE the
+      // model-unchanged early return) — the glow is not an auto-model feature.
+      if (nov.top.length > 0) {
+        appendActivity(paths.project, {
+          kind: 'prompt',
+          ids: nov.top.map((t) => t.id),
+          sessionId: payload.session_id,
+        });
+      }
       const prev = readModelRequest(paths.project);
       if (prev?.model === nov.model) return; // no change — don't retype /model
       writeModelRequest(paths.project, {

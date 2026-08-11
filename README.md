@@ -1,21 +1,34 @@
-# nff-brain
 
-**CLAUDE.md sucks, so replace it with a local-first knowledge-graph that picks the right language model to save tokens.**
+<p align="center">
+  <img src="public/images/tumbnail.png" alt="nff" width="640">
+</p>
 
-`nff-brain` replaces flat `CLAUDE.md` memory with a knowledge graph that lives on
-your machine as a plain JSON file. Claude Code **recalls** the relevant part of
-the graph at the start of every session, and **distills** what it learned into
-new nodes when the session ends — automatically, through Claude Code hooks.
-A VS Code extension renders the brain as an interactive graph (square nodes on a
-pannable canvas, memory document beside it) where you can edit, delete, link and
-reinforce knowledge.
+# nff-brain, pick the right LLM for the right task
 
-- **Local only.** The brain is a JSON file (`.nff-brain/brain.json`). Nothing is
-  hosted, nothing leaves your machine. The VS Code UI is bundled and offline.
-- **No API key.** Distillation runs through your existing `claude` CLI login
-  (one small `claude -p` call per session end). Recall is pure-local and instant.
-- **Yours to edit.** Every node and link is visible and editable — in VS Code or
-  from the CLI.
+**Coding agents burn too much tokens, switch models dynamically for the right tasks so you stay under your limits.**
+
+<p>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+  <a href="https://github.com/GLechevalier/nff-brain/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/GLechevalier/nff-brain/ci.yml?branch=main&label=CI"></a>
+  <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white">
+</p>
+
+`nff-brain` replaces flat `CLAUDE.md` memory with a knowledge graph that lives on your
+machine as a plain JSON file, grown automatically through two Claude Code hooks.
+
+- **Recalled automatically** — a `SessionStart` hook injects the relevant subgraph into
+  every session's context. Pure-local, instant, fail-open.
+- **Distilled automatically** — a `SessionEnd` hook turns what the session learned into
+  new or refined nodes with one small `claude -p` call. Fail-open.
+- **Visual & editable** — a VS Code extension renders the brain as an interactive graph
+  (pannable canvas, memory document beside it) where you can edit, delete, link, and
+  reinforce nodes by hand.
+- **Local only.** The brain is a JSON file (`.nff-brain/brain.json`). Nothing is hosted,
+  nothing leaves your machine, and the VS Code UI is bundled and fully offline.
+- **No API key.** Distillation rides your existing `claude` CLI login — no separate
+  credential to manage.
+- **Cost-aware.** Distillation defaults to the cheapest model that handles the job
+  (`haiku`), overridable per call or globally.
 
 ## Install
 
@@ -69,6 +82,10 @@ Then just use Claude Code normally. The brain grows as you work; open the graph
 in VS Code as a full editor tab (`nff-brain: Open Brain` from the command
 palette, or the status-bar `brain` item) to watch it live, edit nodes, delete
 them, or reinforce links.
+
+<p align="center">
+  <img src="public/images/brain-graph.jpg" alt="nff-brain graph view in VS Code" width="800">
+</p>
 
 ## How recall works
 

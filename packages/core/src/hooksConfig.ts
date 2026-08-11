@@ -8,9 +8,12 @@ import * as path from 'node:path';
 
 export const RECALL_COMMAND = 'nff-brain recall --stdin-hook';
 export const DISTILL_COMMAND = 'nff-brain distill --stdin-hook';
-// Opt-in (install-hooks --auto-model): re-score novelty against each real user
-// prompt and update .nff-brain/model-request.json. LLM-free, sub-100ms, silent
-// on stdout (UserPromptSubmit stdout would be injected into context).
+// Installed by default: re-score novelty against each real user prompt.
+// LLM-free, sub-100ms, silent on stdout (UserPromptSubmit stdout would be
+// injected into context). It feeds two consumers: the per-prompt activity
+// event (nodes light up in the graph webview as the agent "thinks" of them)
+// and .nff-brain/model-request.json (only ACTED on when the user opted into
+// auto-model in the extension).
 export const NOVELTY_COMMAND = 'nff-brain novelty --stdin-hook';
 // Without an explicit timeout Claude Code cancels SessionEnd hooks after a
 // short grace (<20s, proven in print mode) — a real haiku distill takes ~25s,
@@ -91,8 +94,10 @@ export function installHooks(settingsPath: string, opts: { autoModel?: boolean }
   const wanted: Array<[string, string, number | undefined]> = [
     ['SessionStart', RECALL_COMMAND, undefined],
     ['SessionEnd', DISTILL_COMMAND, DISTILL_TIMEOUT_S],
+    // Always wired: the prompt hook drives the graph's live activity glow.
+    // --auto-model no longer gates installation, only the extension's typing.
+    ['UserPromptSubmit', NOVELTY_COMMAND, undefined],
   ];
-  if (opts.autoModel) wanted.push(['UserPromptSubmit', NOVELTY_COMMAND, undefined]);
   let patched = false;
   for (const [event, command, timeout] of wanted) {
     const matchers = (settings.hooks[event] = settings.hooks[event] ?? []);

@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process';
 import * as path from 'node:path';
 import {
+  appendActivity,
   bumpRecall,
   loadBrain,
   mergeBrains,
@@ -88,6 +89,15 @@ export async function cmdRecall(argv: string[]): Promise<void> {
     const result = recallBrain(merged, query);
     if (!result.preamble) return;
     process.stdout.write(result.preamble);
+
+    // Tell any open graph webview what was just looked at (seeds first — the
+    // webview staggers its arrival wave in this order). Fail-open, no stdout.
+    appendActivity(paths.project, {
+      kind: 'recall',
+      ids: result.nodes.map((n) => n.id),
+      seedCount: result.seedCount,
+      sessionId: payload.session_id,
+    });
 
     // Mark recalled nodes as used, routed back to the file each node came from.
     const byaSource: Record<'project' | 'global', string[]> = { project: [], global: [] };

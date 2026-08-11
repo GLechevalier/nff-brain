@@ -18,6 +18,7 @@ export interface RecallOptions {
 export interface RecallResult {
   preamble: string; // '' when nothing relevant was found
   nodes: BrainNode[]; // every included node (callers bump recallCount on these)
+  seedCount: number; // nodes[0..seedCount) were lexical seeds; the rest are edge-expanded
 }
 
 const DEFAULTS: Required<RecallOptions> = {
@@ -74,11 +75,15 @@ export function recallBrain(
 ): RecallResult {
   const opts = { ...DEFAULTS, ...options };
   const { nodes, edges } = graph;
-  if (nodes.length === 0) return { preamble: '', nodes: [] };
+  if (nodes.length === 0) return { preamble: '', nodes: [], seedCount: 0 };
 
   // Whole-graph bypass: a CLAUDE.md-scale brain fits in context — inject it all.
   if (nodes.length <= opts.wholeGraphMax) {
-    return { preamble: renderPreamble(nodes, edges, opts.maxContentChars), nodes: [...nodes] };
+    return {
+      preamble: renderPreamble(nodes, edges, opts.maxContentChars),
+      nodes: [...nodes],
+      seedCount: nodes.length,
+    };
   }
 
   // SEED — lexical ranking against the task text.
@@ -89,7 +94,7 @@ export function recallBrain(
     .sort((a, b) => b.s - a.s)
     .slice(0, opts.k)
     .map((x) => x.n);
-  if (seeds.length === 0) return { preamble: '', nodes: [] };
+  if (seeds.length === 0) return { preamble: '', nodes: [], seedCount: 0 };
 
   // EXPAND — best neighbor per seed, ranked by edge strength, until the budget fills.
   const seedSet = new Set(seeds.map((n) => n.id));
@@ -111,7 +116,11 @@ export function recallBrain(
   const neighbors = nodes.filter((n) => neighborIds.has(n.id));
   const included = [...seeds, ...neighbors];
 
-  return { preamble: renderPreamble(included, touching, opts.maxContentChars), nodes: included };
+  return {
+    preamble: renderPreamble(included, touching, opts.maxContentChars),
+    nodes: included,
+    seedCount: seeds.length,
+  };
 }
 
 /** Mark recalled nodes as used — the value signal that keeps them from eviction. */
