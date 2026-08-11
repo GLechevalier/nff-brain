@@ -313,3 +313,141 @@ describe('e2e ingest-graphify + expand (mocked claude)', () => {
     }
   });
 });
+
+// ── novelty → auto-model request loop ────────────────────────────────────────
+
+describe('e2e novelty / model-request', () => {
+  let nws: string; // dedicated workspace with a hand-crafted brain
+
+  const fakeNode = (id: string, title: string, content: string, recallCount = 0) => ({
+    id,
+    title,
+    category: 'strategy',
+    content,
+    color: '#a78bfa',
+    x: 0,
+    y: 0,
+    size: 16,
+    origin: 'agent',
+    lastUpdated: '2026-01-01T00:00:00.000Z',
+    recallCount,
+  });
+
+  const request = (): any =>
+    JSON.parse(fs.readFileSync(path.join(nws, '.nff-brain', 'model-request.json'), 'utf8'));
+
+  beforeAll(() => {
+    nws = fs.mkdtempSync(path.join(os.tmpdir(), 'nff-brain-e2e-nov-'));
+    fs.mkdirSync(path.join(nws, '.git'));
+    fs.mkdirSync(path.join(nws, '.nff-brain'));
+    const strong = fakeNode(
+      'docker-restart',
+      'Docker restart procedure',
+      'force-recreate wedged containers with compose',
+      40,
+    );
+    const neighbors = Array.from({ length: 7 }, (_, i) => fakeNode(`nb-${i}`, `Neighbor ${i}`, `filler ${i}`));
+    fs.writeFileSync(
+      path.join(nws, '.nff-brain', 'brain.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        nodes: [strong, ...neighbors],
+        edges: neighbors.map((n) => ({ from: 'docker-restart', to: n.id, strength: 0.9 })),
+      }),
+    );
+  });
+
+  afterAll(() => {
+    fs.rmSync(nws, { recursive: true, force: true });
+  });
+
+  it('recall --stdin-hook writes a session-start model request', () => {
+    const payload = JSON.stringify({ session_id: 'sess-nov', cwd: nws, hook_event_name: 'SessionStart' });
+    const r = runCli(['recall', '--stdin-hook'], { stdin: payload, cwd: nws });
+    expect(r.status).toBe(0);
+    const req = request();
+    expect(req.version).toBe(1);
+    expect(req.source).toBe('session-start');
+    expect(req.sessionId).toBe('sess-nov');
+    expect(path.resolve(req.cwd)).toBe(path.resolve(nws));
+    // The tmpdir-name query matches nothing in the brain → max novelty → frontier.
+    expect(req.model).toBe('opus');
+    expect(req.novelty).toBe(1);
+  });
+
+  it('novelty --stdin-hook stays silent and skips the write when the model is unchanged', () => {
+    const before = request();
+    const payload = JSON.stringify({
+      session_id: 'sess-nov',
+      cwd: nws,
+      hook_event_name: 'UserPromptSubmit',
+      prompt: 'totally unknown protein folding cascade question',
+    });
+    const r = runCli(['novelty', '--stdin-hook'], { stdin: payload, cwd: nws });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe(''); // UserPromptSubmit stdout would leak into context
+    expect(request().ts).toBe(before.ts); // still opus → untouched
+  });
+
+  it('novelty --stdin-hook rewrites the request when the prompt lands on a strong anchor', () => {
+    const payload = JSON.stringify({
+      session_id: 'sess-nov',
+      cwd: nws,
+      hook_event_name: 'UserPromptSubmit',
+      prompt: 'docker restart procedure for wedged containers',
+    });
+    const r = runCli(['novelty', '--stdin-hook'], { stdin: payload, cwd: nws });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('');
+    const req = request();
+    expect(req.source).toBe('prompt');
+    expect(req.model).toBe('haiku');
+    expect(req.novelty).toBeLessThan(0.35);
+    expect(req.top[0].id).toBe('docker-restart');
+  });
+
+  it('the NFF_BRAIN_SKIP guard blocks the hook write', () => {
+    const before = request();
+    const payload = JSON.stringify({
+      cwd: nws,
+      hook_event_name: 'UserPromptSubmit',
+      prompt: 'completely different unknown territory again',
+    });
+    const r = runCli(['novelty', '--stdin-hook'], { stdin: payload, cwd: nws, env: { NFF_BRAIN_SKIP: '1' } });
+    expect(r.status).toBe(0);
+    expect(request().ts).toBe(before.ts);
+  });
+
+  it('interactive novelty --json explains the score', () => {
+    const r = runCli(['novelty', '--query', 'docker restart procedure for wedged containers', '--json'], {
+      cwd: nws,
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.model).toBe('haiku');
+    expect(out.ladder).toEqual(['haiku', 'sonnet', 'opus']);
+    expect(out.top[0].id).toBe('docker-restart');
+    const empty = runCli(['novelty'], { cwd: nws });
+    expect(empty.status).toBe(1);
+  });
+
+  it('install-hooks --auto-model wires UserPromptSubmit; uninstall removes all three', () => {
+    const r = runCli(['install-hooks', '--auto-model'], { cwd: nws });
+    expect(r.status).toBe(0);
+    const settingsPath = path.join(nws, '.claude', 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    const commands = Object.values(settings.hooks)
+      .flat()
+      .flatMap((m: any) => m.hooks.map((h: any) => h.command));
+    expect(commands).toContain('nff-brain recall --stdin-hook');
+    expect(commands).toContain('nff-brain distill --stdin-hook');
+    expect(commands).toContain('nff-brain novelty --stdin-hook');
+
+    const r2 = runCli(['uninstall-hooks'], { cwd: nws });
+    expect(r2.status).toBe(0);
+    const after = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    expect(after.hooks?.SessionStart ?? []).toEqual([]);
+    expect(after.hooks?.UserPromptSubmit ?? []).toEqual([]);
+  });
+});

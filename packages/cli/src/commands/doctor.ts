@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { isLockStale, loadBrain, resolveBrainPaths } from '@nff-brain/core';
+import { isLockStale, loadBrain, modelLadder, resolveBrainPaths } from '@nff-brain/core';
 import { cliVersion } from '../util.js';
 import { describeHooks } from './hooks.js';
 
@@ -22,6 +22,12 @@ export async function cmdDoctor(): Promise<void> {
     'distill model',
     null,
     `${process.env.NFF_BRAIN_MODEL ?? 'haiku (default)'} — override via NFF_BRAIN_MODEL or --model`,
+  );
+  const { ladder, thresholds } = modelLadder();
+  check(
+    'model ladder',
+    null,
+    `${ladder.join(' → ')} at novelty ${thresholds.join('/')} — override via NFF_BRAIN_MODEL_LADDER / NFF_BRAIN_NOVELTY_THRESHOLDS`,
   );
 
   // claude CLI present (the distiller depends on it; recall does not).
@@ -64,7 +70,7 @@ export async function cmdDoctor(): Promise<void> {
   for (const h of describeHooks()) {
     const state =
       h.sessionStart && h.sessionEnd
-        ? 'recall + distill wired'
+        ? `recall + distill wired${h.userPromptSubmit ? ' + auto-model' : ''}`
         : h.sessionStart || h.sessionEnd
           ? `partial (SessionStart=${h.sessionStart}, SessionEnd=${h.sessionEnd})`
           : 'not installed';

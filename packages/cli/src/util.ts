@@ -88,6 +88,7 @@ export interface HookPayload {
   hook_event_name?: string;
   source?: string;
   reason?: string;
+  prompt?: string; // UserPromptSubmit only — the text the user just submitted
 }
 
 export function parseHookPayload(raw: string): HookPayload {

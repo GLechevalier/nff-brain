@@ -1,6 +1,6 @@
 # nff-brain
 
-**Local-first knowledge-graph memory for Claude Code.**
+**CLAUDE.md sucks, so replace it with a local-first knowledge-graph that picks the right language model to save tokens.**
 
 `nff-brain` replaces flat `CLAUDE.md` memory with a knowledge graph that lives on
 your machine as a plain JSON file. Claude Code **recalls** the relevant part of

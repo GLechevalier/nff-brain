@@ -67,7 +67,22 @@
         "view": "nffBrain.launcher",
         "contents": "The brain graph opens as a full editor tab.\n[Open Brain](command:nffBrain.open)"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "nff-brain",
+      "properties": {
+        "nffBrain.autoModel": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically type /model into the Claude Code terminal when the brain's novelty scoring requests a model switch (reads .nff-brain/model-request.json written by the nff-brain hooks)."
+        },
+        "nffBrain.autoModelNotify": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a status-bar message whenever nff-brain switches the session model."
+        }
+      }
+    }
   },
   "scripts": {
     "build": "node build.mjs",

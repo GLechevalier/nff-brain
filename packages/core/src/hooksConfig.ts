@@ -8,6 +8,10 @@ import * as path from 'node:path';
 
 export const RECALL_COMMAND = 'nff-brain recall --stdin-hook';
 export const DISTILL_COMMAND = 'nff-brain distill --stdin-hook';
+// Opt-in (install-hooks --auto-model): re-score novelty against each real user
+// prompt and update .nff-brain/model-request.json. LLM-free, sub-100ms, silent
+// on stdout (UserPromptSubmit stdout would be injected into context).
+export const NOVELTY_COMMAND = 'nff-brain novelty --stdin-hook';
 // Without an explicit timeout Claude Code cancels SessionEnd hooks after a
 // short grace (<20s, proven in print mode) — a real haiku distill takes ~25s,
 // so the brain would silently never learn. 120s covers the 60s inner LLM
@@ -72,7 +76,7 @@ export interface InstallResult {
   backedUpTo?: string;
 }
 
-export function installHooks(settingsPath: string): InstallResult {
+export function installHooks(settingsPath: string, opts: { autoModel?: boolean } = {}): InstallResult {
   const settings = readSettings(settingsPath);
   const result: InstallResult = { installed: [], skipped: [] };
 
@@ -88,6 +92,7 @@ export function installHooks(settingsPath: string): InstallResult {
     ['SessionStart', RECALL_COMMAND, undefined],
     ['SessionEnd', DISTILL_COMMAND, DISTILL_TIMEOUT_S],
   ];
+  if (opts.autoModel) wanted.push(['UserPromptSubmit', NOVELTY_COMMAND, undefined]);
   let patched = false;
   for (const [event, command, timeout] of wanted) {
     const matchers = (settings.hooks[event] = settings.hooks[event] ?? []);
@@ -142,10 +147,15 @@ export function uninstallHooks(settingsPath: string): string[] {
   return removed;
 }
 
-export function hooksInstalled(settingsPath: string): { sessionStart: boolean; sessionEnd: boolean } {
+export function hooksInstalled(settingsPath: string): {
+  sessionStart: boolean;
+  sessionEnd: boolean;
+  userPromptSubmit: boolean;
+} {
   const settings = readSettings(settingsPath);
   return {
     sessionStart: hasMarkerHook(settings.hooks?.SessionStart),
     sessionEnd: hasMarkerHook(settings.hooks?.SessionEnd),
+    userPromptSubmit: hasMarkerHook(settings.hooks?.UserPromptSubmit),
   };
 }

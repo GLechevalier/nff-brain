@@ -6,6 +6,7 @@ import { cmdExpand, cmdIngestGraphify } from './commands/ingestGraphify.js';
 import { cmdInit } from './commands/init.js';
 import { cmdMerge } from './commands/merge.js';
 import { cmdAdd, cmdEdit, cmdList, cmdRm, cmdShow } from './commands/nodes.js';
+import { cmdNovelty } from './commands/novelty.js';
 import { cmdRecall } from './commands/recall.js';
 import { cmdSearch } from './commands/search.js';
 import { cmdUpgrade } from './commands/upgrade.js';
@@ -17,7 +18,9 @@ usage: nff-brain <command> [options]
 
 setup
   init [--hooks] [--global]        create the brain; ingest CLAUDE.md/AGENTS.md via claude -p
-  install-hooks [--global]         wire SessionStart recall + SessionEnd distill into .claude/settings.json
+  install-hooks [--global] [--auto-model]
+                                   wire SessionStart recall + SessionEnd distill into .claude/settings.json;
+                                   --auto-model also wires UserPromptSubmit novelty scoring (model switching)
   uninstall-hooks [--global]       remove exactly the nff-brain hook entries
   doctor                           check claude CLI, brain files, locks, hooks
   upgrade                          npm install -g nff-brain@latest
@@ -26,6 +29,9 @@ setup
 session loop (normally run by the hooks)
   recall [--query q] [--stdin-hook]      print the recalled preamble (LLM-free, fail-open)
   distill [--transcript p] [--stdin-hook] distill a session transcript into nodes (one claude -p call)
+  novelty [--query q] [--json] [--stdin-hook]
+                                   score how novel a task is vs the brain → suggested session model
+                                   (weak/uncovered nodes → frontier model, strong nodes → cheap model)
 
 graph
   list                             all nodes (merged project + global view)
@@ -51,6 +57,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   init: cmdInit,
   recall: cmdRecall,
   distill: cmdDistill,
+  novelty: cmdNovelty,
   'install-hooks': cmdInstallHooks,
   'uninstall-hooks': cmdUninstallHooks,
   list: () => cmdList(),

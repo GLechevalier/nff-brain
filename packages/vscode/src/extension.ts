@@ -175,6 +175,83 @@ async function handleMessage(msg: WebToExt, webview: vscode.Webview): Promise<vo
   }
 }
 
+// ── auto-model: type /model into the Claude terminal on novelty requests ─────
+// Hooks cannot change a Claude Code session's model; the interactive /model
+// command is the only mid-session lever. The nff-brain hooks score novelty and
+// write .nff-brain/model-request.json — when nffBrain.autoModel is enabled we
+// find the Claude terminal and type the command for the user. Best-effort by
+// design: a missed request just leaves the session on its current model.
+
+const MODEL_REQUEST_MAX_AGE_MS = 20_000; // older = leftover from a previous session
+let lastHandledModelRequest = '';
+
+interface ModelRequestShape {
+  model?: string;
+  novelty?: number;
+  ts?: string;
+  cwd?: string;
+  sessionId?: string;
+}
+
+function findClaudeTerminal(cwd: string | undefined): vscode.Terminal | undefined {
+  const terminals = vscode.window.terminals;
+  const byName = terminals.find((t) => /claude/i.test(t.name));
+  if (byName) return byName;
+  if (cwd) {
+    const target = path.resolve(cwd);
+    const byCwd = terminals.find((t) => {
+      const c = (t.creationOptions as vscode.TerminalOptions).cwd;
+      const p = typeof c === 'string' ? c : c?.fsPath;
+      return p !== undefined && path.resolve(p) === target;
+    });
+    if (byCwd) return byCwd;
+  }
+  return vscode.window.activeTerminal;
+}
+
+function handleModelRequest(uri: vscode.Uri): void {
+  try {
+    const config = vscode.workspace.getConfiguration('nffBrain');
+    if (!config.get<boolean>('autoModel')) return;
+
+    let req: ModelRequestShape;
+    try {
+      req = JSON.parse(fs.readFileSync(uri.fsPath, 'utf8')) as ModelRequestShape;
+    } catch {
+      return; // half-written or gone — the watcher will fire again on rewrite
+    }
+    if (!req.model || !req.ts) return;
+
+    const key = `${req.sessionId ?? ''}|${req.model}|${req.ts}`;
+    if (key === lastHandledModelRequest) return;
+    const age = Date.now() - Date.parse(req.ts);
+    if (!Number.isFinite(age) || age < 0 || age > MODEL_REQUEST_MAX_AGE_MS) {
+      logLine(`auto-model: ignoring stale request (ts=${req.ts})`);
+      return;
+    }
+    // Multi-window safety: only act on requests for THIS workspace.
+    if (req.cwd && path.resolve(req.cwd) !== path.resolve(paths.workspaceRoot)) return;
+
+    const terminal = findClaudeTerminal(req.cwd);
+    if (!terminal) {
+      logLine(`auto-model: no terminal to type /model ${req.model} into`);
+      return;
+    }
+    lastHandledModelRequest = key;
+    // Text and Enter sent separately — bracketed paste can swallow a trailing
+    // newline inside the Claude TUI's input box.
+    terminal.sendText(`/model ${req.model}`, false);
+    setTimeout(() => terminal.sendText('', true), 150);
+    logLine(`auto-model: sent /model ${req.model} (novelty=${req.novelty ?? '?'}) to terminal "${terminal.name}"`);
+    if (config.get<boolean>('autoModelNotify')) {
+      const nov = typeof req.novelty === 'number' ? ` (novelty ${req.novelty.toFixed(2)})` : '';
+      vscode.window.setStatusBarMessage(`$(type-hierarchy-sub) nff-brain: /model ${req.model}${nov}`, 5_000);
+    }
+  } catch (err) {
+    logLine(`auto-model FAILED: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+  }
+}
+
 function nonce(): string {
   return Array.from({ length: 24 }, () => Math.floor(Math.random() * 36).toString(36)).join('');
 }
@@ -314,6 +391,12 @@ export function activate(context: vscode.ExtensionContext): void {
   watcher.onDidCreate(onDiskChange);
   watcher.onDidDelete(onDiskChange);
   context.subscriptions.push(watcher);
+
+  // Auto-model requests from the hooks (session-start baseline + per-prompt).
+  const modelWatcher = vscode.workspace.createFileSystemWatcher('**/.nff-brain/model-request.json');
+  modelWatcher.onDidCreate(handleModelRequest);
+  modelWatcher.onDidChange(handleModelRequest);
+  context.subscriptions.push(modelWatcher);
   try {
     const globalDir = path.dirname(paths.global);
     if (fs.existsSync(globalDir)) {

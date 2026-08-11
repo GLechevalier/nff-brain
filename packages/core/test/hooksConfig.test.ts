@@ -87,7 +87,11 @@ describe('hooksConfig', () => {
     expect(s.hooks.SessionStart).toHaveLength(1);
     expect(s.hooks.SessionStart[0].hooks[0].command).toBe('echo keep-me');
     expect(s.hooks.SessionEnd).toBeUndefined();
-    expect(hooksInstalled(settingsPath)).toEqual({ sessionStart: false, sessionEnd: false });
+    expect(hooksInstalled(settingsPath)).toEqual({
+      sessionStart: false,
+      sessionEnd: false,
+      userPromptSubmit: false,
+    });
   });
 
   it('refuses to touch malformed settings JSON', () => {

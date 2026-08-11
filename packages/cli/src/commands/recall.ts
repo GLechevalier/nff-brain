@@ -7,8 +7,10 @@ import {
   mutateBrain,
   recallBrain,
   resolveBrainPaths,
+  scoreNovelty,
+  writeModelRequest,
 } from '@nff-brain/core';
-import { flagStr, logToBrainDir, parseArgs, parseHookPayload, readStdin } from '../util.js';
+import { flagStr, logToBrainDir, parseArgs, parseHookPayload, readStdin, type HookPayload } from '../util.js';
 
 // SessionStart hook: print the recalled preamble to stdout (Claude Code adds
 // hook stdout to the session context). HARD FAIL-OPEN — this must never break
@@ -22,8 +24,9 @@ export async function cmdRecall(argv: string[]): Promise<void> {
 
   let cwd = process.cwd();
   try {
+    let payload: HookPayload = {};
     if (isHook) {
-      const payload = parseHookPayload(await readStdin());
+      payload = parseHookPayload(await readStdin());
       if (payload.cwd) cwd = payload.cwd;
     }
     const paths = resolveBrainPaths(cwd);
@@ -41,7 +44,6 @@ export async function cmdRecall(argv: string[]): Promise<void> {
       logToBrainDir(paths.project, 'last-recall.log', `global brain unreadable: ${String(err)}`);
     }
     const merged = mergeBrains(project, global);
-    if (merged.nodes.length === 0) return;
 
     // SessionStart carries no task text — proxy with the workspace name plus
     // recent commit subjects. Moot for small graphs (whole-graph bypass).
@@ -58,6 +60,30 @@ export async function cmdRecall(argv: string[]): Promise<void> {
         /* not a git repo — folder name alone */
       }
     }
+
+    // Session baseline for auto-model: score novelty (an EMPTY brain is max
+    // novelty, so this runs before the empty-graph return) and drop the
+    // request file. Advisory — only the VS Code extension acts on it, and only
+    // when nffBrain.autoModel is enabled.
+    if (isHook) {
+      try {
+        const nov = scoreNovelty(merged, query);
+        writeModelRequest(paths.project, {
+          version: 1,
+          sessionId: payload.session_id,
+          cwd: paths.workspaceRoot,
+          model: nov.model,
+          novelty: nov.novelty,
+          ts: new Date().toISOString(),
+          source: 'session-start',
+          top: nov.top,
+        });
+      } catch (err) {
+        logToBrainDir(paths.project, 'last-recall.log', `model request failed: ${String(err)}`);
+      }
+    }
+
+    if (merged.nodes.length === 0) return;
 
     const result = recallBrain(merged, query);
     if (!result.preamble) return;
