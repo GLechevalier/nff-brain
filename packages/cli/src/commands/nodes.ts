@@ -21,7 +21,7 @@ function targetPath(args: Args): string {
   return args.flags.global === true ? paths.global : paths.project;
 }
 
-function loadMerged() {
+export function loadMerged() {
   const paths = resolveBrainPaths(process.cwd());
   const project = (() => {
     try {

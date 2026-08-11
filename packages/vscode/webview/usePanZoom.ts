@@ -36,6 +36,7 @@ export interface PanZoom {
   movedRef: React.MutableRefObject<boolean>;
   startPan: (e: React.PointerEvent) => void;
   resetView: () => void;
+  centerOn: (x: number, y: number, targetScale?: number) => void;
 }
 
 export function usePanZoom(opts: UsePanZoomOptions = {}): PanZoom {
@@ -188,6 +189,21 @@ export function usePanZoom(opts: UsePanZoomOptions = {}): PanZoom {
 
   const resetView = useCallback(() => fitNow(), [fitNow]);
 
+  // Center the viewport on a board coordinate, zooming in a little if needed.
+  const centerOn = useCallback(
+    (x: number, y: number, targetScale?: number) => {
+      const r = svgRef.current?.getBoundingClientRect();
+      const w = r?.width ?? 800;
+      const h = r?.height ?? 600;
+      const s = Math.min(
+        maxScale,
+        Math.max(minScale, targetScale ?? Math.max(viewRef.current.scale, 0.8)),
+      );
+      setView({ scale: s, tx: w / 2 - x * s, ty: h / 2 - y * s });
+    },
+    [minScale, maxScale],
+  );
+
   // Auto-fit ONCE per fitKey, when the panel actually has a size — rAF covers
   // "visible on load", the ResizeObserver covers "shown later / resized".
   useEffect(() => {
@@ -212,5 +228,5 @@ export function usePanZoom(opts: UsePanZoomOptions = {}): PanZoom {
     };
   }, [fit, fitKey, fitNow]);
 
-  return { view, panning, svgRef, movedRef, startPan, resetView };
+  return { view, panning, svgRef, movedRef, startPan, resetView, centerOn };
 }

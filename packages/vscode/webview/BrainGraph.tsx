@@ -26,6 +26,7 @@ function edgeStyle(strength: number): { offsets: number[]; width: number; dash?:
 
 export interface BrainGraphHandle {
   resetView: () => void;
+  focusNode: (id: string) => void;
 }
 
 interface BrainGraphProps {
@@ -33,13 +34,15 @@ interface BrainGraphProps {
   edges: ViewEdge[];
   selectedId: string | null;
   hoveredId: string | null;
+  /** Search results: null/undefined = search inactive, everything full opacity. */
+  matchedIds?: ReadonlySet<string> | null;
   onSelect: (id: string) => void;
   onHover: (id: string | null) => void;
   emptyState?: React.ReactNode;
 }
 
 export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function BrainGraph(
-  { nodes, edges, selectedId, hoveredId, onSelect, onHover, emptyState },
+  { nodes, edges, selectedId, hoveredId, matchedIds, onSelect, onHover, emptyState },
   ref,
 ) {
   // The central hub is pinned during spacing so the graph keeps its anchor.
@@ -79,7 +82,7 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
   // remove / merge), not on every position tweak.
   const fitKey = useMemo(() => nodes.map((n) => n.id).sort().join(','), [nodes]);
 
-  const { view, panning, svgRef, movedRef, startPan, resetView } = usePanZoom({
+  const { view, panning, svgRef, movedRef, startPan, resetView, centerOn } = usePanZoom({
     fit,
     fitKey,
     padding: 56,
@@ -87,7 +90,19 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
     maxScale: 2.5,
   });
 
-  useImperativeHandle(ref, () => ({ resetView }), [resetView]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      resetView,
+      // Center on the SPACED coordinates — raw node.x/y can be off after the
+      // minimum-spacing pass.
+      focusNode: (id: string) => {
+        const p = laidOut[id];
+        if (p) centerOn(p.x, p.y);
+      },
+    }),
+    [resetView, centerOn, laidOut],
+  );
 
   const nodeMap = Object.fromEntries(nodes.map((n) => [n.id, laidOut[n.id]]));
 
@@ -136,8 +151,9 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
           const len = Math.sqrt(dx * dx + dy * dy);
           const px = len > 0 ? -dy / len : 0;
           const py = len > 0 ? dx / len : 0;
+          const dimmed = matchedIds != null && !(matchedIds.has(edge.from) && matchedIds.has(edge.to));
           return (
-            <g key={i}>
+            <g key={i} opacity={dimmed ? 0.15 : 1}>
               {offsets.map((o, j) => (
                 <line
                   key={j}
@@ -158,9 +174,11 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
           if (!p) return null;
           const isSelected = node.id === selectedId;
           const isHovered = node.id === hoveredId && !isSelected;
+          const dimmed = matchedIds != null && !matchedIds.has(node.id);
           return (
             <g
               key={node.id}
+              opacity={dimmed ? 0.2 : 1}
               style={{ cursor: 'pointer' }}
               // Guard against a pan-drag that ends over a node mis-selecting it.
               onClick={() => {

@@ -58,3 +58,34 @@ export function scoreNode(
   const tri = trigramSim(query, `${node.title} ${node.content}`);
   return 0.6 * overlap + 0.4 * tri;
 }
+
+export interface RankedNode<T> {
+  node: T;
+  score: number;
+}
+
+/**
+ * Rank nodes against a free-text query, best first. Hybrid: scoreNode
+ * relevance, with a case-insensitive substring hit floored at 0.5 so queries
+ * below tokenize's 3-char cutoff ("db", "s3") still match as-you-type.
+ */
+export function rankNodes<T extends { title: string; content: string }>(
+  query: string,
+  nodes: T[],
+  opts: { minScore?: number; limit?: number } = {},
+): RankedNode<T>[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const minScore = opts.minScore ?? 0.2;
+  const queryTokens = tokenize(q);
+  const ranked: RankedNode<T>[] = [];
+  for (const node of nodes) {
+    let score = scoreNode(q, node, queryTokens);
+    if (score < 0.5 && `${node.title} ${node.content}`.toLowerCase().includes(q)) {
+      score = 0.5;
+    }
+    if (score >= minScore) ranked.push({ node, score });
+  }
+  ranked.sort((a, b) => b.score - a.score);
+  return opts.limit ? ranked.slice(0, opts.limit) : ranked;
+}

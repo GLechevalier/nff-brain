@@ -1,5 +1,8 @@
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+// Subpath import on purpose: the core barrel pulls node:fs/node:child_process
+// and would break the browser (webview) bundle. score.ts is dependency-free.
+import { rankNodes } from '@nff-brain/core/score';
 import type { ExtToWeb, ViewEdge, ViewNode, WebToExt } from '../src/protocol';
 import { BrainGraph, type BrainGraphHandle } from './BrainGraph';
 
@@ -42,6 +45,7 @@ export function App() {
   const [projectName, setProjectName] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
   const [splitPct, setSplitPct] = useState(62);
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -104,6 +108,26 @@ export function App() {
 
   const selectedNode = nodes.find((n) => n.id === selectedId) ?? null;
   const nodeMap = useMemo(() => Object.fromEntries(nodes.map((n) => [n.id, n])), [nodes]);
+
+  // ── node search ─────────────────────────────────────────────────────────────
+  const matches = useMemo(() => rankNodes(query, nodes).map((r) => r.node), [nodes, query]);
+  const matchedIds = useMemo(
+    () => (query.trim() ? new Set(matches.map((n) => n.id)) : null),
+    [matches, query],
+  );
+
+  function onSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Escape') {
+      setQuery('');
+      e.currentTarget.blur();
+      return;
+    }
+    if (e.key !== 'Enter' || matches.length === 0) return;
+    const i = matches.findIndex((n) => n.id === selectedId);
+    const next = matches[(i + 1) % matches.length];
+    setSelectedId(next.id);
+    graphRef.current?.focusNode(next.id);
+  }
   const selectedEdges = useMemo(
     () => (selectedId ? edges.filter((e) => e.from === selectedId || e.to === selectedId) : []),
     [edges, selectedId],
@@ -116,6 +140,7 @@ export function App() {
       edges={edges}
       selectedId={selectedId}
       hoveredId={hoveredId}
+      matchedIds={matchedIds}
       onSelect={setSelectedId}
       onHover={setHoveredId}
       emptyState={
@@ -149,6 +174,20 @@ export function App() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         {notice && <span style={{ fontSize: 11, color: 'var(--nb-muted)' }}>{notice}</span>}
         {!narrow && <span style={{ fontSize: 10, color: 'var(--nb-muted)' }}>grab to pan · scroll to zoom</span>}
+        <input
+          className="nb-input"
+          placeholder="search…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={onSearchKeyDown}
+          title="Search nodes — Enter jumps to (and cycles through) matches, Esc clears"
+          style={{ width: 140, fontSize: 11, padding: '3px 6px' }}
+        />
+        {query.trim() && (
+          <span style={{ fontSize: 10, color: 'var(--nb-muted)' }}>
+            {matches.length} hit{matches.length === 1 ? '' : 's'}
+          </span>
+        )}
         <button className="nb-btn" onClick={() => graphRef.current?.resetView()} title="Fit the whole graph to the panel">
           ⤢ Fit
         </button>
