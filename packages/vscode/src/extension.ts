@@ -3,20 +3,19 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import {
   asCategory,
-  clampStrength,
+  CATEGORIES,
   foldLeastUsed,
   loadBrain,
   mergeBrains,
   mutateBrain,
   placeNode,
-  removeNode,
   resolveBrainPaths,
   slug,
-  upsertEdge,
   upsertNode,
   type BrainFile,
   type BrainPaths,
 } from '@nff-brain/core';
+import { BrainFs, BrainLinkProvider, nodeUri, SCHEME } from './brainFs';
 import type { ExtToWeb, NodeSource, ViewEdge, ViewNode, WebToExt } from './protocol';
 
 // The extension host is the SOLE filesystem authority: every mutation goes
@@ -27,6 +26,7 @@ import type { ExtToWeb, NodeSource, ViewEdge, ViewNode, WebToExt } from './proto
 let channelViews: Set<vscode.Webview>;
 let paths: BrainPaths;
 let out: vscode.OutputChannel;
+let brainFs: BrainFs;
 
 function logLine(msg: string): void {
   out?.appendLine(`[${new Date().toISOString()}] ${msg}`);
@@ -86,15 +86,13 @@ function fileFor(source: NodeSource): string {
   return source === 'project' ? paths.project : paths.global;
 }
 
-/** The file that actually persists this edge (project first, then global). */
-function edgeFile(from: string, to: string): string | null {
-  for (const p of [paths.project, paths.global]) {
-    const b = loadSafe(p);
-    if (b?.edges.some((e) => (e.from === from && e.to === to) || (e.from === to && e.to === from))) {
-      return p;
-    }
-  }
-  return null;
+/** Open a node as its native markdown editor, in the column beside the graph. */
+async function openNodeDoc(source: NodeSource, id: string, opts?: { focus?: boolean }): Promise<void> {
+  await vscode.window.showTextDocument(nodeUri(source, id), {
+    viewColumn: vscode.ViewColumn.Beside,
+    preview: true,
+    preserveFocus: !opts?.focus,
+  });
 }
 
 async function handleMessage(msg: WebToExt, webview: vscode.Webview): Promise<void> {
@@ -105,106 +103,46 @@ async function handleMessage(msg: WebToExt, webview: vscode.Webview): Promise<vo
         broadcastGraph();
         return;
 
-      case 'createNode': {
-        const id = slug(msg.title);
-        if (!id) {
-          post(webview, { type: 'notice', text: 'Title produced an empty id — pick a different title.' });
-          return;
-        }
+      case 'openNode': {
+        const source = graph.sourceById.get(msg.id);
+        if (!source) return;
+        await openNodeDoc(source, msg.id);
+        return; // read-only action — no graph rebroadcast needed
+      }
+
+      case 'createNodeRequest': {
+        const title = await vscode.window.showInputBox({
+          prompt: 'Title for the new brain node',
+          placeHolder: 'e.g. Docker restart procedure',
+          validateInput: (v) => (slug(v) ? null : 'Title must contain at least one letter or digit'),
+        });
+        if (!title) return;
+        const id = slug(title);
         if (graph.sourceById.has(id)) {
           post(webview, { type: 'notice', text: `A node "${id}" already exists.` });
           return;
         }
-        const target = vscode.workspace.workspaceFolders?.length ? paths.project : paths.global;
-        mutateBrain(target, (brain) => {
-          const category = asCategory(msg.category);
+        const pick = await vscode.window.showQuickPick([...CATEGORIES], {
+          placeHolder: 'Category',
+        });
+        if (!pick) return;
+        const source: NodeSource = vscode.workspace.workspaceFolders?.length ? 'project' : 'global';
+        mutateBrain(fileFor(source), (brain) => {
+          const category = asCategory(pick);
           upsertNode(brain, {
             id,
-            title: msg.title.slice(0, 80),
+            title: title.slice(0, 80),
             category,
-            content: msg.content.slice(0, 1200),
+            content: 'Write the knowledge here — "When X, do Y because Z".',
             ...placeNode(category),
             origin: 'seed', // hand-authored knowledge is curated
             lastUpdated: new Date().toISOString(),
             recallCount: 0,
           });
         });
-        post(webview, { type: 'notice', text: `Added ${id}` });
-        break;
-      }
-
-      case 'editNode': {
-        const source = graph.sourceById.get(msg.id);
-        if (!source) return;
-        mutateBrain(fileFor(source), (brain) => {
-          const node = brain.nodes.find((n) => n.id === msg.id);
-          if (!node) return;
-          node.title = msg.title.slice(0, 80);
-          node.category = asCategory(msg.category);
-          node.content = msg.content.slice(0, 1200);
-          node.lastUpdated = new Date().toISOString();
-        });
-        break;
-      }
-
-      case 'deleteNode': {
-        const source = graph.sourceById.get(msg.id);
-        if (!source) return;
-        const node = graph.nodes.find((n) => n.id === msg.id);
-        const pick = await vscode.window.showWarningMessage(
-          `Delete brain node "${node?.title ?? msg.id}" and its links?`,
-          { modal: true },
-          'Delete',
-        );
-        if (pick !== 'Delete') return;
-        mutateBrain(fileFor(source), (brain) => removeNode(brain, msg.id));
-        post(webview, { type: 'notice', text: `Deleted ${msg.id}` });
-        break;
-      }
-
-      case 'addEdgeRequest': {
-        const from = graph.nodes.find((n) => n.id === msg.from);
-        if (!from) return;
-        // Endpoints must live in the same file to persist the edge.
-        const candidates = graph.nodes.filter(
-          (n) => n.id !== msg.from && n.source === from.source && !from.relatedIds.includes(n.id),
-        );
-        if (candidates.length === 0) {
-          post(webview, { type: 'notice', text: 'No unlinked nodes available in the same brain file.' });
-          return;
-        }
-        const pick = await vscode.window.showQuickPick(
-          candidates.map((n) => ({ label: n.title, description: n.id })),
-          { placeHolder: `Link "${from.title}" to…` },
-        );
-        if (!pick?.description) return;
-        mutateBrain(fileFor(from.source), (brain) =>
-          upsertEdge(brain, { from: msg.from, to: pick.description!, strength: 0.6 }),
-        );
-        break;
-      }
-
-      case 'removeEdge': {
-        const file = edgeFile(msg.from, msg.to);
-        if (!file) return;
-        mutateBrain(file, (brain) => {
-          brain.edges = brain.edges.filter(
-            (e) => !((e.from === msg.from && e.to === msg.to) || (e.from === msg.to && e.to === msg.from)),
-          );
-        });
-        break;
-      }
-
-      case 'reinforce': {
-        const file = edgeFile(msg.from, msg.to);
-        if (!file) return;
-        mutateBrain(file, (brain) => {
-          const edge = brain.edges.find(
-            (e) => (e.from === msg.from && e.to === msg.to) || (e.from === msg.to && e.to === msg.from),
-          );
-          if (edge) edge.strength = clampStrength(edge.strength + msg.delta);
-        });
-        break;
+        broadcastGraph();
+        await openNodeDoc(source, id, { focus: true }); // straight into editing
+        return;
       }
 
       case 'merge': {
@@ -277,6 +215,13 @@ export function activate(context: vscode.ExtensionContext): void {
   paths = resolveBrainPaths(cwd);
   logLine(`activated — workspace=${cwd} project=${paths.project} global=${paths.global}`);
 
+  // Node documents: nffbrain:/<source>/<id>.md served straight from brain.json.
+  brainFs = new BrainFs(paths, () => broadcastGraph());
+  context.subscriptions.push(
+    vscode.workspace.registerFileSystemProvider(SCHEME, brainFs, { isCaseSensitive: true }),
+    vscode.languages.registerDocumentLinkProvider({ scheme: SCHEME }, new BrainLinkProvider()),
+  );
+
   let panel: vscode.WebviewPanel | null = null;
 
   context.subscriptions.push(
@@ -308,6 +253,23 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.commands.registerCommand('nffBrain.refresh', () => broadcastGraph()),
+    // Deleting a node = deleting its document; also reachable via this command.
+    vscode.commands.registerCommand('nffBrain.deleteNode', async () => {
+      const graph = loadGraph();
+      if (graph.nodes.length === 0) return;
+      const pick = await vscode.window.showQuickPick(
+        graph.nodes.map((n) => ({ label: n.title, description: n.id, source: n.source })),
+        { placeHolder: 'Delete which brain node?' },
+      );
+      if (!pick?.description) return;
+      const confirm = await vscode.window.showWarningMessage(
+        `Delete brain node "${pick.label}" and its links?`,
+        { modal: true },
+        'Delete',
+      );
+      if (confirm !== 'Delete') return;
+      brainFs.delete(nodeUri(pick.source, pick.description));
+    }),
   );
 
   // Activity-bar LAUNCHER: the nav-bar icon never renders the graph in the
@@ -344,6 +306,7 @@ export function activate(context: vscode.ExtensionContext): void {
     debounce = setTimeout(() => {
       refreshStatus();
       broadcastGraph();
+      brainFs.notifyBrainChanged(); // open node docs reload from the new truth
     }, 150);
   };
   const watcher = vscode.workspace.createFileSystemWatcher('**/.nff-brain/brain.json');

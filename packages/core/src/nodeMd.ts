@@ -1,0 +1,119 @@
+// Node ⇄ Markdown round-trip. A brain node renders as a real .md document
+// (the VS Code extension serves these through a virtual filesystem, so a node
+// opens as a native editor tab), and saving the document writes back: title
+// from the `# ` heading, category from the meta blockquote, body from the
+// text between them and `## Links`, and the node's edges from the links list.
+// Dependency-free (no node:fs) — safe for any bundle.
+
+import { asCategory, clampStrength, type BrainNode, type Category } from './types.js';
+
+export interface MdLink {
+  id: string;
+  strength: number;
+  title?: string; // display only — never parsed back
+}
+
+export interface ParsedNodeMd {
+  title: string;
+  category: Category;
+  content: string;
+  links: MdLink[];
+}
+
+const LINKS_HEADING = /^##\s+links\b/i;
+const LINK_LINE = /\[\[([^\]\s]+)\]\](?:[^0-9]*([0-9]*\.?[0-9]+))?/;
+
+export function serializeNodeMd(
+  node: BrainNode,
+  links: MdLink[],
+  extra?: { source?: 'project' | 'global' },
+): string {
+  const meta = [
+    `category: ${node.category}`,
+    node.origin === 'seed' ? 'curated' : 'learned',
+    `recalled ${node.recallCount ?? 0}×`,
+    `updated ${node.lastUpdated}`,
+    ...(extra?.source ? [`source ${extra.source}`] : []),
+  ].join(' · ');
+
+  const linkLines = links.length
+    ? links
+        .map((l) => `- [[${l.id}]] — ${l.strength.toFixed(2)}${l.title ? ` (${l.title})` : ''}`)
+        .join('\n')
+    : `<!-- no links yet — add lines like: - [[node-id]] — 0.6 -->`;
+
+  return [
+    `# ${node.title}`,
+    ``,
+    `> ${meta}`,
+    `> _Edit title, category, body or links, then save — changes write back to the brain._`,
+    ``,
+    node.content.trim(),
+    ``,
+    `## Links`,
+    ``,
+    linkLines,
+    ``,
+  ].join('\n');
+}
+
+export function parseNodeMd(text: string): ParsedNodeMd {
+  const lines = (text ?? '').split(/\r?\n/);
+
+  let title = '';
+  let category: Category = 'strategy';
+  let sawCategory = false;
+  const contentLines: string[] = [];
+  const links: MdLink[] = [];
+
+  let inLinks = false;
+  let pastTitle = false;
+
+  for (const line of lines) {
+    if (!pastTitle) {
+      const m = line.match(/^#\s+(.+)$/);
+      if (m) {
+        title = m[1].trim().slice(0, 80);
+        pastTitle = true;
+      }
+      continue; // anything before the first heading is ignored
+    }
+    if (LINKS_HEADING.test(line)) {
+      inLinks = true;
+      continue;
+    }
+    if (inLinks) {
+      if (line.trimStart().startsWith('<!--')) continue; // placeholder/hint comments
+      const m = line.match(LINK_LINE);
+      if (m) {
+        const strength = m[2] !== undefined ? Number(m[2]) : 0.6;
+        links.push({
+          id: m[1].trim(),
+          strength: clampStrength(Number.isFinite(strength) ? strength : 0.6),
+        });
+      }
+      continue;
+    }
+    if (line.trimStart().startsWith('>')) {
+      // Meta blockquote: category is the one editable field in it.
+      const m = line.match(/category:\s*(core|analysis|rules|strategy)/i);
+      if (m && !sawCategory) {
+        category = asCategory(m[1].toLowerCase());
+        sawCategory = true;
+      }
+      continue;
+    }
+    contentLines.push(line);
+  }
+
+  // Dedup links by id (first occurrence wins).
+  const seen = new Set<string>();
+  const uniqueLinks = links.filter((l) => (seen.has(l.id) ? false : (seen.add(l.id), true)));
+
+  return {
+    title,
+    category,
+    content: contentLines.join('\n').trim().slice(0, 1200),
+    links: uniqueLinks,
+  };
+}

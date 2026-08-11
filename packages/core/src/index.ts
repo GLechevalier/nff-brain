@@ -2,6 +2,7 @@ export * from './types.js';
 export * from './paths.js';
 export * from './store.js';
 export * from './score.js';
+export * from './nodeMd.js';
 export * from './recall.js';
 export * from './transcript.js';
 export * from './claude.js';

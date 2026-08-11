@@ -30,13 +30,10 @@ export type ExtToWeb =
   | { type: 'notice'; text: string }
   | { type: 'busy'; on: boolean };
 
-// webview → extension
+// webview → extension. Node reading/editing happens in a NATIVE editor tab
+// (the nffbrain: virtual filesystem) — the webview only asks to open things.
 export type WebToExt =
   | { type: 'ready' }
-  | { type: 'createNode'; title: string; category: ViewNode['category']; content: string }
-  | { type: 'editNode'; id: string; title: string; category: ViewNode['category']; content: string }
-  | { type: 'deleteNode'; id: string }
-  | { type: 'addEdgeRequest'; from: string }
-  | { type: 'removeEdge'; from: string; to: string }
-  | { type: 'reinforce'; from: string; to: string; delta: number }
+  | { type: 'openNode'; id: string }
+  | { type: 'createNodeRequest' }
   | { type: 'merge' };

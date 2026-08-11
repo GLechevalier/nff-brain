@@ -39,6 +39,10 @@
       {
         "command": "nffBrain.refresh",
         "title": "nff-brain: Reload Brain From Disk"
+      },
+      {
+        "command": "nffBrain.deleteNode",
+        "title": "nff-brain: Delete Node…"
       }
     ],
     "viewsContainers": {

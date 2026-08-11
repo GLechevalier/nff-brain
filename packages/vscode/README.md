@@ -4,9 +4,12 @@ Visualize and edit your project's **nff-brain** — the local-first knowledge-gr
 memory that Claude Code recalls at every session start and grows after every
 session.
 
-- Graph on the left (square nodes, pan/zoom, category glyphs ◈ ⊕ ▦ ↑), the
-  selected node's **Memory Document** on the right.
-- Edit, delete, and create nodes; link, unlink, and reinforce connections.
+- Full-width graph (square nodes, pan/zoom, category glyphs ◈ ⊕ ▦ ↑, search).
+- Click a node and it opens as a **real markdown editor tab** beside the graph
+  (`nffbrain:` virtual files). Edit the title, category, body, or the
+  `## Links` list and save — everything writes back into the brain. `[[id]]`
+  references are Ctrl+clickable.
+- Create nodes from the toolbar (＋ Node), delete via `nff-brain: Delete Node…`.
 - Live updates: when a Claude Code session ends and the distiller writes new
   nodes, the open graph refreshes automatically.
 - Fully offline. The brain is a JSON file in your workspace
