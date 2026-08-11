@@ -185,3 +185,131 @@ describe('e2e (mocked claude)', () => {
     expect(empty.stderr).toContain('usage: nff-brain search');
   });
 });
+
+// ── ingest-graphify + expand ─────────────────────────────────────────────────
+
+function writeGraphifyFixture(): void {
+  const dir = path.join(ws, 'graphify-out');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'graph.json'),
+    JSON.stringify({
+      directed: false,
+      multigraph: false,
+      graph: {},
+      nodes: [
+        { id: 'a1', label: 'auth_login', file_type: 'code', source_file: 'repo-a/auth/login.py', community: 0 },
+        { id: 'a2', label: 'auth_logout', file_type: 'code', source_file: 'repo-a/auth/logout.py', community: 0 },
+        { id: 'a3', label: 'session_store', file_type: 'code', source_file: 'repo-a/auth/session.py', community: 0 },
+        { id: 'b1', label: 'db_conn', file_type: 'code', source_file: 'repo-b/db/conn.py', community: 1 },
+        { id: 'b2', label: 'db_query', file_type: 'code', source_file: 'repo-b/db/query.py', community: 1 },
+      ],
+      links: [
+        { source: 'a1', target: 'a3', relation: 'calls', confidence: 'EXTRACTED', confidence_score: 1.0, weight: 1.0 },
+        { source: 'a2', target: 'a3', relation: 'calls', confidence: 'EXTRACTED', confidence_score: 1.0, weight: 1.0 },
+        { source: 'a3', target: 'b1', relation: 'shares_data_with', confidence: 'INFERRED', confidence_score: 0.85, weight: 1.0 },
+        { source: 'b1', target: 'b2', relation: 'calls', confidence: 'EXTRACTED', confidence_score: 1.0, weight: 1.0 },
+      ],
+      hyperedges: [
+        { id: 'h1', label: 'Login Flow', nodes: ['a1', 'a3'], relation: 'form', confidence: 'EXTRACTED', confidence_score: 1.0, source_file: 'repo-a/auth/login.py' },
+      ],
+    }),
+  );
+  fs.writeFileSync(
+    path.join(dir, 'GRAPH_REPORT.md'),
+    ['### Community 0 - "Auth Layer"', 'Cohesion: 0.42', '', '### Community 1 - "Data Layer"', 'Cohesion: 0.31', ''].join('\n'),
+  );
+}
+
+describe('e2e ingest-graphify + expand (mocked claude)', () => {
+  it('imports intent nodes with graphifyRef, idempotently', () => {
+    writeGraphifyFixture();
+    const r = runCli(['ingest-graphify', '--no-llm']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('imported 2 area(s)');
+    const b = brain();
+    const gf = b.nodes.filter((n: any) => n.origin === 'graphify');
+    expect(gf.map((n: any) => n.id).sort()).toEqual([
+      'gf-area-auth-layer',
+      'gf-area-data-layer',
+      'gf-flow-login-flow',
+      'gf-god-session-store',
+    ]);
+    const area = gf.find((n: any) => n.id === 'gf-area-auth-layer');
+    expect(area.graphifyRef).toMatchObject({ kind: 'community', key: 0, graph: 'graphify-out/graph.json' });
+    expect(area.content).toContain('auth_login (repo-a/auth/login.py)');
+
+    // Re-run: wholesale replace, same set, non-graphify nodes untouched.
+    const before = b.nodes.filter((n: any) => n.origin !== 'graphify').length;
+    const r2 = runCli(['ingest-graphify', '--no-llm']);
+    expect(r2.status).toBe(0);
+    expect(r2.stdout).toContain('replaced 4 previous graphify node(s)');
+    const b2 = brain();
+    expect(b2.nodes.filter((n: any) => n.origin === 'graphify')).toHaveLength(4);
+    expect(b2.nodes.filter((n: any) => n.origin !== 'graphify')).toHaveLength(before);
+  });
+
+  it('respects --max-per-repo', () => {
+    const r = runCli(['ingest-graphify', '--no-llm', '--max-per-repo', '1']);
+    expect(r.status).toBe(0);
+    const gf = brain().nodes.filter((n: any) => n.origin === 'graphify');
+    expect(gf).toHaveLength(2); // one per repo
+    expect(gf.every((n: any) => n.id.startsWith('gf-area-'))).toBe(true);
+  });
+
+  it('writes LLM intent via the batched explainer call', () => {
+    const r = runCli(['ingest-graphify']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('LLM intent');
+    const area = brain().nodes.find((n: any) => n.id === 'gf-area-auth-layer');
+    expect(area.content.startsWith('Owns user authentication end to end')).toBe(true);
+    expect(area.content).toContain('↳ graphify community 0'); // mechanical pointer kept
+  });
+
+  it('fails OPEN to mechanical summaries when claude hangs', () => {
+    const t0 = Date.now();
+    const r = runCli(['ingest-graphify'], { env: { SHIM_MODE: 'hang' } });
+    expect(r.status).toBe(0);
+    expect(Date.now() - t0).toBeLessThan(25_000);
+    expect(r.stdout).toContain('mechanical summaries');
+    expect(brain().nodes.filter((n: any) => n.origin === 'graphify')).toHaveLength(4);
+  });
+
+  it('expand lists the underlying code entities from graph.json', () => {
+    const r = runCli(['expand', 'gf-flow-login-flow']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('auth_login — repo-a/auth/login.py (code)');
+    expect(r.stdout).toContain('session_store — repo-a/auth/session.py (code)');
+    expect(r.stdout).toContain('auth_login -calls-> session_store');
+  });
+
+  it('recall surfaces codebase-map nodes with the expand hint', () => {
+    const r = runCli(['recall', '--query', 'authentication login sessions']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('(expand: nff-brain expand gf-area-auth-layer)');
+    expect(r.stdout).toContain('codebase-map nodes imported from graphify');
+  });
+
+  it('expand fails cleanly when graph.json is gone', () => {
+    fs.renameSync(path.join(ws, 'graphify-out', 'graph.json'), path.join(ws, 'graphify-out', 'graph.json.bak'));
+    try {
+      const r = runCli(['expand', 'gf-flow-login-flow']);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('re-run /graphify');
+    } finally {
+      fs.renameSync(path.join(ws, 'graphify-out', 'graph.json.bak'), path.join(ws, 'graphify-out', 'graph.json'));
+    }
+  });
+
+  it('ingest-graphify fails cleanly without a graph', () => {
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'nff-brain-e2e-nogfx-'));
+    try {
+      fs.mkdirSync(path.join(other, '.git'));
+      const r = runCli(['ingest-graphify'], { cwd: other });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('run /graphify first');
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+});

@@ -10,6 +10,7 @@ export interface Args {
 
 const VALUE_FLAGS = new Set([
   'query', 'transcript', 'session', 'title', 'category', 'content', 'id', 'strength', 'delta', 'ratio', 'model', 'limit',
+  'dir', 'max-per-repo',
 ]);
 
 export function parseArgs(argv: string[]): Args {

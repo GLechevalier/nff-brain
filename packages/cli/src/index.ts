@@ -2,6 +2,7 @@ import { cmdDistill } from './commands/distill.js';
 import { cmdDoctor } from './commands/doctor.js';
 import { cmdLink, cmdReinforce, cmdUnlink } from './commands/edges.js';
 import { cmdInstallHooks, cmdUninstallHooks } from './commands/hooks.js';
+import { cmdExpand, cmdIngestGraphify } from './commands/ingestGraphify.js';
 import { cmdInit } from './commands/init.js';
 import { cmdMerge } from './commands/merge.js';
 import { cmdAdd, cmdEdit, cmdList, cmdRm, cmdShow } from './commands/nodes.js';
@@ -38,6 +39,11 @@ graph
   reinforce <a> <b> [--delta 0.1]  strengthen a connection
   merge [--ratio 0.25] [--llm]     fold least-used nodes into neighbours; --llm also dedups
 
+codebase map (graphify bridge)
+  ingest-graphify [--dir graphify-out] [--max-per-repo 10] [--no-llm]
+                                   import a graphify graph as ≤10 intent nodes per repo
+  expand <id>                      list a codebase-map node's underlying code entities
+
 Writes target <workspace>/.nff-brain/brain.json; add --global for ~/.nff-brain/brain.json.
 `;
 
@@ -57,6 +63,8 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   unlink: cmdUnlink,
   reinforce: cmdReinforce,
   merge: cmdMerge,
+  'ingest-graphify': cmdIngestGraphify,
+  expand: cmdExpand,
   doctor: () => cmdDoctor(),
   upgrade: () => cmdUpgrade(),
 };

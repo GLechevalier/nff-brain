@@ -30,7 +30,7 @@ export function serializeNodeMd(
 ): string {
   const meta = [
     `category: ${node.category}`,
-    node.origin === 'seed' ? 'curated' : 'learned',
+    node.origin === 'seed' ? 'curated' : node.origin === 'graphify' ? 'codebase map' : 'learned',
     `recalled ${node.recallCount ?? 0}×`,
     `updated ${node.lastUpdated}`,
     ...(extra?.source ? [`source ${extra.source}`] : []),

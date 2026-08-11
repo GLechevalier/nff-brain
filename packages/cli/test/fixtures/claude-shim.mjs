@@ -34,6 +34,16 @@ process.stdin.on('end', () => {
         edges: [{ from: 'login-cookie-fix', to: 'build-rules', strength: 0.6 }],
       }),
     );
+  } else if (prompt.includes('graph explainer')) {
+    // ingest-graphify: batched intent explanations keyed by brain node id
+    process.stdout.write(
+      JSON.stringify({
+        explanations: {
+          'gf-area-auth-layer': 'Owns user authentication end to end; exists so session logic lives in one place.',
+          'gf-flow-login-flow': 'The path a login request takes from endpoint to session storage.',
+        },
+      }),
+    );
   } else {
     process.stdout.write('{"nodes":[],"edges":[]}');
   }

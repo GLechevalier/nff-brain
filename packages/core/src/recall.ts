@@ -46,8 +46,16 @@ function renderPreamble(included: BrainNode[], edges: BrainEdge[], maxContentCha
   const lines = included.map((n) => {
     const related = [...(relatedTitles.get(n.id) ?? [])];
     const rel = related.length ? `\n  ↳ related: ${related.join(', ')}` : '';
-    return `- [${n.category}] ${n.title}: ${trim(n.content, maxContentChars)}${rel}`;
+    // Codebase-map nodes advertise their drill-down so agents know the next hop.
+    const expand = n.origin === 'graphify' ? ` (expand: nff-brain expand ${n.id})` : '';
+    return `- [${n.category}] ${n.title}${expand}: ${trim(n.content, maxContentChars)}${rel}`;
   });
+
+  const hasGraphify = included.some((n) => n.origin === 'graphify');
+  const footer = hasGraphify
+    ? `\nEntries marked "expand" are codebase-map nodes imported from graphify — run the ` +
+      `command to list the underlying code entities and their files.\n`
+    : '';
 
   return (
     `## Your learned skills & playbooks (recalled from this project's brain)\n` +
@@ -55,7 +63,7 @@ function renderPreamble(included: BrainNode[], edges: BrainEdge[], maxContentCha
     `Apply the relevant ones as processes/checklists for the task below. If the task ` +
     `teaches something new, refines one of these, or one proves wrong, that will be ` +
     `captured automatically after the run — you do not need to record it yourself.\n\n` +
-    `${lines.join('\n')}\n\n---\n`
+    `${lines.join('\n')}\n${footer}\n---\n`
   );
 }
 

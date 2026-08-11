@@ -11,7 +11,7 @@ export interface ViewNode {
   x: number;
   y: number;
   size: number;
-  origin: 'seed' | 'agent';
+  origin: 'seed' | 'agent' | 'graphify';
   lastUpdated: string;
   recallCount: number;
   source: NodeSource;

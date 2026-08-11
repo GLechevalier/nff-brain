@@ -120,6 +120,20 @@ describe('pruneBrain', () => {
     expect(evicted).toBe(1);
     expect(brain.nodes.map((n) => n.id).sort()).toEqual(['hot', 'seed', 'warm']);
   });
+
+  it('graphify nodes are never victims and do not count toward the budget', () => {
+    const brain = emptyBrain();
+    // 3 graphify + 3 agent nodes with a cap of 3: the graphify nodes neither
+    // trigger eviction (countable = 3) nor get evicted themselves.
+    for (let i = 0; i < 3; i++) upsertNode(brain, node(`map${i}`, { origin: 'graphify', recallCount: 0 }));
+    for (let i = 0; i < 3; i++) upsertNode(brain, node(`n${i}`, { recallCount: i }));
+    expect(pruneBrain(brain, 3)).toBe(0);
+    // One agent node over the cap: exactly one agent node goes, graphify stays.
+    upsertNode(brain, node('n3', { recallCount: 9 }));
+    expect(pruneBrain(brain, 3)).toBe(1);
+    expect(brain.nodes.filter((n) => n.origin === 'graphify')).toHaveLength(3);
+    expect(brain.nodes.some((n) => n.id === 'n0')).toBe(false); // coldest agent evicted
+  });
 });
 
 describe('buildDistillPrompt', () => {

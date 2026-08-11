@@ -14,6 +14,15 @@ export const COLOR_BY_CATEGORY: Record<Category, string> = {
   rules: '#4ade80',
 };
 
+// First-class link from an imported codebase-map node down into the graphify
+// knowledge graph it summarizes (graphify-out/graph.json).
+export interface GraphifyRef {
+  graph: string; // path to graph.json, relative to the workspace root
+  kind: 'community' | 'node' | 'hyperedge';
+  key: string | number; // community int, or graphify node/hyperedge id
+  children: string[]; // graphify node ids this brain node summarizes
+}
+
 export interface BrainNode {
   id: string; // kebab slug, ≤ 60 chars
   title: string; // ≤ 80 chars
@@ -23,11 +32,14 @@ export interface BrainNode {
   x: number;
   y: number;
   size: number;
-  origin: 'seed' | 'agent'; // seed = init/user-authored (never auto-evicted)
+  // seed = init/user-authored (never auto-evicted)
+  // graphify = imported codebase map (replaced wholesale on re-ingest, never folded)
+  origin: 'seed' | 'agent' | 'graphify';
   sourceSession?: string;
   lastUpdated: string; // ISO
   recallCount: number;
   lastRecalledAt?: string; // ISO
+  graphifyRef?: GraphifyRef;
 }
 
 export interface BrainEdge {

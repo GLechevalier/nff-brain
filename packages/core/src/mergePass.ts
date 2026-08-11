@@ -26,12 +26,15 @@ function pairKey(a: string, b: string): string {
 }
 
 // Decide which node survives a merge. Returns null when the pair must NOT merge
-// (two curated seed nodes). Otherwise [survivor, loser].
+// (two curated seed nodes, or a graphify import). Otherwise [survivor, loser].
 export function chooseSurvivor(
   a: BrainNode,
   b: BrainNode,
   degree: Map<string, number>,
 ): [BrainNode, BrainNode] | null {
+  // graphify nodes are replaced wholesale on re-ingest — anything folded into
+  // (or out of) one would be silently lost, so they never take part in merges.
+  if (a.origin === 'graphify' || b.origin === 'graphify') return null;
   const aSeed = a.origin === 'seed';
   const bSeed = b.origin === 'seed';
   if (aSeed && bSeed) return null; // never fold one curated node into another
@@ -177,7 +180,9 @@ const MIN_KEEP = 8;
  * Returns the number of nodes folded.
  */
 export function foldLeastUsed(brain: BrainFile, fraction = 0.25, now = new Date()): number {
-  const foldable = brain.nodes.filter((n) => n.origin !== 'seed' && n.category !== 'core');
+  const foldable = brain.nodes.filter(
+    (n) => n.origin !== 'seed' && n.origin !== 'graphify' && n.category !== 'core',
+  );
   const budget = Math.min(
     Math.floor(foldable.length * fraction),
     Math.max(0, brain.nodes.length - MIN_KEEP),
@@ -196,7 +201,10 @@ export function foldLeastUsed(brain: BrainFile, fraction = 0.25, now = new Date(
 
   let folded = 0;
   for (const victim of victims) {
-    const keepers = brain.nodes.filter((n) => n.id !== victim.id && !victimIds.has(n.id));
+    // graphify nodes may not absorb folded content either — it would vanish on re-ingest.
+    const keepers = brain.nodes.filter(
+      (n) => n.id !== victim.id && !victimIds.has(n.id) && n.origin !== 'graphify',
+    );
     if (keepers.length === 0) break;
 
     // Survivor choice, three tiers like brain_merge_reduce:

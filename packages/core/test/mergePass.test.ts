@@ -37,6 +37,11 @@ describe('chooseSurvivor', () => {
     expect(s.id).toBe('b');
     expect(l.id).toBe('a');
   });
+  it('never merges when either node is a graphify import', () => {
+    expect(chooseSurvivor(node('a', { origin: 'graphify' }), node('b'), degree)).toBeNull();
+    expect(chooseSurvivor(node('a'), node('b', { origin: 'graphify' }), degree)).toBeNull();
+    expect(chooseSurvivor(node('a', { origin: 'graphify' }), node('b', { origin: 'graphify' }), degree)).toBeNull();
+  });
   it('higher degree wins between agents, id tiebreak', () => {
     const deg = new Map([
       ['a', 1],
@@ -104,5 +109,19 @@ describe('foldLeastUsed', () => {
     const brain = emptyBrain();
     for (let i = 0; i < 5; i++) upsertNode(brain, node(`n${i}`));
     expect(foldLeastUsed(brain, 0.9)).toBe(0);
+  });
+
+  it('graphify nodes are never victims nor absorb folded content', () => {
+    const brain = emptyBrain();
+    // A cold graphify node with a strong edge to a cold agent node: without the
+    // guards it would be the first victim AND the preferred survivor.
+    upsertNode(brain, node('map', { origin: 'graphify', recallCount: 0 }));
+    for (let i = 0; i < 12; i++) upsertNode(brain, node(`n${i}`, { recallCount: i + 1 }));
+    upsertEdge(brain, { from: 'n0', to: 'map', strength: 0.95 });
+    const folded = foldLeastUsed(brain, 0.25);
+    expect(folded).toBeGreaterThan(0);
+    const map = brain.nodes.find((n) => n.id === 'map');
+    expect(map).toBeTruthy(); // never a victim
+    expect(map!.content).toBe('content map'); // never absorbed anything
   });
 });

@@ -165,10 +165,13 @@ export async function distill(brain: BrainFile, p: DistillParams): Promise<Set<s
  * stays bounded. Seeds are never evicted. Returns the number evicted.
  */
 export function pruneBrain(brain: BrainFile, maxTotalNodes: number): number {
-  if (maxTotalNodes <= 0 || brain.nodes.length <= maxTotalNodes) return 0;
-  const excess = brain.nodes.length - maxTotalNodes;
+  // graphify imports don't count toward the budget (they're bounded per repo and
+  // replaced wholesale on re-ingest) and are never eviction victims.
+  const countable = brain.nodes.filter((n) => n.origin !== 'graphify').length;
+  if (maxTotalNodes <= 0 || countable <= maxTotalNodes) return 0;
+  const excess = countable - maxTotalNodes;
   const victims = brain.nodes
-    .filter((n) => n.origin !== 'seed' && n.category !== 'core')
+    .filter((n) => n.origin !== 'seed' && n.origin !== 'graphify' && n.category !== 'core')
     .sort((a, b) => {
       if ((a.recallCount ?? 0) !== (b.recallCount ?? 0)) return (a.recallCount ?? 0) - (b.recallCount ?? 0);
       const at = Date.parse(a.lastRecalledAt ?? a.lastUpdated) || 0;
