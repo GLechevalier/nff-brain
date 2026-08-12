@@ -1,7 +1,7 @@
 import type React from 'react';
-import { forwardRef, useEffect, useImperativeHandle, useMemo } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import type { ViewEdge, ViewNode } from '../src/protocol';
-import { hash, layoutBrain } from './brainSpacing';
+import { buildSpine, hash, layoutBrain, resolveRoot, type SpineNode } from './brainSpacing';
 import { usePanZoom, type FitBox } from './usePanZoom';
 import type { GlowInfo } from './useActivityGlow';
 
@@ -75,15 +75,24 @@ interface BrainGraphProps {
   onHover: (id: string | null) => void;
   /** Positions the layout settled for nodes that arrived without one, for persisting. */
   onLayout?: (positions: Array<{ id: string; x: number; y: number }>) => void;
+  /** Live zoom level, for the header readout. An imperative handle can't do this — it isn't reactive. */
+  onScaleChange?: (scale: number) => void;
   emptyState?: React.ReactNode;
 }
 
 export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function BrainGraph(
-  { nodes, edges, selectedId, hoveredId, matchedIds, glow, onSelect, onHover, onLayout, emptyState },
+  { nodes, edges, selectedId, hoveredId, matchedIds, glow, onSelect, onHover, onLayout, onScaleChange, emptyState },
   ref,
 ) {
-  // The central hub is pinned during spacing so the graph keeps its anchor.
-  const coreId = useMemo(() => nodes.find((n) => n.category === 'core')?.id ?? null, [nodes]);
+  // The root is pinned during spacing so the graph keeps its anchor. Resolved
+  // by resolveRoot rather than `find(category === 'core')`: graphify imports
+  // its "god" nodes as core too, so that find was an array-order lottery that
+  // could pin the whole board to something like test_wokwi.py.
+  const coreId = useMemo(() => resolveRoot(nodes, edges), [nodes, edges]);
+
+  // The navigational spine — derived here, never persisted. It links every
+  // island of the graph to the root through grouping nodes.
+  const spine = useMemo(() => buildSpine(nodes, edges), [nodes, edges]);
 
   // Memoized on the node set AND the edge set — edges drive the layout now, so
   // keying on nodes alone would leave a new connection unrendered until
@@ -98,10 +107,32 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
     [nodes, edges],
   );
   const laidOut = useMemo(
-    () => layoutBrain(nodes, edges, { incremental: true, minGap: 60, pinnedId: coreId }),
+    () => layoutBrain(nodes, edges, { incremental: true, minGap: 60, pinnedId: coreId, spine }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [layoutKey, coreId],
+    [layoutKey, coreId, spine],
   );
+
+  // Spine nodes carry their own positions and their own hit-testing; keep them
+  // out of everything keyed on ViewNode.
+  const spineLaidOut = useMemo(
+    () => spine.nodes.map((s) => ({ s, p: laidOut[s.id] })).filter((e) => e.p),
+    [spine, laidOut],
+  );
+  // Spine selection is LOCAL: a grouping node is navigation, not knowledge, so
+  // clicking one must not ask the host to open a document that cannot exist.
+  const [spineSel, setSpineSel] = useState<string | null>(null);
+  const [spineHover, setSpineHover] = useState<string | null>(null);
+  /** Members of the focused grouping node — everything else dims to show its reach. */
+  const spineFocus = useMemo(() => {
+    const id = spineSel ?? spineHover;
+    const s = id ? spine.nodes.find((n) => n.id === id) : null;
+    return s ? new Set(s.memberIds) : null;
+  }, [spine, spineSel, spineHover]);
+  // A grouping node that disappears (islands merged, graph changed) must not
+  // leave the board dimmed forever.
+  useEffect(() => {
+    if (spineSel && !spine.nodes.some((n) => n.id === spineSel)) setSpineSel(null);
+  }, [spine, spineSel]);
 
   // Hand the settled coordinates up so they can be persisted. Only nodes that
   // arrived without one are reported: everything else is already on disk, and
@@ -126,7 +157,9 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
       minY = Infinity,
       maxX = -Infinity,
       maxY = -Infinity;
-    for (const n of nodes) {
+    // Spine nodes sit on the outer rings, so the fit box has to include them or
+    // the view frames only part of the tree.
+    for (const n of [...nodes, ...spine.nodes]) {
       const p = laidOut[n.id];
       if (!p) continue;
       minX = Math.min(minX, p.x - n.size);
@@ -155,10 +188,17 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
     fitKey,
     padding: 56,
     // The packed layout spans a few thousand px on a real brain (vs the old
-    // 560x400 random box), so the fit scale needs room to go further out.
+    // 560x400 random box), so the fit scale needs room to go further out —
+    // and, because fit then lands near 0.1, much further IN before a single
+    // node is readable. The old 2.5x ceiling was nowhere near enough.
     minScale: 0.05,
-    maxScale: 2.5,
+    maxScale: 8,
   });
+
+  // Report the live zoom level up for the header readout.
+  useEffect(() => {
+    onScaleChange?.(view.scale);
+  }, [view.scale, onScaleChange]);
 
   useImperativeHandle(
     ref,
@@ -215,6 +255,66 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
         </filter>
       </defs>
       <g transform={`translate(${view.tx} ${view.ty}) scale(${view.scale})`}>
+        {/* The spine, drawn FIRST so it sits behind the real graph. These links
+            are derived scaffolding, not knowledge — thin, dashed and faint, so
+            they read as "how to get there", never as a fact the brain holds. */}
+        {spine.edges.map((e, i) => {
+          const from = laidOut[e.from];
+          const to = laidOut[e.to];
+          if (!from || !to) return null;
+          return (
+            <line
+              key={`spine-${i}`}
+              x1={from.x}
+              y1={from.y}
+              x2={to.x}
+              y2={to.y}
+              stroke={FAINT}
+              strokeWidth={0.75}
+              strokeDasharray="2 6"
+              opacity={spineFocus ? 0.35 : 0.7}
+            />
+          );
+        })}
+        {spineLaidOut.map(({ s, p }) => {
+          const isSel = s.id === spineSel;
+          const r = s.size;
+          return (
+            <g
+              key={s.id}
+              style={{ cursor: 'pointer' }}
+              onClick={() => {
+                if (movedRef.current) return;
+                setSpineSel((cur) => (cur === s.id ? null : s.id));
+              }}
+              onMouseEnter={() => setSpineHover(s.id)}
+              onMouseLeave={() => setSpineHover(null)}
+            >
+              {/* A diamond, so a grouping node is never mistaken for a real
+                  square one — the shape carries the distinction, not a colour. */}
+              <polygon
+                points={`${p.x},${p.y - r} ${p.x + r},${p.y} ${p.x},${p.y + r} ${p.x - r},${p.y}`}
+                fill={isSel ? INK : PAPER}
+                stroke={INK}
+                strokeWidth={1}
+                strokeDasharray={isSel ? undefined : '3 3'}
+              />
+              <text
+                x={p.x}
+                y={p.y + r + 13}
+                textAnchor="middle"
+                fontSize={10}
+                fill={INK}
+                fontFamily="var(--nb-mono)"
+                fontWeight={isSel ? 'bold' : 'normal'}
+                style={{ pointerEvents: 'none', userSelect: 'none' }}
+              >
+                {s.title}
+              </text>
+              <title>{`${s.title} — ${s.memberIds.length} nodes (derived grouping, not a brain node)`}</title>
+            </g>
+          );
+        })}
         {edges.map((edge, i) => {
           const from = nodeMap[edge.from];
           const to = nodeMap[edge.to];
@@ -229,7 +329,9 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
           const len = Math.sqrt(dx * dx + dy * dy);
           const px = len > 0 ? -dy / len : 0;
           const py = len > 0 ? dx / len : 0;
-          const dimmed = matchedIds != null && !(matchedIds.has(edge.from) && matchedIds.has(edge.to));
+          const dimmed =
+            (matchedIds != null && !(matchedIds.has(edge.from) && matchedIds.has(edge.to))) ||
+            (spineFocus != null && !(spineFocus.has(edge.from) && spineFocus.has(edge.to)));
           return (
             <g key={i} opacity={dimmed ? 0.15 : 1}>
               {offsets.map((o, j) => (
@@ -287,7 +389,9 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
           if (!p) return null;
           const isSelected = node.id === selectedId;
           const isHovered = node.id === hoveredId && !isSelected;
-          const dimmed = matchedIds != null && !matchedIds.has(node.id);
+          const dimmed =
+            (matchedIds != null && !matchedIds.has(node.id)) ||
+            (spineFocus != null && !spineFocus.has(node.id));
           // Hot nodes wander; cold ones carry no class at all, so a quiet graph
           // is exactly as static as before.
           const g = glow?.get(node.id);
@@ -299,7 +403,9 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
               style={{ cursor: 'pointer', ...(g ? driftVars(node.id, g) : null) }}
               // Guard against a pan-drag that ends over a node mis-selecting it.
               onClick={() => {
-                if (!movedRef.current) onSelect(node.id);
+                if (movedRef.current) return;
+                setSpineSel(null); // picking a real node drops the group focus
+                onSelect(node.id);
               }}
               onMouseEnter={() => onHover(node.id)}
               onMouseLeave={() => onHover(null)}

@@ -567,3 +567,152 @@ Transcripts contain secrets, absolute paths, pasted logs and other clients'
 code. This is the same trust boundary as the SessionEnd distill hook, but
 `--all` and `--project` widen it across projects, so both are explicit and
 `--all` prints a per-project breakdown and requires `--yes`.
+
+## 13. Chrome extension (`nff-brain serve`)
+
+The browser is the one place where learning evaporates: a fact you read in
+Chrome is never recalled in a coding session unless you file it by hand. A
+Chrome extension cannot read `brain.json` — extensions have no filesystem
+access — so the extension talks to a small loopback server instead.
+
+```
+Chrome ──POST /v1/clip──▶ nff-brain serve ──▶ .nff-brain/clips.jsonl
+                                                     │
+                                       SessionEnd distill drains it
+```
+
+### Running it
+
+```
+$ nff-brain serve
+nff-brain serve · v0.1.0
+  listening   http://127.0.0.1:7373  (loopback only)
+  workspace   ~/code/nff-brain  (42 nodes)
+  global      ~/.nff-brain/brain.json  (130 nodes)
+  captures    → global brain (queue: ~/.nff-brain/clips.jsonl, 0 pending)
+  clients     none paired
+
+  PAIRING OPEN for 5m — enter this code in the extension popup:
+
+      K7M-2QX
+```
+
+Foreground and blocking; Ctrl-C stops it. `--quiet` prints one line instead of
+the banner, so a pm2 unit or a Task Scheduler entry is a one-liner. There is no
+`--detach`: backgrounding drags in a log destination (which would then contain
+the pairing code), a `--stop`, and pid staleness across reboots — a lot of
+state for what a terminal tab already solves.
+
+| flag | |
+|---|---|
+| `--port <n>` | exact port; without it, 7373–7377 are probed in order |
+| `--target global\|project` | which brain captures land beside (default global) |
+| `--allow-origin <o>` | extra allowed origin, comma-separated — for unpacked dev builds whose extension id changes |
+| `--quiet` | suppress the banner |
+
+`nff-brain pair` re-opens a 5-minute window against the running server;
+`--list` shows paired clients and the origin each is pinned to; `--revoke <id>`
+drops one; `--reset` revokes everything and rotates the server identity, and is
+the only subcommand that works with the server down.
+
+### Why captures default to the global brain
+
+nff-brain is per-project with a global fallback, but the browser has no concept
+of a workspace — a LinkedIn tab is not "in" anything. Global is merged into
+every recall by `mergeBrains`, so a global clip is never invisible, whereas a
+clip mis-filed into the wrong project is. A client can override per request
+with `"target":"project"`.
+
+One server serves one workspace. A second workspace's project brain is
+invisible to the extension; that is tolerable precisely because captures default
+to global.
+
+### The clip queue
+
+`~/.nff-brain/clips.jsonl`, an append-only JSONL beside the brain, mirroring
+`activity.jsonl` with two deliberate differences:
+
+- **It takes the lock.** Activity is lock-free because sub-4 KB `O_APPEND`
+  writes are atomically positioned. That fails here: a clip line can exceed
+  `PIPE_BUF`, and draining *consumes*, which offset-based tailing cannot make
+  safe.
+- **At 2 MB it refuses rather than rotating.** An activity event is advisory
+  telemetry where a lost line costs a missed animation. A clip is user intent
+  that has not landed in the brain yet, so discarding it silently is the worst
+  failure available. `doctor` and the popup both surface a full queue.
+
+Draining is two-phase (`takeClips` → `finishTake`) so the lock is never held
+across an LLM call. A batch whose drain died mid-flight is re-delivered — at
+least once, never zero times.
+
+### Security
+
+Any web page can fetch `127.0.0.1`, and so can every other extension the user
+has installed. Requests pass ten gates in this order, all before any body is
+read:
+
+| | gate | stops |
+|---|---|---|
+| 1 | loopback socket | remote access |
+| 2 | method ∈ GET/POST/OPTIONS | probes |
+| 3 | exact `Host` match | **DNS rebinding** — a rebound page arrives same-origin, so only `Host` gives it away |
+| 4 | static route table | path traversal (nothing is ever mapped to the filesystem) |
+| 5 | exact `Origin` match against a **pinned** paired origin | hostile pages, **and other extensions** |
+| 6 | **preflight answered here, before auth** | see below |
+| 7 | `Sec-Fetch-Mode`/`Dest` | `<img>`/`<script>`/navigation probes |
+| 8 | rate limiting, two independent buckets | brute force, and lock-out DoS |
+| 9 | bearer token, digest-vs-digest constant time | token guessing |
+| 10 | `application/json` + body cap | HTML-form CSRF, memory |
+
+Gate 6 is the one that is easy to get wrong: **a CORS preflight carries no
+`Authorization` header.** Running auth first makes every extension call fail as
+an opaque "CORS policy" error in Chrome, with nothing pointing at
+authentication. There is a regression test pinning it.
+
+The two rate-limit buckets matter for the same reason: with a single shared
+bucket, any web page could flood loopback and lock the user's own extension
+out. Rejected origins spend only the `anon` budget.
+
+The bearer token is bound to the origin that paired it, so a token exfiltrated
+to a web page is useless — gate 5 rejects the page's origin before gate 9 ever
+runs.
+
+**What an attacker can still do**, stated plainly:
+
+- **Detect that you run nff-brain.** A fixed port is a fingerprint: even fully
+  blocked, connect-succeeded versus `ECONNREFUSED` differs by timing. Inherent
+  to fixed-port discovery, since the extension cannot read a port from a file.
+  A deanonymization signal, not a data leak.
+- **Anything at all, if it already runs as your OS user.** `serve.json` holds
+  `adminToken` in plaintext because the CLI must present it. Local read equals
+  full compromise. This is explicitly out of scope: the server grants exactly
+  the privileges the user already has, and nothing it does executes code — it
+  never spawns `claude`, never runs a shell, never writes `brain.json` and
+  never reads a request-derived path.
+- **Pair a malicious extension, if you type the code into it.** The code is
+  shown in the terminal, not bound to an extension id. Mitigated by the
+  5-minute window and by `pair --list` showing the origin actually recorded.
+
+On POSIX `serve.json` is written 0600 and `doctor` fails if it is not. On
+Windows `fs.chmod` only toggles the read-only bit; `%USERPROFILE%\.nff-brain`
+inherits the profile ACL, so other standard users cannot read it, but SYSTEM
+and Administrators can.
+
+### The extension
+
+`packages/chrome` — MV3, built with esbuild into `packages/chrome/dist`, which
+is both the load-unpacked directory and the contents of the store zip.
+
+It requests exactly four permissions — `storage`, `alarms`, `activeTab`,
+`contextMenus` — **none of which shows an install-time warning**, and
+`manifest.test.ts` fails if that set ever widens. There are no
+`host_permissions`: the extension reaches the server as an ordinary CORS request
+that the server answers. `optional_host_permissions` declares
+`http://127.0.0.1/*` as an escape hatch, requested from the popup's Connect
+button only if Chrome's local-network rules ever require it.
+
+`connect-src 'self' http://127.0.0.1:*` in the manifest makes Chrome itself
+enforce "no network calls off-device", and `bundlePurity.test.ts` asserts no
+other origin appears in either source or the built bundles.
+
+See `packages/chrome/README.md` for the manual verification checklist.

@@ -131,9 +131,12 @@ export interface Neighbour {
   strength: number;
 }
 
-/** Undirected adjacency. Edges whose endpoints aren't in `nodes` are dropped. */
+/**
+ * Undirected adjacency. Edges whose endpoints aren't in `nodes` are dropped.
+ * Takes bare `{id}` so callers that have no coordinates (spine.ts) can use it.
+ */
 export function buildAdjacency(
-  nodes: readonly LayoutNode[],
+  nodes: readonly { id: string }[],
   edges: readonly LayoutEdge[],
 ): Map<string, Neighbour[]> {
   const adj = new Map<string, Neighbour[]>();
@@ -156,7 +159,7 @@ export function buildAdjacency(
  * every run.
  */
 export function connectedComponents(
-  nodes: readonly LayoutNode[],
+  nodes: readonly { id: string }[],
   edges: readonly LayoutEdge[],
 ): string[][] {
   const adj = buildAdjacency(nodes, edges);
@@ -183,6 +186,17 @@ export function connectedComponents(
   return out;
 }
 
+/**
+ * The navigational spine, as the layout needs to see it. Structurally satisfied
+ * by spine.ts's `SpineResult` — declared here rather than imported because
+ * spine.ts imports this module, and the dependency has to run one way.
+ */
+export interface LayoutSpine {
+  rootId: string | null;
+  nodes: ReadonlyArray<{ id: string; level: number; memberIds: string[]; size: number }>;
+  edges: readonly LayoutEdge[];
+}
+
 export interface LayoutOptions {
   /** Force-pass iterations. Defaults to 300 full / 120 incremental. */
   iterations?: number;
@@ -196,6 +210,15 @@ export interface LayoutOptions {
   pinnedId?: string | null;
   /** The whole arrangement is centred here. Defaults to the canonical (400, 300). */
   center?: Pt;
+  /**
+   * When supplied, a FULL pass arranges the graph as a radial tree along this
+   * spine instead of shelf-packing disconnected islands. An INCREMENTAL pass
+   * still preserves stored positions — the spine nodes are then placed relative
+   * to their members, so adopting the tree takes one `layout --full`.
+   */
+  spine?: LayoutSpine | null;
+  /** Clear space between the rings of the radial tree. */
+  ringGap?: number;
 }
 
 // Fruchterman–Reingold scale constant. 0.9 packs a component slightly tighter
@@ -342,8 +365,10 @@ export function layoutBrain(
   const {
     minGap = 60,
     componentGutter = 180,
+    ringGap = 200,
     pinnedId = null,
     center = { x: 400, y: 300 },
+    spine = null,
   } = opts;
 
   const pos: Record<string, Pt> = {};
@@ -355,6 +380,13 @@ export function layoutBrain(
   // hairball this module exists to fix. Fall back to a full pass.
   const incremental = (opts.incremental ?? false) && nodes.some((n) => n.laidOut);
   const iterations = opts.iterations ?? (incremental ? 120 : 300);
+
+  // A radial tree is a GLOBAL arrangement — it cannot be built around positions
+  // it is forbidden to move. So a spine drives a full pass only; incremental
+  // keeps the stored board and just hangs the spine nodes off their members.
+  if (spine?.rootId && nodes.some((n) => n.id === spine.rootId) && !incremental) {
+    return layoutRadial(nodes, edges, spine, { minGap, ringGap, center, iterations, pinnedId });
+  }
 
   const adj = buildAdjacency(nodes, edges);
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -394,11 +426,207 @@ export function layoutBrain(
   // break the promise that settled nodes never move.
   if (incremental) {
     for (const { bodies } of settled) for (const b of bodies) pos[b.id] = { x: b.x, y: b.y };
+    if (spine) placeSpineNearMembers(spine, pos, center);
     return pos;
   }
 
   packComponents(settled, componentGutter, center, pos);
+  if (spine) placeSpineNearMembers(spine, pos, center);
   return pos;
+}
+
+interface SettledIsland {
+  bodies: Body[];
+  /** Distance from the island's centroid to its furthest edge. */
+  radius: number;
+}
+
+/**
+ * Arrange the graph as a radial tree along the spine.
+ *
+ * The root sits at the centre with its own island around it; every level of the
+ * tree is a ring further out; and each subtree owns an angular WEDGE sized by
+ * how much arc its islands actually need, so a fat island gets room and a lone
+ * node does not waste a quadrant. Islands themselves are still settled by the
+ * force pass — this only decides where each settled island is parked.
+ *
+ * Shelf packing (packComponents) cannot be used here: with a spine the graph is
+ * one component, and a single force simulation over everything would collapse
+ * the tree back into a blob.
+ */
+function layoutRadial(
+  nodes: readonly LayoutNode[],
+  edges: readonly LayoutEdge[],
+  spine: LayoutSpine,
+  opts: { minGap: number; ringGap: number; center: Pt; iterations: number; pinnedId: string | null },
+): Record<string, Pt> {
+  const { minGap, ringGap, center, iterations, pinnedId } = opts;
+  const rootId = spine.rootId!;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const adj = buildAdjacency(nodes, edges);
+
+  // 1. Settle every island on its own, centred on its own centroid so it can be
+  //    parked anywhere as a rigid body.
+  const comps = connectedComponents(nodes, edges);
+  const islandOf = new Map<string, SettledIsland>();
+  for (const comp of comps) {
+    const bodies = seedComponent(comp, byId, adj, false, minGap, null);
+    settleComponent(bodies, adj, iterations, minGap);
+    const spaced = spaceOutNodes(bodies, { minGap });
+    for (const b of bodies) {
+      b.x = spaced[b.id].x;
+      b.y = spaced[b.id].y;
+    }
+    let cx = 0;
+    let cy = 0;
+    for (const b of bodies) {
+      cx += b.x;
+      cy += b.y;
+    }
+    cx /= bodies.length;
+    cy /= bodies.length;
+    let radius = 0;
+    for (const b of bodies) {
+      b.x -= cx;
+      b.y -= cy;
+      radius = Math.max(radius, Math.hypot(b.x, b.y) + b.size + LABEL_PAD);
+    }
+    const island: SettledIsland = { bodies, radius };
+    for (const b of bodies) islandOf.set(b.id, island);
+  }
+
+  // 2. The tree. Spine edges always point parent → child, so no direction guessing.
+  const kids = new Map<string, string[]>();
+  for (const e of spine.edges) (kids.get(e.from) ?? kids.set(e.from, []).get(e.from)!).push(e.to);
+  const spineById = new Map(spine.nodes.map((n) => [n.id, n]));
+
+  /** Arc length this subtree needs at its ring. */
+  const demandCache = new Map<string, number>();
+  const demand = (id: string): number => {
+    const hit = demandCache.get(id);
+    if (hit !== undefined) return hit;
+    const cs = kids.get(id) ?? [];
+    let d: number;
+    if (cs.length === 0) {
+      d = 2 * (islandOf.get(id)?.radius ?? byId.get(id)?.size ?? 16) + minGap;
+    } else {
+      let sum = 0;
+      for (const c of cs) sum += demand(c);
+      const own = 2 * (spineById.get(id)?.size ?? 16) + minGap;
+      d = Math.max(sum, own);
+    }
+    demandCache.set(id, d);
+    return d;
+  };
+
+  // 3. Ring radii. Each ring must clear the one inside it AND be long enough
+  //    around for everything sitting on it.
+  const levels: string[][] = [[rootId]];
+  for (let depth = 0; ; depth++) {
+    const next = levels[depth].flatMap((id) => kids.get(id) ?? []);
+    if (next.length === 0) break;
+    levels.push(next);
+  }
+  const thickness = (id: string): number =>
+    (kids.get(id)?.length ?? 0) === 0
+      ? (islandOf.get(id)?.radius ?? 16)
+      : (spineById.get(id)?.size ?? 16);
+  const ring: number[] = [0];
+  for (let L = 1; L < levels.length; L++) {
+    const prevThick = L === 1 ? (islandOf.get(rootId)?.radius ?? 0) : Math.max(...levels[L - 1].map(thickness));
+    const thick = Math.max(...levels[L].map(thickness));
+    let total = 0;
+    for (const id of levels[L]) total += demand(id);
+    ring[L] = Math.max(ring[L - 1] + prevThick + thick + ringGap, total / (2 * Math.PI) + thick);
+  }
+
+  // 4. Walk the tree, splitting each wedge among the children by demand.
+  const pos: Record<string, Pt> = {};
+  const park = (id: string, at: Pt): void => {
+    const island = islandOf.get(id);
+    if (!island) {
+      pos[id] = at;
+      return;
+    }
+    for (const b of island.bodies) pos[b.id] = { x: at.x + b.x, y: at.y + b.y };
+  };
+
+  const place = (id: string, a0: number, a1: number, level: number): void => {
+    if (level === 0) park(id, center);
+    else {
+      const mid = (a0 + a1) / 2;
+      const r = ring[level];
+      park(id, { x: center.x + r * Math.cos(mid), y: center.y + r * Math.sin(mid) });
+    }
+    const cs = kids.get(id) ?? [];
+    if (cs.length === 0) return;
+    let total = 0;
+    for (const c of cs) total += demand(c);
+    if (total <= 0) total = 1;
+    let a = a0;
+    for (const c of cs) {
+      const w = ((a1 - a0) * demand(c)) / total;
+      place(c, a, a + w, level + 1);
+      a += w;
+    }
+  };
+  // Start at -π/2 so the first branch leaves the root upward rather than right.
+  place(rootId, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI, 0);
+
+  // Any island the spine never reached (should not happen — buildSpine links
+  // them all — but a hand-built spine could omit one) still needs a home.
+  for (const comp of comps) {
+    if (comp.some((id) => pos[id])) continue;
+    park(comp[0], { x: center.x, y: center.y + ring[ring.length - 1] + ringGap });
+  }
+
+  // 5. Residual overlap: wedges can crowd where two rings nearly touch.
+  const all = [...nodes.map((n) => ({ id: n.id, size: n.size })), ...spine.nodes.map((n) => ({ id: n.id, size: n.size }))]
+    .filter((n) => pos[n.id])
+    .map((n) => ({ id: n.id, x: pos[n.id].x, y: pos[n.id].y, size: n.size }));
+  const spaced = spaceOutNodes(all, { minGap, pinnedId: pinnedId ?? rootId });
+  for (const n of all) pos[n.id] = spaced[n.id];
+  return pos;
+}
+
+/**
+ * Place spine nodes against ALREADY-SETTLED member positions, for the
+ * incremental path — where the promise is that stored positions never move, so
+ * the tree cannot be re-arranged around them. Each grouping node sits on the
+ * line from the root to its members' centroid, which reads as a hub feeding
+ * outward without disturbing anything.
+ */
+function placeSpineNearMembers(
+  spine: LayoutSpine,
+  pos: Record<string, Pt>,
+  center: Pt,
+): void {
+  const root = spine.rootId ? pos[spine.rootId] : null;
+  const from = root ?? center;
+  // Deepest first, so a parent can lean on children it has already placed.
+  const ordered = [...spine.nodes].sort((a, b) => b.level - a.level);
+  for (const s of ordered) {
+    let cx = 0;
+    let cy = 0;
+    let n = 0;
+    for (const id of s.memberIds) {
+      const p = pos[id];
+      if (!p) continue;
+      cx += p.x;
+      cy += p.y;
+      n++;
+    }
+    if (n === 0) {
+      pos[s.id] = from;
+      continue;
+    }
+    cx /= n;
+    cy /= n;
+    // Sit between the root and the group, closer to the group than the root so
+    // the hierarchy reads outward.
+    const t = 0.55 + 0.1 * Math.max(0, s.level - 1);
+    pos[s.id] = { x: from.x + (cx - from.x) * t, y: from.y + (cy - from.y) * t };
+  }
 }
 
 /** Right edge of the already-settled region, used to park brand-new components. */

@@ -27,6 +27,7 @@ import {
   parseImportPreview,
   promptCountForPath,
   renderImportPreview,
+  runClaude,
   samePath,
   skippableSessionIds,
   type DiscoverResult,
@@ -43,6 +44,7 @@ import {
   emptyScanLines,
   extractProposals,
   fmtDuration,
+  importTimeoutMs,
   label,
   reconcileProposals,
   writePreviewArtifacts,
@@ -477,8 +479,11 @@ function sourceHint(item: PendingItem): string {
 
 export function buildChecklistSections(items: readonly PendingItem[]): ChecklistSection[] {
   const sections: ChecklistSection[] = [];
+  // Best candidates first inside every section — with a big haul the reader's
+  // attention runs out long before the list does.
+  const byConfidence = (a: PendingItem, b: PendingItem): number => b.confidence - a.confidence;
   for (const kind of SECTION_ORDER) {
-    const inKind = items.filter((i) => i.kind === kind && i.status !== 'duplicate');
+    const inKind = items.filter((i) => i.kind === kind && i.status !== 'duplicate').sort(byConfidence);
     if (!inKind.length) continue;
     sections.push({
       title: SECTION_TITLE[kind],
@@ -492,7 +497,7 @@ export function buildChecklistSections(items: readonly PendingItem[]): Checklist
       })),
     });
   }
-  const dupes = items.filter((i) => i.status === 'duplicate');
+  const dupes = items.filter((i) => i.status === 'duplicate').sort(byConfidence);
   if (dupes.length) {
     sections.push({
       title: 'Already known',
@@ -510,11 +515,154 @@ export function buildChecklistSections(items: readonly PendingItem[]): Checklist
   return sections;
 }
 
+// Above this, reviewing item-by-item stops being consent and becomes fatigue —
+// triage first. (--apply caps new nodes at 60 a pass and the brain prunes to
+// 400 anyway, so a 490-item hand-review would mostly be wasted work.)
+const REVIEW_TRIAGE_AT = 80;
+// Matches DEFAULT_MAX_NEW_NODES — more than one apply-pass of keepers is noise.
+const CURATE_KEEP = 60;
+const BALANCED_PER_KIND = 12; // × 5 kinds = one apply-pass
+
+const byConfidence = (a: PendingItem, b: PendingItem): number => b.confidence - a.confidence;
+
+/**
+ * Strategy 1 — corroboration. An item extracted from 2+ different sessions is
+ * a house rule the work keeps restating, not one-off trivia; repetition is the
+ * strongest durability signal the miner has (it is also what boostForSources
+ * rewards). Duplicates of the brain are excluded — they are already known.
+ */
+export function corroboratedItems(items: readonly PendingItem[]): PendingItem[] {
+  return items.filter((i) => i.status !== 'duplicate' && i.sources.length >= 2).sort(byConfidence);
+}
+
+/**
+ * Strategy 2 — balance. A raw top-N is almost all `memory` items because they
+ * outnumber everything else; per-kind quotas keep the 12 best decisions and
+ * 8 preferences from drowning under 300 memories.
+ */
+export function balancedBestItems(items: readonly PendingItem[]): PendingItem[] {
+  const out: PendingItem[] = [];
+  for (const kind of SECTION_ORDER) {
+    out.push(
+      ...items
+        .filter((i) => i.kind === kind && i.status !== 'duplicate')
+        .sort(byConfidence)
+        .slice(0, BALANCED_PER_KIND),
+    );
+  }
+  return out;
+}
+
+/**
+ * Strategy 3 — curation. One claude -p call reads every candidate and picks
+ * the keepers. Unlike the mechanical filters it can judge specific-vs-generic
+ * and cross-item redundancy ("these five all restate the same deploy rule").
+ */
+export function buildCuratePrompt(items: readonly PendingItem[], keep: number = CURATE_KEEP): string {
+  const lines = items
+    .filter((i) => i.status !== 'duplicate')
+    .map(
+      (i) =>
+        `${i.key} | ${i.kind} | ${i.confidence.toFixed(2)} | ${i.sources.length} session${i.sources.length === 1 ? '' : 's'} | ${i.title} — ${i.content.replace(/\s+/g, ' ').slice(0, 120)}`,
+    );
+  return [
+    `You are the memory curator for a coding agent's knowledge brain.`,
+    `Below are ${lines.length} candidate memories mined from past sessions. Pick the ones worth a human's review time — AT MOST ${keep}.`,
+    `Keep: specific, actionable lessons; anything corroborated by several sessions; hard-won gotchas.`,
+    `Drop: vague truisms, one-off trivia, and near-duplicates of a better candidate (keep only the best of each group).`,
+    `Respond with STRICT JSON only, no prose: {"keep":["key","key",...]}`,
+    ``,
+    `Candidates (key | kind | confidence | sessions | title — excerpt):`,
+    ...lines,
+  ].join('\n');
+}
+
+/** Parse the curator's answer down to known items; null = unusable reply. */
+export function parseCurateResponse(raw: string, items: readonly PendingItem[]): PendingItem[] | null {
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  let keys: unknown;
+  try {
+    keys = (JSON.parse(match[0]) as { keep?: unknown }).keep;
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(keys)) return null;
+  const wanted = new Set(keys.filter((k): k is string => typeof k === 'string'));
+  const kept = items.filter((i) => wanted.has(i.key)).slice(0, CURATE_KEEP);
+  return kept.length ? kept.sort(byConfidence) : null;
+}
+
+type Curate = (prompt: string) => Promise<string>;
+
+/**
+ * Narrow a large haul automatically — no menu, a menu here is just one more
+ * decision on top of 490. Fallback chain, in order:
+ *
+ *   1. ask the model to pick the keepers   (one claude -p call)
+ *   2. keep what 2+ sessions corroborate   (if the call failed)
+ *   3. best of each kind, 12 per kind      (if nothing is corroborated)
+ *   4. everything                          (last resort)
+ *
+ * Whatever is trimmed stays in import-preview.md unchecked — declined for
+ * THIS apply, but still on disk and re-offered by a future scan, so triage
+ * never loses anything.
+ */
+export async function triageItems(
+  w: Pick<Wizard, 'plan'>,
+  ui: WizardUi,
+  items: PendingItem[],
+  curate?: Curate,
+): Promise<PendingItem[]> {
+  if (items.length <= REVIEW_TRIAGE_AT) return items;
+
+  const model = w.plan.model ?? process.env.NFF_BRAIN_MODEL ?? 'haiku';
+  const trimmed = (shown: PendingItem[]): PendingItem[] => {
+    if (shown.length < items.length) {
+      ui.note(ui.style.dim(`  the other ${items.length - shown.length} stay unchecked in import-preview.md — nothing is lost`));
+      ui.note();
+    }
+    return shown;
+  };
+
+  // 1. Curation — the only strategy that can judge specific-vs-generic and
+  //    cross-item redundancy, so it always goes first.
+  const run: Curate = curate ?? ((prompt) => runClaude(prompt, { model: w.plan.model, timeoutMs: importTimeoutMs() }));
+  const spin = ui.spinner(`${items.length} candidates — asking ${model} to pick the keepers…`);
+  let kept: PendingItem[] | null = null;
+  try {
+    kept = parseCurateResponse(await run(buildCuratePrompt(items)), items);
+  } catch {
+    kept = null;
+  }
+  if (kept) {
+    spin.stop(`${ui.style.ok(ui.glyphs.check)} ${model} kept ${kept.length} of ${items.length}`);
+    return trimmed(kept);
+  }
+
+  // 2.–4. Fail open, best signal first — never block the review on a model.
+  const corroborated = corroboratedItems(items);
+  if (corroborated.length && corroborated.length < items.length) {
+    spin.stop(`${ui.style.warn('⚠')} curation failed — kept the ${corroborated.length} seen in more than one session`);
+    return trimmed(corroborated);
+  }
+  const balanced = balancedBestItems(items);
+  if (balanced.length && balanced.length < items.length) {
+    spin.stop(`${ui.style.warn('⚠')} curation failed — showing the best of each kind (${balanced.length})`);
+    return trimmed(balanced);
+  }
+  spin.stop(`${ui.style.warn('⚠')} curation failed — showing everything`);
+  return items;
+}
+
 async function stepReview(w: Wizard, ui: WizardUi): Promise<Step> {
   const items = w.items!;
+  const shown = await triageItems(w, ui, items);
+
+  const counted = shown.length === items.length ? `${items.length}` : `${shown.length} of ${items.length}`;
   const result = await ui.checklist(
-    `Review what I found — ${items.length} ${items.length === 1 ? 'memory' : 'memories'}`,
-    buildChecklistSections(items),
+    `Review what I found — ${counted} ${items.length === 1 ? 'memory' : 'memories'}`,
+    buildChecklistSections(shown),
   );
 
   if (result === null) {
@@ -524,6 +672,8 @@ async function stepReview(w: Wizard, ui: WizardUi): Promise<Step> {
     return 'done';
   }
 
+  // Off-screen items count as unchecked: only what the user actually SAW and
+  // left ticked may reach the brain.
   const checkedKeys = new Set(result.checked);
   const reviewed = items.map((i) => ({ ...i, checked: checkedKeys.has(i.key) }));
   if (!reviewed.some((i) => i.checked)) {

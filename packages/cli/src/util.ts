@@ -19,7 +19,7 @@ const VALUE_FLAGS = new Set([
   'dir', 'max-per-repo',
   'since', 'project', 'min-confidence', 'concurrency', 'max-new',
   'port', 'target', 'allow-origin', 'revoke', 'name',
-  'iterations',
+  'iterations', 'fanout', 'min-sim',
 ]);
 
 export function parseArgs(argv: string[]): Args {

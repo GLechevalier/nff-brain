@@ -175,6 +175,84 @@ describe('layoutBrain', () => {
   });
 });
 
+describe('layoutBrain — radial tree along a spine', () => {
+  // Root plus two disconnected pairs, linked by one grouping node.
+  const nodes = [
+    node('root', { size: 32 }),
+    node('r1'),
+    node('a1'),
+    node('a2'),
+    node('b1'),
+    node('b2'),
+  ];
+  const edges = [edge('root', 'r1'), edge('a1', 'a2'), edge('b1', 'b2')];
+  const spine = {
+    rootId: 'root',
+    nodes: [{ id: 'spine:1-0', level: 1, memberIds: ['a1', 'a2', 'b1', 'b2'], size: 22 }],
+    edges: [
+      edge('root', 'spine:1-0', 0.3),
+      edge('spine:1-0', 'a1', 0.3),
+      edge('spine:1-0', 'b1', 0.3),
+    ],
+  };
+
+  it('puts the root at the centre and everything else outside it', () => {
+    const center = { x: 400, y: 300 };
+    const pos = layoutBrain(nodes, edges, { spine, center });
+    // The root's own island is centred on the origin, so the root sits close to it.
+    expect(dist(pos.root, center)).toBeLessThan(200);
+    const spineR = dist(pos['spine:1-0'], center);
+    for (const id of ['a1', 'a2', 'b1', 'b2']) {
+      expect(dist(pos[id], center)).toBeGreaterThan(spineR);
+    }
+  });
+
+  it('positions the grouping node itself', () => {
+    const pos = layoutBrain(nodes, edges, { spine });
+    expect(pos['spine:1-0']).toBeDefined();
+    expect(Number.isFinite(pos['spine:1-0'].x)).toBe(true);
+  });
+
+  it('keeps each island together in its own wedge', () => {
+    const pos = layoutBrain(nodes, edges, { spine });
+    // Members of one island are closer to each other than to the other island.
+    expect(dist(pos.a1, pos.a2)).toBeLessThan(dist(pos.a1, pos.b1));
+    expect(dist(pos.b1, pos.b2)).toBeLessThan(dist(pos.b1, pos.a1));
+  });
+
+  it('leaves no overlaps, spine nodes included', () => {
+    const minGap = 60;
+    const pos = layoutBrain(nodes, edges, { spine, minGap });
+    const all = [...nodes, { id: 'spine:1-0', x: 0, y: 0, size: 22 }];
+    for (let i = 0; i < all.length; i++) {
+      for (let j = i + 1; j < all.length; j++) {
+        const req = all[i].size + all[j].size + minGap + LABEL_PAD;
+        expect(dist(pos[all[i].id], pos[all[j].id])).toBeGreaterThanOrEqual(req - 0.5);
+      }
+    }
+  });
+
+  it('is deterministic', () => {
+    expect(layoutBrain(nodes, edges, { spine })).toEqual(layoutBrain(nodes, edges, { spine }));
+  });
+
+  it('ignores a spine whose root is not in the graph', () => {
+    const orphanSpine = { ...spine, rootId: 'ghost' };
+    const withGhost = layoutBrain(nodes, edges, { spine: orphanSpine });
+    const withNone = layoutBrain(nodes, edges, {});
+    // Falls back to island packing; spine nodes still get placed near members.
+    for (const n of nodes) expect(withGhost[n.id]).toEqual(withNone[n.id]);
+  });
+
+  it('keeps stored positions in incremental mode and hangs the spine off them', () => {
+    // A radial tree is global, so it must NOT re-arrange a settled board.
+    const settled = nodes.map((n, i) => ({ ...n, x: 100 * i, y: 50 * i, laidOut: true }));
+    const pos = layoutBrain(settled, edges, { spine, incremental: true });
+    for (const n of settled) expect(pos[n.id]).toEqual({ x: n.x, y: n.y });
+    expect(pos['spine:1-0']).toBeDefined();
+  });
+});
+
 describe('layoutBrain — incremental', () => {
   it('never moves a node that is already laid out', () => {
     const settled: LayoutNode[] = [

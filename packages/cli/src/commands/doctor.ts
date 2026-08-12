@@ -112,17 +112,23 @@ function serveChecks(): boolean {
   }
 
   // Report every queue that has anything in it, whichever brain it targets.
+  // Deduped by resolved path: when the workspace root IS the home directory,
+  // project and global name the same file and it would otherwise print twice.
   const paths = resolveBrainPaths(process.cwd());
+  const seen = new Set<string>();
   for (const [label, p] of [
     ['project', paths.project],
     ['global', paths.global],
   ] as const) {
+    const file = clipsPath(p);
+    if (seen.has(file)) continue;
+    seen.add(file);
     const stats = clipQueueStats(p);
     if (stats.pending === 0 && !stats.full) continue;
     check(
       'clip queue',
       null,
-      `${stats.pending} pending in ${clipsPath(p)} (${label})` +
+      `${stats.pending} pending in ${file} (${label})` +
         (stats.full ? ' — FULL, captures are being refused until a session drains it' : ''),
     );
   }

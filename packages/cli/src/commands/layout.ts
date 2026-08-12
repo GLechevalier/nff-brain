@@ -1,4 +1,5 @@
 import {
+  buildSpine,
   connectedComponents,
   layoutBrain,
   loadBrain,
@@ -61,9 +62,22 @@ export async function cmdLayout(argv: string[]): Promise<void> {
     return;
   }
 
+  // The spine turns the islands into one radial tree. It is derived and costs
+  // nothing to rebuild, so it is computed here rather than stored.
+  const spine = args.flags['no-spine'] === true ? null : buildSpine(brain.nodes, brain.edges);
+  if (spine && spine.islandCount > 0) {
+    console.log(
+      `spine: ${spine.nodes.length} grouping node(s) linking ${spine.islandCount} island(s) to ${spine.rootId}`,
+    );
+  }
+
   // Compute OUTSIDE the lock: the force pass is pure and can take a moment on a
   // large brain, and holding the brain lock across it would stall the hooks.
-  const pos = layoutBrain(brain.nodes, brain.edges, { incremental: !effectivelyFull, iterations });
+  const pos = layoutBrain(brain.nodes, brain.edges, {
+    incremental: !effectivelyFull,
+    iterations,
+    spine,
+  });
 
   const extent = boundsOf(brain.nodes, pos);
   console.log(

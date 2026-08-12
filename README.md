@@ -146,6 +146,9 @@ nff-brain unlink <a> <b>                remove a link
 nff-brain merge [--ratio 0.25] [--llm]  consolidate: fold least-used nodes; --llm dedups
 nff-brain recall [--query q]            print the preamble (what Claude sees)
 nff-brain distill --transcript <jsonl>  distill a transcript manually
+nff-brain serve [--port 7373] [--quiet] loopback server the Chrome extension pairs with
+nff-brain pair [--list|--revoke <id>|--reset]
+                                        open a pairing window / manage clients
 nff-brain uninstall-hooks               remove exactly the nff-brain hook entries
 nff-brain upgrade                       npm install -g nff-brain@latest
 nff-brain --version                     print the CLI version
@@ -160,6 +163,22 @@ Distillation defaults to **haiku** — the cheapest model that handles the job.
 Override per call with `--model` (`init`, `distill`, `merge --llm`) or globally
 with the `NFF_BRAIN_MODEL` env var. Recall never calls an LLM. `nff-brain
 doctor` shows the model currently in effect.
+
+### Chrome extension (optional)
+
+The browser is the one place where learning evaporates. Run `nff-brain serve`,
+pair the extension with the code it prints, then right-click any selected text
+→ **Remember this** — it lands in a queue your next Claude Code session
+distills into the brain.
+
+Local-first by construction: the extension declares no `host_permissions` and a
+`connect-src` CSP confining it to `127.0.0.1`, so Chrome itself enforces that
+nothing leaves your machine. It requests four permissions, none of which shows
+an install warning. Captures default to the **global** brain — a browser tab is
+not "in" a project, and the global brain is merged into every recall.
+
+See `docs/docs.md` §13 for the transport and the threat model (including what
+an attacker can still do), and `packages/chrome/README.md` to build it.
 
 ### Semantic search (optional)
 

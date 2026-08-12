@@ -31,6 +31,7 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [narrow, setNarrow] = useState(false);
+  const [scale, setScale] = useState(1);
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<BrainGraphHandle>(null);
   const noticeTimer = useRef<number | null>(null);
@@ -100,6 +101,24 @@ export function App() {
     if (selectedId && !nodes.some((n) => n.id === selectedId)) setSelectedId(null);
   }, [nodes, selectedId]);
 
+  // +/-/0 zoom keys. Two guards, both load-bearing: skip while a text field has
+  // focus (typing '-' in the search box must not zoom the graph), and skip when
+  // ctrl/meta is held — Ctrl+= belongs to VS Code's own window zoom.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (e.key === '+' || e.key === '=') graphRef.current?.zoomBy(1.25);
+      else if (e.key === '-' || e.key === '_') graphRef.current?.zoomBy(1 / 1.25);
+      else if (e.key === '0') graphRef.current?.resetView();
+      else return;
+      e.preventDefault();
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   // ── node search ─────────────────────────────────────────────────────────────
   // Lexical ranks SYNCHRONOUSLY on every keystroke; semantic.hits is null until
   // the host answers with a query vector for this exact text, at which point
@@ -159,7 +178,7 @@ export function App() {
           {notice && <span style={{ fontSize: 11, color: 'var(--nb-muted)' }}>{notice}</span>}
           {!narrow && (
             <span style={{ fontSize: 10, color: 'var(--nb-muted)' }}>
-              click a node to open its .md · grab to pan · scroll to zoom
+              click a node to open its .md · grab to pan · scroll to zoom · +/−/0
             </span>
           )}
           <input
@@ -176,7 +195,37 @@ export function App() {
               {matches.length} hit{matches.length === 1 ? '' : 's'}
             </span>
           )}
-          <button className="nb-btn" onClick={() => graphRef.current?.resetView()} title="Fit the whole graph to the panel">
+          {/* Zoom cluster. The readout is fixed-width so stepping through
+              levels doesn't shuffle the buttons sideways. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span
+              style={{
+                fontSize: 10,
+                color: 'var(--nb-muted)',
+                minWidth: 34,
+                textAlign: 'right',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+              title="Current zoom level"
+            >
+              {Math.round(scale * 100)}%
+            </span>
+            <button
+              className="nb-icon-btn"
+              onClick={() => graphRef.current?.zoomBy(1 / 1.25)}
+              title="Zoom out (−)"
+            >
+              −
+            </button>
+            <button className="nb-icon-btn" onClick={() => graphRef.current?.zoomBy(1.25)} title="Zoom in (+)">
+              ＋
+            </button>
+          </div>
+          <button
+            className="nb-btn"
+            onClick={() => graphRef.current?.resetView()}
+            title="Fit the whole graph to the panel (0)"
+          >
             ⤢ Fit
           </button>
           <button
@@ -209,6 +258,7 @@ export function App() {
           onSelect={openNode}
           onHover={setHoveredId}
           onLayout={onLayout}
+          onScaleChange={setScale}
           emptyState={
             <div style={{ fontSize: 12, color: 'var(--nb-faint)', textAlign: 'center', lineHeight: 2 }}>
               The brain is empty.

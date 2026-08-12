@@ -1,9 +1,47 @@
 # EPIC — nff-brain in the browser
 
-**Status:** planning · nothing implemented
+**Status:** items 0 and 1 SHIPPED (incl. item 2's capture verb) · 3, 4, 5, 6 open
 **Goal:** the browser stops being the one place where learning evaporates.
 **Done when:** a fact you encountered in Chrome is recalled in a Claude Code
 session without you having filed it anywhere.
+
+---
+
+## What shipped
+
+`nff-brain serve` + `nff-brain pair` (`packages/cli/src/serve/`,
+`packages/core/src/serve*.ts`, `clip*.ts`) and the MV3 extension
+(`packages/chrome`), including the right-click capture verb pulled forward from
+item 2. Reference documentation is `docs/docs.md` §13; the manual verification
+checklist is `packages/chrome/README.md`.
+
+**Why the capture verb moved into item 1.** Three of item 1's six acceptance
+criteria — start/pause, domain allowlist, clear history — govern a capture path
+that did not exist, so half the acceptance table would have passed *because the
+feature was absent*: a green ON toggle over a no-op. It also left the extension
+with no user-observable behaviour at all, which is a live Chrome Web Store
+minimum-functionality rejection risk, and item 6's review latency is on the
+critical path. Adding `contextMenus` + one `onClicked` handler + `POST /v1/clip`
+made all six criteria mechanically testable and cost no install warning.
+
+**Item 2 is now about clip QUALITY**, not about capture existing: `link` and
+`page` contexts, title extraction, dedupe, and the `origin: 'clip'` recall
+budget.
+
+**Still not verified:** Local Network Access against current Chrome (see the
+Risks section of `packages/chrome/README.md`), and every row of that README's
+manual checklist. Nothing yet mints brain nodes from clips — the queue fills,
+and draining it is item 2.
+
+### Open questions, resolved
+
+| Question | Resolution |
+|---|---|
+| Native messaging vs localhost HTTP | **localhost HTTP.** A native-messaging host manifest must name an absolute launcher path in a per-OS registry/directory, which `npm i -g` cannot write, and it breaks one-click Web Store install. |
+| Global brain by default, or force a project picker? | **Global by default**, `"target":"project"` per request. The browser has no workspace concept; global is merged into every recall, so a global clip is never invisible while a mis-filed project clip is. No picker. |
+| Direct write vs queue-drained-by-CLI | **Queue.** Not for corruption (`mutateBrain` already locks) but because a clip must be distilled before it is a node, and "no LLM at click time" requires a holding area. |
+| Does `origin: 'clip'` get its own recall budget? | **Still open** — deferred to item 2, which is where clips first become nodes. |
+| Is item 4's output brain-shaped at all? | **Still open.** |
 
 ---
 

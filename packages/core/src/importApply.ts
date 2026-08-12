@@ -9,6 +9,7 @@
 
 import { nodeDegree, upsertEdge, upsertNode } from './store.js';
 import { trigramSim } from './score.js';
+import { resolveRoot } from './spine.js';
 import { placeNode, type BrainFile, type BrainNode } from './types.js';
 import type { PendingItem } from './importDedup.js';
 
@@ -151,7 +152,10 @@ export function applyImport(
 
   // Tier 3 — anything still orphaned hangs off the hub, so the graph reads as
   // one structure rather than a scatter of islands (same rule as `init`).
-  const hubId = opts.hubId ?? brain.nodes.find((n) => n.category === 'core')?.id;
+  // resolveRoot, not `find(category === 'core')`: graphify imports its "god"
+  // nodes as category 'core' too, so a real brain holds several and `find`
+  // returns whichever happens to sit first in the array.
+  const hubId = opts.hubId ?? resolveRoot(brain.nodes, brain.edges) ?? undefined;
   if (hubId && existingIds.has(hubId)) {
     for (const id of result.created) {
       if (id === hubId) continue;

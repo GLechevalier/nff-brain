@@ -11,6 +11,7 @@
     "./vector": "./src/vector.ts",
     "./rank": "./src/rank.ts",
     "./activity": "./src/activity.ts",
-    "./layout": "./src/layout.ts"
+    "./layout": "./src/layout.ts",
+    "./spine": "./src/spine.ts"
   }
 }

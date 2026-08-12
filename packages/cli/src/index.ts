@@ -7,6 +7,7 @@ import { cmdIndex } from './commands/indexVectors.js';
 import { cmdExpand, cmdIngestGraphify } from './commands/ingestGraphify.js';
 import { cmdInit } from './commands/init.js';
 import { cmdLayout } from './commands/layout.js';
+import { cmdSpine } from './commands/spine.js';
 import { cmdMerge } from './commands/merge.js';
 import { cmdAdd, cmdEdit, cmdList, cmdRm, cmdShow } from './commands/nodes.js';
 import { cmdNovelty } from './commands/novelty.js';
@@ -74,12 +75,20 @@ graph
   unlink <a> <b>                   remove a connection
   reinforce <a> <b> [--delta 0.1]  strengthen a connection
   merge [--ratio 0.25] [--llm]     fold least-used nodes into neighbours; --llm also dedups
-  layout [--full] [--iterations 300] [--dry-run]
+  layout [--full] [--iterations 300] [--no-spine] [--dry-run]
                                    settle node positions with the force-directed layout, so
                                    connected nodes sit together and each disconnected component
                                    becomes its own island. Incremental by default: nodes already
                                    laid out keep their coordinates and only new ones are placed.
-                                   --full re-settles everything from scratch
+                                   --full re-settles everything as a radial tree along the spine
+                                   (--no-spine falls back to packing the islands side by side)
+  spine [--fanout 7] [--min-sim 0.08] [--dry-run]
+                                   print the navigational spine — the derived tree that links every
+                                   island of the graph to one root, through grouping nodes that
+                                   split further whenever a node would carry more than --fanout
+                                   children. DERIVED: nothing is ever written to the brain.
+                                   --dry-run also prints the island-similarity distribution, which
+                                   is how you pick --min-sim for YOUR brain rather than guessing
 
 semantic search (optional — search works without it)
   semantic [status|install|uninstall]
@@ -126,6 +135,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   reinforce: cmdReinforce,
   merge: cmdMerge,
   layout: cmdLayout,
+  spine: cmdSpine,
   semantic: cmdSemantic,
   index: cmdIndex,
   'ingest-graphify': cmdIngestGraphify,

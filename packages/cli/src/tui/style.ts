@@ -44,11 +44,13 @@ export function detectColorLevel(env: NodeJS.ProcessEnv, isTTY: boolean, platfor
   return 0;
 }
 
-// Claude's terracotta accent, one triple, one place.
+// nff-brain's mint-teal (#00ffcc) — the hub-node glow in the brain graph
+// (COLOR_BY_CATEGORY.core), so CLI and VS Code extension read as one product.
+// One triple, one place.
 const ACCENT: Record<Exclude<ColorLevel, 0>, string> = {
-  1: '\x1b[33m',
-  2: '\x1b[38;5;209m',
-  3: '\x1b[38;2;217;119;87m',
+  1: '\x1b[36m', // cyan
+  2: '\x1b[38;5;50m', // #00ffd7, nearest xterm-256 cube entry
+  3: '\x1b[38;2;0;255;204m',
 };
 
 function sgr(open: string, close: string): (s: string) => string {

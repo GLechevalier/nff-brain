@@ -38,9 +38,16 @@ jobs:
       - name: Package VS Code extension
         run: npx --yes @vscode/vsce package --no-dependencies
         working-directory: packages/vscode
+      - name: Package Chrome extension
+        # Dependency-free zip writer: the store needs manifest.json at the
+        # ARCHIVE ROOT, and `cd dist && zip ../out.zip *` does not work on the
+        # Windows machines this repo is developed on.
+        run: node zip.mjs
+        working-directory: packages/chrome
       - uses: actions/upload-artifact@v4
         with:
           name: nff-brain-artifacts
           path: |
             nff-brain-*.tgz
             packages/vscode/*.vsix
+            packages/chrome/*.zip

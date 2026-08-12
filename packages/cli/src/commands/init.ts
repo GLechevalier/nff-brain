@@ -69,7 +69,10 @@ export async function cmdInit(argv: string[]): Promise<void> {
 
   // 1. Ensure the brain exists with its hub node (pinned center of the board).
   mutateBrain(target, (brain: BrainFile) => {
-    if (!brain.nodes.some((n) => n.category === 'core')) {
+    // Specifically a SEED core node. The looser `category === 'core'` test was
+    // also satisfied by graphify's "god" nodes, so running `ingest-graphify`
+    // before `init` meant the project never got a hub at all.
+    if (!brain.nodes.some((n) => n.category === 'core' && n.origin === 'seed')) {
       upsertNode(brain, {
         id: hubId,
         title: projectName,
