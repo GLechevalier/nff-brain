@@ -18,6 +18,7 @@ const ALLOWED = new Set([
   '@nff-brain/core/vector',
   '@nff-brain/core/rank',
   '@nff-brain/core/activity',
+  '@nff-brain/core/layout',
 ]);
 
 function sources(dir: string): string[] {
@@ -58,7 +59,7 @@ describe('webview bundle purity', () => {
 describe('browser-safe core modules', () => {
   const CORE = path.resolve(HERE, '../src');
 
-  it.each(['score.ts', 'vector.ts', 'rank.ts'])('%s has no node: imports', (name) => {
+  it.each(['score.ts', 'vector.ts', 'rank.ts', 'layout.ts'])('%s has no node: imports', (name) => {
     const src = fs.readFileSync(path.join(CORE, name), 'utf8');
     expect(src).not.toMatch(/from\s+'node:/);
     expect(src).not.toMatch(/\brequire\(/);

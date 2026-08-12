@@ -43,6 +43,10 @@
       {
         "command": "nffBrain.deleteNode",
         "title": "nff-brain: Delete Node…"
+      },
+      {
+        "command": "nffBrain.layout",
+        "title": "nff-brain: Re-arrange Graph"
       }
     ],
     "viewsContainers": {
@@ -74,7 +78,8 @@
         "nffBrain.autoModel": {
           "type": "boolean",
           "default": false,
-          "description": "Automatically type /model into the Claude Code terminal when the brain's novelty scoring requests a model switch (reads .nff-brain/model-request.json written by the nff-brain hooks)."
+          "markdownDeprecationMessage": "Deprecated — prefer `nff-brain install-hooks --apply-model`, which writes the tier into `.claude/settings.local.json` and applies it silently at session start.",
+          "markdownDescription": "**Deprecated.** Type `/model` into a terminal running Claude Code when the brain's novelty scoring requests a switch (reads `.nff-brain/model-request.json`).\n\nOnly works when `#claudeCode.useTerminal#` is enabled — with the default native panel there is no terminal to type into. It also triggers Claude's *\"switching models will re-read the full conversation\"* confirmation mid-session.\n\nPrefer `nff-brain install-hooks --apply-model`: it writes the tier into `.claude/settings.local.json`, which Claude Code reads at session creation with no prompt."
         },
         "nffBrain.autoModelNotify": {
           "type": "boolean",

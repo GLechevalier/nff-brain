@@ -23,8 +23,8 @@
 // is advisory anyway. If that ever bites, split to one file per session.
 
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { brainLogPath } from './paths.js';
+import { writeFileAtomic } from './store.js';
 
 export const MODEL_STATE_FILE = 'model-state.json';
 
@@ -78,14 +78,9 @@ export function readModelState(brainPath: string): ModelState {
   }
 }
 
-/** Atomic write (temp + rename), like the model request beside it. */
+/** Atomic write — shares store.ts's Windows EPERM/EBUSY rename retry. */
 export function writeModelState(brainPath: string, state: ModelState): void {
-  const target = modelStatePath(brainPath);
-  const dir = path.dirname(target);
-  fs.mkdirSync(dir, { recursive: true });
-  const tmp = path.join(dir, `.model-state.tmp-${process.pid}`);
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n');
-  fs.renameSync(tmp, target);
+  writeFileAtomic(modelStatePath(brainPath), JSON.stringify(state, null, 2) + '\n');
 }
 
 /**

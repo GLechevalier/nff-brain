@@ -152,7 +152,9 @@ async function offerHistoryImport(args: Args): Promise<void> {
   if (available === 0) return;
 
   if (args.flags.import === true) {
-    await cmdImport(args.flags.global === true ? ['--global'] : []);
+    // --no-interactive: init has already printed a wall of output; dropping
+    // into the wizard mid-init would be jarring, and --import means "just do it".
+    await cmdImport(args.flags.global === true ? ['--global', '--no-interactive'] : ['--no-interactive']);
     return;
   }
   console.log('');

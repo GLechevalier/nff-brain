@@ -7,118 +7,82 @@ import {
   ageDaysOf,
   applyImport,
   brainLogPath,
-  buildImportPrompt,
-  clusterProposals,
-  discoverSessions,
-  firstUserText,
-  hasCorrection,
   loadBrain,
   loadImportState,
-  mapPool,
   mutateBrain,
-  parseImportResponse,
   promptCountForPath,
   pruneBrain,
-  readTranscriptWindow,
   recordProposalHashes,
   recordSession,
-  reconcileWithBrain,
-  renderImportPreview,
   resolveBrainPaths,
   resolvePreview,
-  runClaude,
   saveImportState,
-  seenProposalHashes,
-  skippableSessionIds,
   appendActivity,
   type PendingFile,
   type PendingItem,
-  type Proposal,
-  type SessionMeta,
 } from '@nff-brain/core';
-import { flagNum, flagStr, parseArgs, type Args } from '../util.js';
+import { flagNum, parseArgs, type Args } from '../util.js';
+import { estimateMinutes, planFromArgs, shouldRunWizard } from './importPlan.js';
+import {
+  classifyEmptyScan,
+  discoverForPlan,
+  emptyScanLines,
+  extractProposals,
+  fmtDuration,
+  label,
+  reconcileProposals,
+  writePreviewArtifacts,
+} from './importEngine.js';
 
 // `nff-brain import` — mine past Claude Code sessions into the brain.
 //
-// Two phases, deliberately separated by a file the human reads:
-//   import          scan → one claude -p per session → cluster → PREVIEW ONLY
-//   import --apply  commit the items still checked in that preview
+// Three entry shapes:
+//   import                 (bare, in a TTY) → the interactive wizard
+//   import [--flags…]      scan → one claude -p per session → cluster → PREVIEW ONLY
+//   import --apply         commit the items still checked in that preview
 //
-// Nothing touches brain.json in phase one. Writing thirty machine-proposed
+// Nothing touches brain.json before a review. Writing thirty machine-proposed
 // nodes into a brain the user has never seen is the surprise that gets a tool
-// uninstalled; the preview IS the trust-building moment.
+// uninstalled; the review IS the trust-building moment.
 
-const DEFAULT_LIMIT = 40;
-const DEFAULT_CONCURRENCY = 4;
-const DEFAULT_MIN_CONFIDENCE = 0.5;
-const MAX_PER_KIND = 4;
-const MAX_TRANSCRIPT_CHARS = 12_000;
-const MIN_TRANSCRIPT_CHARS = 2_000; // import's bar is far above distill's 200
-// Import windows are a full 12 KB, unlike distill's tail-capped ones, so they
-// get longer than runClaude's 60 s default — but an explicit env override still
-// wins, which is what lets the e2e suite exercise the hang path quickly.
-const IMPORT_TIMEOUT_MS = 90_000;
-function importTimeoutMs(): number {
-  return Number(process.env.NFF_BRAIN_TIMEOUT_MS) || IMPORT_TIMEOUT_MS;
-}
+// Re-exported for importArgs.test.ts and any external callers.
+export { parseSince } from './importPlan.js';
+
 const MAX_TOTAL_NODES = 400;
-const STALE_PREVIEW_DAYS = 14;
-
-/** `7d` / `48h` / `3w` / an ISO date → epoch ms, or null when unparseable. */
-export function parseSince(value: string, now = new Date()): number | null {
-  const rel = value.trim().match(/^(\d+)\s*([dhw])$/i);
-  if (rel) {
-    const n = Number(rel[1]);
-    const unit = rel[2].toLowerCase();
-    const ms = unit === 'h' ? 3_600_000 : unit === 'w' ? 7 * 86_400_000 : 86_400_000;
-    return now.getTime() - n * ms;
-  }
-  const t = Date.parse(value);
-  return Number.isFinite(t) ? t : null;
-}
+export const STALE_PREVIEW_DAYS = 14;
 
 function note(line = ''): void {
   // Progress goes to stderr so stdout stays pipe-able.
   process.stderr.write(`${line}\n`);
 }
 
-function label(s: SessionMeta): string {
-  return s.title ?? s.firstPrompt.slice(0, 48) ?? s.sessionId.slice(0, 8);
-}
-
-function fmtDuration(ms: number): string {
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
-}
-
 export async function cmdImport(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   if (args.flags.apply === true) return applyPhase(args);
+  if (
+    shouldRunWizard({
+      args,
+      stdinTTY: process.stdin.isTTY === true,
+      stdoutTTY: process.stdout.isTTY === true,
+      stderrTTY: process.stderr.isTTY === true,
+      env: process.env,
+    })
+  ) {
+    // Lazy: the hook/classic paths must never load the TUI code.
+    const { runImportWizard } = await import('./importWizard.js');
+    return runImportWizard(args);
+  }
   return scanPhase(args);
 }
 
 async function scanPhase(args: Args): Promise<void> {
-  const paths = resolveBrainPaths(process.cwd());
-  const target = args.flags.global === true ? paths.global : paths.project;
-  const minConfidence = flagNum(args, 'min-confidence') ?? DEFAULT_MIN_CONFIDENCE;
-  const limit = flagNum(args, 'limit') ?? DEFAULT_LIMIT;
-  const concurrency = Math.min(8, Math.max(1, flagNum(args, 'concurrency') ?? DEFAULT_CONCURRENCY));
-  const force = args.flags.force === true;
-  const all = args.flags.all === true;
-  const project = flagStr(args, 'project');
-
-  const sinceRaw = flagStr(args, 'since');
-  let sinceMs: number | null = null;
-  if (sinceRaw) {
-    sinceMs = parseSince(sinceRaw);
-    if (sinceMs === null) throw new Error(`could not read --since "${sinceRaw}" — try 7d, 48h, 3w or 2026-07-01`);
-  }
+  const plan = planFromArgs(args);
+  const { paths, target } = plan;
 
   // An unreviewed preview may carry hand-edits and unticked boxes; silently
   // regenerating over it would throw that work away.
   const existingPreview = brainLogPath(target, PREVIEW_FILE);
-  if (!force && args.flags.yes !== true && fs.existsSync(existingPreview)) {
+  if (!plan.force && !plan.yes && fs.existsSync(existingPreview)) {
     note('  apply it        nff-brain import --apply');
     note('  or discard it   nff-brain import --force');
     // Throw rather than set process.exitCode: index.ts always calls
@@ -129,32 +93,24 @@ async function scanPhase(args: Args): Promise<void> {
   const state = loadImportState(target);
 
   note('scanning Claude Code history…');
-  const found = discoverSessions({
-    cwd: paths.workspaceRoot,
-    project,
-    all,
-    limit,
-    sinceMs,
-    skipSessionIds: force ? undefined : skippableSessionIds(state),
-    dirCwdCache: state.dirCwd,
-  });
+  const found = discoverForPlan(plan, state);
 
-  const scope = project ?? (all ? 'ALL projects' : paths.workspaceRoot);
   note(`  ${found.scanned.dirs} project folders, ${found.scanned.files} transcripts on disk`);
 
   if (!found.sessions.length) {
-    reportEmptyScan(found, state, paths.workspaceRoot, all);
+    const prompts = plan.all ? 0 : promptCountForPath(paths.workspaceRoot);
+    for (const line of emptyScanLines(classifyEmptyScan(found, paths.workspaceRoot, prompts))) console.log(line);
     return;
   }
 
-  if (all) {
+  if (plan.all) {
     note(`  spanning ${found.byProject.length} projects:`);
     for (const p of found.byProject.slice(0, 8)) note(`    ${String(p.count).padStart(4)}  ${p.cwd}`);
     if (found.byProject.length > 8) note(`    …and ${found.byProject.length - 8} more`);
     // Transcripts hold secrets, absolute paths and other clients' code, and
     // each session ships ~12 KB of itself to claude -p. Sweeping every project
     // is a much wider disclosure than the current one, so make it deliberate.
-    if (args.flags.yes !== true) {
+    if (!plan.yes) {
       note('');
       note('  --all sends transcripts from EVERY project to claude -p.');
       note('  Re-run with --yes to confirm.');
@@ -170,52 +126,23 @@ async function scanPhase(args: Args): Promise<void> {
     found.skipped.old ? `${found.skipped.old} older than --since` : '',
   ].filter(Boolean);
   note(`  ${found.sessions.length} selected (newest first)${skipNote.length ? ` · skipped ${skipNote.join(', ')}` : ''}`);
-  note(`  ~${found.sessions.length} claude -p calls, ${concurrency} at a time — roughly ${estimateMinutes(found.sessions.length, concurrency)}`);
+  note(`  ~${found.sessions.length} claude -p calls, ${plan.concurrency} at a time — roughly ${estimateMinutes(found.sessions.length, plan.concurrency)}`);
   note('');
 
   const snapshot = loadBrain(target);
-  const knownNodes = snapshot?.nodes ?? [];
-  const model = flagStr(args, 'model');
   const started = Date.now();
-  let failures = 0;
 
-  const results = await mapPool(
-    found.sessions,
-    concurrency,
-    async (session): Promise<Proposal[]> => {
-      const transcript = readTranscriptWindow(session.file);
-      if (transcript.length < MIN_TRANSCRIPT_CHARS) return [];
-      const prompt = buildImportPrompt({
-        taskText: session.firstPrompt || label(session),
-        transcript,
-        knownNodes,
-        maxPerKind: MAX_PER_KIND,
-        maxTranscriptChars: MAX_TRANSCRIPT_CHARS,
-        sessionLabel: label(session),
-      });
-      const raw = await runClaude(prompt, { model, timeoutMs: importTimeoutMs() });
-      return parseImportResponse(raw, {
-        session: { sessionId: session.sessionId, title: session.title, date: session.endedAt },
-        transcriptChars: transcript.length,
-        hasCorrection: hasCorrection(transcript),
-        ageDays: ageDaysOf(session.endedAt),
-        maxPerKind: MAX_PER_KIND,
-      });
-    },
-    (done, total, r) => {
-      const s = r.item;
-      if (r.error) {
-        failures += 1;
-        note(`  ✗ ${label(s).padEnd(38).slice(0, 38)}  ${r.error instanceof Error ? r.error.message : 'failed'}`);
-      } else if (r.value?.length) {
-        note(`  ✓ ${label(s).padEnd(38).slice(0, 38)}  ${r.value.length} found   [${done}/${total}]`);
-      } else {
-        note(`  · ${label(s).padEnd(38).slice(0, 38)}  nothing durable   [${done}/${total}]`);
-      }
-    },
-  );
+  const { proposals, failures } = await extractProposals(found.sessions, plan, snapshot?.nodes ?? [], (done, total, r) => {
+    const s = r.item;
+    if (r.error) {
+      note(`  ✗ ${label(s).padEnd(38).slice(0, 38)}  ${r.error instanceof Error ? r.error.message : 'failed'}`);
+    } else if (r.value?.length) {
+      note(`  ✓ ${label(s).padEnd(38).slice(0, 38)}  ${r.value.length} found   [${done}/${total}]`);
+    } else {
+      note(`  · ${label(s).padEnd(38).slice(0, 38)}  nothing durable   [${done}/${total}]`);
+    }
+  });
 
-  const proposals = results.flatMap((r) => r.value ?? []);
   note('');
   if (!proposals.length) {
     note(`nothing durable found in ${found.sessions.length} session(s) after ${fmtDuration(Date.now() - started)}.`);
@@ -223,50 +150,15 @@ async function scanPhase(args: Args): Promise<void> {
     return;
   }
 
-  const clusters = clusterProposals(proposals);
   const brain = snapshot ?? loadBrain(target);
-  const items = reconcileWithBrain(brain ?? { version: 1, updatedAt: '', nodes: [], edges: [] }, clusters, {
-    minConfidence,
-    seenHashes: force ? undefined : seenProposalHashes(state),
-  });
+  const items = reconcileProposals(proposals, plan, brain, state);
 
   const byKind = new Map<string, number>();
   for (const i of items) byKind.set(i.kind, (byKind.get(i.kind) ?? 0) + 1);
   note(`${proposals.length} proposals → ${items.length} after merging duplicates across sessions`);
   note(`  ${[...byKind].map(([k, n]) => `${n} ${k}`).join(' · ')}`);
 
-  const createdAt = new Date().toISOString();
-  const pending: PendingFile = {
-    version: 1,
-    createdAt,
-    workspaceRoot: paths.workspaceRoot,
-    brainPath: target,
-    brainUpdatedAt: brain?.updatedAt ?? '',
-    minConfidence,
-    sessionsRead: found.sessions.map((s) => s.sessionId),
-    sessionBytes: Object.fromEntries(found.sessions.map((s) => [s.sessionId, s.bytes])),
-    items,
-  };
-
-  const previewPath = brainLogPath(target, PREVIEW_FILE);
-  const pendingPath = brainLogPath(target, PENDING_FILE);
-  fs.mkdirSync(path.dirname(previewPath), { recursive: true });
-  fs.writeFileSync(
-    previewPath,
-    renderImportPreview(items, {
-      brainPath: target,
-      sessionCount: found.sessions.length,
-      createdAt,
-      minConfidence,
-    }),
-    'utf8',
-  );
-  fs.writeFileSync(pendingPath, `${JSON.stringify(pending, null, 2)}\n`, 'utf8');
-
-  // Discovery cache only — the sessions are NOT marked imported until --apply,
-  // so an abandoned preview leaves the next run free to re-read them.
-  state.dirCwd = { ...state.dirCwd };
-  saveImportState(target, state);
+  const { previewPath } = writePreviewArtifacts(items, plan, found, brain, state);
 
   const checked = items.filter((i) => i.checked).length;
   note('');
@@ -276,50 +168,10 @@ async function scanPhase(args: Args): Promise<void> {
   console.log('  1. open it — uncheck anything you don\'t want, edit freely');
   console.log('  2. nff-brain import --apply');
 
-  if (args.flags.yes === true && !all) await applyPhase(args);
+  if (plan.yes && !plan.all) await applyPhase(args);
 }
 
-function estimateMinutes(sessions: number, concurrency: number): string {
-  const seconds = Math.ceil((sessions / concurrency) * 25);
-  if (seconds < 90) return `${seconds}s`;
-  return `about ${Math.max(1, Math.round(seconds / 60))} minute${seconds >= 90 ? 's' : ''}`;
-}
-
-function reportEmptyScan(
-  found: ReturnType<typeof discoverSessions>,
-  _state: ReturnType<typeof loadImportState>,
-  workspaceRoot: string,
-  all: boolean,
-): void {
-  // Order matters: a folder routinely has BOTH already-mined sessions and
-  // one-shots, and "no new sessions" is the more useful of the two answers.
-  if (found.skipped.alreadyImported) {
-    console.log(`no new sessions since the last import (${found.skipped.alreadyImported} already mined).`);
-    console.log('use --force to re-scan them.');
-    return;
-  }
-  if (found.skipped.oneshot) {
-    // The nff-brain repo itself hits this: its project folder holds only the
-    // `claude -p` calls nff-brain made, never a human session.
-    console.log(`the only transcripts for this folder are ${found.skipped.oneshot} one-shot \`claude -p\` run(s) — nothing to import.`);
-    return;
-  }
-  if (found.scanned.dirs === 0) {
-    console.log(`no Claude Code history at ${found.projectsDir}`);
-    console.log('set NFF_BRAIN_CLAUDE_HOME if your config lives elsewhere.');
-    return;
-  }
-  const prompts = all ? 0 : promptCountForPath(workspaceRoot);
-  if (prompts > 0) {
-    console.log(`no transcripts for ${workspaceRoot}, though history.jsonl remembers ${prompts} prompt(s) here —`);
-    console.log('your transcripts may have been cleared.');
-    return;
-  }
-  console.log(`no past sessions found for ${workspaceRoot}.`);
-  console.log('try --all to sweep every project, or --project <path>.');
-}
-
-async function applyPhase(args: Args): Promise<void> {
+export async function applyPhase(args: Args): Promise<void> {
   const paths = resolveBrainPaths(process.cwd());
   const target = args.flags.global === true ? paths.global : paths.project;
   const previewPath = brainLogPath(target, PREVIEW_FILE);

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.vsix
+*.zip
 *.tsbuildinfo
 .nff-brain/
 coverage/

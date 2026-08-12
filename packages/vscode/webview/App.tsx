@@ -34,6 +34,12 @@ export function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<BrainGraphHandle>(null);
   const noticeTimer = useRef<number | null>(null);
+  // Signature of the last batch of positions we asked the host to persist.
+  // Persisting writes brain.json, which the host watches, which rebroadcasts
+  // the graph — so without this guard a single new node would ping-pong. The
+  // rebroadcast carries laidOut: true, so the layout stops reporting it and the
+  // loop ends after one round-trip; this ref catches any duplicate in between.
+  const lastPersisted = useRef<string>('');
 
   // Living-graph heat: which nodes the agent recently looked at, and how hot.
   const { glow, visible, onActivity } = useActivityGlow(nodes);
@@ -67,6 +73,18 @@ export function App() {
     vscode.postMessage({ type: 'ready' });
     return () => window.removeEventListener('message', onMessage);
   }, [onActivity, semantic.onMessage]);
+
+  // Persist positions the layout settled for nodes that had none.
+  const onLayout = useCallback((positions: Array<{ id: string; x: number; y: number }>) => {
+    if (positions.length === 0) return;
+    const sig = positions
+      .map((p) => `${p.id}:${Math.round(p.x)}:${Math.round(p.y)}`)
+      .sort()
+      .join('|');
+    if (sig === lastPersisted.current) return;
+    lastPersisted.current = sig;
+    vscode.postMessage({ type: 'layout', positions });
+  }, []);
 
   // Hide the pan/zoom hint when the panel gets cramped.
   useEffect(() => {
@@ -190,6 +208,7 @@ export function App() {
           glow={glow}
           onSelect={openNode}
           onHover={setHoveredId}
+          onLayout={onLayout}
           emptyState={
             <div style={{ fontSize: 12, color: 'var(--nb-faint)', textAlign: 'center', lineHeight: 2 }}>
               The brain is empty.

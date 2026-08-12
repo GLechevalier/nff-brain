@@ -15,6 +15,8 @@ export interface ViewNode {
   y: number;
   size: number;
   origin: 'seed' | 'agent' | 'graphify' | 'import';
+  /** True once a layout pass settled x/y. Absent ⇒ this node still needs placing. */
+  laidOut?: boolean;
   lastUpdated: string;
   recallCount: number;
   lastRecalledAt?: string; // ISO — seeds the glow when a panel opens late
@@ -75,4 +77,7 @@ export type WebToExt =
   | { type: 'createNodeRequest' }
   | { type: 'merge' }
   // Debounced, one per settled keystroke. The host answers with queryVector.
-  | { type: 'embedQuery'; query: string; seq: number };
+  | { type: 'embedQuery'; query: string; seq: number }
+  // Positions the webview's incremental layout settled for nodes that had none.
+  // Sent at most once per set of new nodes — see the loop guard in App.tsx.
+  | { type: 'layout'; positions: Array<{ id: string; x: number; y: number }> };

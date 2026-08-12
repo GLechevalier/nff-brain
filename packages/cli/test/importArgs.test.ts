@@ -38,7 +38,7 @@ describe('import flags parse as values, not booleans', () => {
     },
   );
 
-  it.each(['all', 'apply', 'force', 'yes', 'global'])('--%s stays boolean', (flag) => {
+  it.each(['all', 'apply', 'force', 'yes', 'global', 'no-interactive'])('--%s stays boolean', (flag) => {
     const args = parseArgs([`--${flag}`]);
     expect(args.flags[flag]).toBe(true);
   });

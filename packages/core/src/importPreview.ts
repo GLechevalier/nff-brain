@@ -16,9 +16,9 @@ import type { PendingItem } from './importDedup.js';
 export const PREVIEW_FILE = 'import-preview.md';
 export const PENDING_FILE = 'import-pending.json';
 
-const SECTION_ORDER: ImportKind[] = ['memory', 'decision', 'preference', 'task', 'failure'];
+export const SECTION_ORDER: ImportKind[] = ['memory', 'decision', 'preference', 'task', 'failure'];
 
-const SECTION_TITLE: Record<ImportKind, string> = {
+export const SECTION_TITLE: Record<ImportKind, string> = {
   memory: 'Durable memories',
   decision: 'Architectural decisions',
   preference: 'Developer preferences',

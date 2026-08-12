@@ -1,0 +1,22 @@
+{
+  "name": "nff-brain-chrome",
+  "displayName": "nff-brain",
+  "description": "Local-first memory for Claude Code. Talks only to a brain you run yourself on 127.0.0.1 — nothing leaves your machine.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GLechevalier/nff-brain.git"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "package": "npm run build && node zip.mjs"
+  },
+  "devDependencies": {
+    "@nff-brain/core": "*",
+    "@types/chrome": "^0.0.287",
+    "esbuild": "^0.24.2"
+  }
+}

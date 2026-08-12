@@ -7,6 +7,7 @@ import {
   CATEGORIES,
   eventSavings,
   foldLeastUsed,
+  layoutBrain,
   loadBrain,
   mergeBrains,
   mutateBrain,
@@ -79,6 +80,7 @@ function loadGraph(): GraphSnapshot {
     y: n.y,
     size: n.size,
     origin: n.origin,
+    laidOut: n.laidOut,
     lastUpdated: n.lastUpdated,
     recallCount: n.recallCount ?? 0,
     lastRecalledAt: n.lastRecalledAt,
@@ -287,6 +289,40 @@ async function handleMessage(msg: WebToExt, webview: vscode.Webview): Promise<vo
         return; // read-only action — no graph rebroadcast needed
       }
 
+      case 'layout': {
+        // The webview settled positions for nodes that arrived without one.
+        // Split by source: the merged graph spans two files and a position must
+        // land in the one that actually owns the node.
+        const byFile = new Map<string, Array<{ id: string; x: number; y: number }>>();
+        for (const p of msg.positions) {
+          const source = graph.sourceById.get(p.id);
+          if (!source) continue; // deleted between render and message
+          const file = fileFor(source);
+          (byFile.get(file) ?? byFile.set(file, []).get(file)!).push(p);
+        }
+        let written = 0;
+        for (const [file, positions] of byFile) {
+          const wanted = new Map(positions.map((p) => [p.id, p]));
+          mutateBrain(file, (brain) => {
+            for (const node of brain.nodes) {
+              const p = wanted.get(node.id);
+              // Never overwrite a node that has since been settled by someone
+              // else (the CLI's `layout`, another window) — first writer wins.
+              if (!p || node.laidOut) continue;
+              node.x = p.x;
+              node.y = p.y;
+              node.laidOut = true;
+              written++;
+            }
+          });
+        }
+        // Nothing changed ⇒ don't rebroadcast. The watcher would fire anyway on
+        // a real write; skipping here keeps a no-op message from looping.
+        if (written === 0) return;
+        logLine(`layout: settled ${written} node position(s)`);
+        break;
+      }
+
       case 'createNodeRequest': {
         const title = await vscode.window.showInputBox({
           prompt: 'Title for the new brain node',
@@ -370,20 +406,23 @@ interface ModelRequestShape {
   sessionId?: string;
 }
 
-function findClaudeTerminal(cwd: string | undefined): vscode.Terminal | undefined {
-  const terminals = vscode.window.terminals;
-  const byName = terminals.find((t) => /claude/i.test(t.name));
-  if (byName) return byName;
-  if (cwd) {
-    const target = path.resolve(cwd);
-    const byCwd = terminals.find((t) => {
-      const c = (t.creationOptions as vscode.TerminalOptions).cwd;
-      const p = typeof c === 'string' ? c : c?.fsPath;
-      return p !== undefined && path.resolve(p) === target;
-    });
-    if (byCwd) return byCwd;
-  }
-  return vscode.window.activeTerminal;
+/**
+ * A terminal that is actually running Claude — by NAME only.
+ *
+ * This used to fall back to any terminal whose cwd matched the workspace, and
+ * then to the active terminal. Both were guesses, and they were wrong in the
+ * common case: Claude Code runs in the native panel by default
+ * (claudeCode.useTerminal is false), so there IS no Claude terminal and the
+ * fallbacks typed `/model …` into whatever shell happened to be focused —
+ * producing garbage like `...Activate.ps1)/model sonnet` in a PowerShell prompt,
+ * or, when it did land in a Claude session, the "switching models will re-read
+ * the full conversation" confirmation the user had to answer by hand.
+ *
+ * Nothing about an arbitrary shell says "this is Claude", so we no longer
+ * pretend. No match → the caller logs and does nothing.
+ */
+function findClaudeTerminal(): vscode.Terminal | undefined {
+  return vscode.window.terminals.find((t) => /claude/i.test(t.name));
 }
 
 function handleModelRequest(uri: vscode.Uri): void {
@@ -409,9 +448,13 @@ function handleModelRequest(uri: vscode.Uri): void {
     // Multi-window safety: only act on requests for THIS workspace.
     if (req.cwd && path.resolve(req.cwd) !== path.resolve(paths.workspaceRoot)) return;
 
-    const terminal = findClaudeTerminal(req.cwd);
+    const terminal = findClaudeTerminal();
     if (!terminal) {
-      logLine(`auto-model: no terminal to type /model ${req.model} into`);
+      logLine(
+        `auto-model: no terminal named "claude" — not typing /model ${req.model}. ` +
+          `Claude Code runs in the native panel unless claudeCode.useTerminal is on; ` +
+          `use \`nff-brain install-hooks --apply-model\` instead.`,
+      );
       return;
     }
     lastHandledModelRequest = key;
@@ -523,6 +566,38 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       if (confirm !== 'Delete') return;
       brainFs.delete(nodeUri(pick.source, pick.description));
+    }),
+    // Re-settle EVERY node from scratch. The graph lays itself out incrementally
+    // as nodes appear, which preserves the arrangement you have learned; this is
+    // the deliberate escape hatch for when you want it rebuilt anyway.
+    vscode.commands.registerCommand('nffBrain.layout', async () => {
+      const confirm = await vscode.window.showWarningMessage(
+        'Re-arrange the whole brain graph?\n\nEvery node is repositioned from scratch. Nothing is ' +
+          'deleted, but the layout you are used to will change.',
+        { modal: true },
+        'Re-arrange',
+      );
+      if (confirm !== 'Re-arrange') return;
+      let moved = 0;
+      for (const file of [paths.project, paths.global]) {
+        if (!fs.existsSync(file)) continue;
+        const brain = loadSafe(file);
+        if (!brain || brain.nodes.length === 0) continue;
+        // Pure, so compute it before taking the lock.
+        const pos = layoutBrain(brain.nodes, brain.edges, { minGap: 60 });
+        mutateBrain(file, (b) => {
+          for (const node of b.nodes) {
+            const p = pos[node.id];
+            if (!p) continue;
+            node.x = p.x;
+            node.y = p.y;
+            node.laidOut = true;
+            moved++;
+          }
+        });
+      }
+      broadcastGraph();
+      void vscode.window.showInformationMessage(`nff-brain: re-arranged ${moved} node(s).`);
     }),
   );
 

@@ -10,10 +10,16 @@ export interface Args {
 
 // A flag that takes a VALUE must be listed here, or `--since 7d` parses as
 // boolean `since` plus a stray positional "7d" — a silent no-op.
+// NOTE this set is GLOBAL across commands. 'project' already lives here for
+// `import --project P`, which is why `serve` spells its brain selector
+// `--target global|project` — a boolean `--serve --project` would swallow the
+// next token.
 const VALUE_FLAGS = new Set([
   'query', 'transcript', 'session', 'title', 'category', 'content', 'id', 'strength', 'delta', 'ratio', 'model', 'limit',
   'dir', 'max-per-repo',
   'since', 'project', 'min-confidence', 'concurrency', 'max-new',
+  'port', 'target', 'allow-origin', 'revoke', 'name',
+  'iterations',
 ]);
 
 export function parseArgs(argv: string[]): Args {

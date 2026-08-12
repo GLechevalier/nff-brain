@@ -1,16 +1,23 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import {
+  clipQueueStats,
+  clipsPath,
   discoverSessions,
   embedCacheDir,
   embedModel,
+  isInstanceAlive,
   isLockStale,
   loadBrain,
   loadImportState,
+  loadServeConfig,
   loadVectors,
   modelLadder,
+  readInstance,
   resolveBrainPaths,
   resolveTransformers,
+  serveConfigMode,
+  serveConfigPath,
   vectorPlan,
 } from '@nff-brain/core';
 import type { BrainFile } from '@nff-brain/core';
@@ -71,6 +78,57 @@ function semanticChecks(brains: { label: string; path: string; brain: BrainFile 
   check('semantic check', null, 'run `nff-brain semantic status` to verify the model actually loads');
 }
 
+/**
+ * Reports on `nff-brain serve` and the clip queue. Never prints a token value —
+ * e2eServe.test.ts asserts that, because doctor output routinely gets pasted
+ * into issues.
+ */
+function serveChecks(): boolean {
+  let ok = true;
+  const inst = readInstance();
+  if (!inst) {
+    check('serve', null, 'not running — `nff-brain serve` (Chrome extension transport)');
+  } else if (!isInstanceAlive(inst)) {
+    check('serve', null, `stale record for pid ${inst.pid} (not running) — safe to ignore`);
+  } else {
+    const cfg = loadServeConfig();
+    const clients = cfg?.clients.length ?? 0;
+    check(
+      'serve',
+      null,
+      `running — pid ${inst.pid}, port ${inst.port}, workspace ${inst.workspaceRoot}, ` +
+        `${clients} client${clients === 1 ? '' : 's'} paired`,
+    );
+  }
+
+  const mode = serveConfigMode();
+  if (mode !== null && (mode & 0o077) !== 0) {
+    ok = check(
+      'serve config',
+      false,
+      `${serveConfigPath()} is mode ${mode.toString(8)} — it holds bearer tokens; ` +
+        `run \`chmod 600 ${serveConfigPath()}\``,
+    );
+  }
+
+  // Report every queue that has anything in it, whichever brain it targets.
+  const paths = resolveBrainPaths(process.cwd());
+  for (const [label, p] of [
+    ['project', paths.project],
+    ['global', paths.global],
+  ] as const) {
+    const stats = clipQueueStats(p);
+    if (stats.pending === 0 && !stats.full) continue;
+    check(
+      'clip queue',
+      null,
+      `${stats.pending} pending in ${clipsPath(p)} (${label})` +
+        (stats.full ? ' — FULL, captures are being refused until a session drains it' : ''),
+    );
+  }
+  return ok;
+}
+
 export async function cmdDoctor(): Promise<void> {
   const paths = resolveBrainPaths(process.cwd());
   let healthy = true;
@@ -125,6 +183,11 @@ export async function cmdDoctor(): Promise<void> {
       healthy = check(`${label} lock`, !stale, stale ? `stale lock at ${p}.lock — safe to delete` : 'held (an operation is running)') && healthy;
     }
   }
+
+  // Chrome extension transport (optional tier — `·`, never flips the exit
+  // code). The ONE exception is a world-readable serve.json: the file existing
+  // means the user opted in, so a leaked bearer token there is a real fault.
+  healthy = serveChecks() && healthy;
 
   // Semantic search (optional tier). Always reported with the `·` marker: it is
   // optional by construction, so it must NEVER flip the exit code. And it must

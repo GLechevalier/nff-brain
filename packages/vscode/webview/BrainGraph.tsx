@@ -1,15 +1,20 @@
 import type React from 'react';
-import { forwardRef, useImperativeHandle, useMemo } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo } from 'react';
 import type { ViewEdge, ViewNode } from '../src/protocol';
-import { hash, spaceOutNodes } from './brainSpacing';
+import { hash, layoutBrain } from './brainSpacing';
 import { usePanZoom, type FitBox } from './usePanZoom';
 import type { GlowInfo } from './useActivityGlow';
 
 // The brain knowledge-graph renderer, ported from nff-dashboard's
-// BrainGraph.tsx. Pure SVG; node x/y are board coordinates; a minimum-spacing
-// pass keeps overlapping nodes readable; grab-to-pan / scroll-to-zoom. The only
-// change from the dashboard: literal monochrome colors became VS Code theme
-// variables (--nb-*), so the look inverts correctly in dark themes.
+// BrainGraph.tsx. Pure SVG; node x/y are board coordinates; grab-to-pan /
+// scroll-to-zoom. The only change from the dashboard: literal monochrome colors
+// became VS Code theme variables (--nb-*), so the look inverts correctly in
+// dark themes.
+//
+// Positions come from the force-directed layout in core, run incrementally:
+// nodes already settled keep their exact coordinates and only new ones are
+// placed, so the arrangement the reader has learned survives a node being
+// added. App.tsx sends the settled positions back to the host to persist.
 
 // Category is conveyed SOLELY by this glyph (the webview renders theme colors,
 // not node.color), so every category in core's CATEGORIES needs one. Fall back
@@ -53,6 +58,7 @@ function driftVars(id: string, g: GlowInfo): React.CSSProperties {
 
 export interface BrainGraphHandle {
   resetView: () => void;
+  zoomBy: (factor: number) => void;
   focusNode: (id: string) => void;
 }
 
@@ -67,27 +73,52 @@ interface BrainGraphProps {
   glow?: ReadonlyMap<string, GlowInfo>;
   onSelect: (id: string) => void;
   onHover: (id: string | null) => void;
+  /** Positions the layout settled for nodes that arrived without one, for persisting. */
+  onLayout?: (positions: Array<{ id: string; x: number; y: number }>) => void;
   emptyState?: React.ReactNode;
 }
 
 export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function BrainGraph(
-  { nodes, edges, selectedId, hoveredId, matchedIds, glow, onSelect, onHover, emptyState },
+  { nodes, edges, selectedId, hoveredId, matchedIds, glow, onSelect, onHover, onLayout, emptyState },
   ref,
 ) {
   // The central hub is pinned during spacing so the graph keeps its anchor.
   const coreId = useMemo(() => nodes.find((n) => n.category === 'core')?.id ?? null, [nodes]);
 
-  // Minimum-spacing pass, memoized on the node SET (ids + positions + sizes) so
-  // live updates never re-jitter the layout.
-  const spaceKey = useMemo(
-    () => nodes.map((n) => `${n.id}:${Math.round(n.x)}:${Math.round(n.y)}:${n.size}`).join('|'),
-    [nodes],
+  // Memoized on the node set AND the edge set — edges drive the layout now, so
+  // keying on nodes alone would leave a new connection unrendered until
+  // something else happened to change a position.
+  const layoutKey = useMemo(
+    () =>
+      nodes
+        .map((n) => `${n.id}:${Math.round(n.x)}:${Math.round(n.y)}:${n.size}:${n.laidOut ? 1 : 0}`)
+        .join('|') +
+      '#' +
+      edges.map((e) => `${e.from}>${e.to}:${e.strength}`).join('|'),
+    [nodes, edges],
   );
   const laidOut = useMemo(
-    () => spaceOutNodes(nodes, { minGap: 60, pinnedId: coreId }),
+    () => layoutBrain(nodes, edges, { incremental: true, minGap: 60, pinnedId: coreId }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [spaceKey, coreId],
+    [layoutKey, coreId],
   );
+
+  // Hand the settled coordinates up so they can be persisted. Only nodes that
+  // arrived without one are reported: everything else is already on disk, and
+  // re-sending it would write the file on every render.
+  const settledForNodes = useMemo(() => {
+    const out: Array<{ id: string; x: number; y: number }> = [];
+    for (const n of nodes) {
+      if (n.laidOut) continue;
+      const p = laidOut[n.id];
+      if (p) out.push({ id: n.id, x: p.x, y: p.y });
+    }
+    return out;
+  }, [nodes, laidOut]);
+
+  useEffect(() => {
+    if (settledForNodes.length > 0) onLayout?.(settledForNodes);
+  }, [settledForNodes, onLayout]);
 
   const fit = useMemo<FitBox | null>(() => {
     if (nodes.length === 0) return null;
@@ -107,15 +138,25 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
     return { minX, minY, maxX, maxY };
   }, [nodes, laidOut]);
 
-  // Re-arm the one-shot auto-fit only when the node-id set changes (add /
-  // remove / merge), not on every position tweak.
-  const fitKey = useMemo(() => nodes.map((n) => n.id).sort().join(','), [nodes]);
+  // Re-arm the one-shot auto-fit when the node-id set changes (add / remove /
+  // merge) OR when the layout moves the board. The id set alone is not enough:
+  // a re-layout can change the extent by an order of magnitude while keeping
+  // every id, which would leave the view framed on a box that no longer exists.
+  // Rounded to 50px so ordinary settling doesn't re-fit under the reader.
+  const fitKey = useMemo(() => {
+    const ids = nodes.map((n) => n.id).sort().join(',');
+    if (!fit) return ids;
+    const q = (v: number) => Math.round(v / 50);
+    return `${ids}#${q(fit.minX)},${q(fit.minY)},${q(fit.maxX)},${q(fit.maxY)}`;
+  }, [nodes, fit]);
 
-  const { view, panning, svgRef, movedRef, startPan, resetView, centerOn } = usePanZoom({
+  const { view, panning, svgRef, movedRef, startPan, resetView, zoomBy, centerOn } = usePanZoom({
     fit,
     fitKey,
     padding: 56,
-    minScale: 0.15,
+    // The packed layout spans a few thousand px on a real brain (vs the old
+    // 560x400 random box), so the fit scale needs room to go further out.
+    minScale: 0.05,
     maxScale: 2.5,
   });
 
@@ -123,14 +164,15 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
     ref,
     () => ({
       resetView,
-      // Center on the SPACED coordinates — raw node.x/y can be off after the
-      // minimum-spacing pass.
+      zoomBy,
+      // Center on the LAID-OUT coordinates — raw node.x/y is the position on
+      // disk, which for a node the layout just placed is not where it renders.
       focusNode: (id: string) => {
         const p = laidOut[id];
         if (p) centerOn(p.x, p.y);
       },
     }),
-    [resetView, centerOn, laidOut],
+    [resetView, zoomBy, centerOn, laidOut],
   );
 
   // Memoized: the glow's 10s decay tick re-renders this component, and

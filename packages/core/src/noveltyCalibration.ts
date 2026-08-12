@@ -16,8 +16,8 @@
 // can only ever move the cuts, never break the ladder.
 
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { brainLogPath } from './paths.js';
+import { writeFileAtomic } from './store.js';
 
 export const SAMPLES_FILE = 'novelty-samples.json';
 
@@ -57,11 +57,8 @@ export function appendSample(brainPath: string, novelty: number, max = MAX_SAMPL
   try {
     if (!Number.isFinite(novelty)) return;
     const samples = [...readSamples(brainPath), Math.min(1, Math.max(0, novelty))].slice(-max);
-    const target = samplesPath(brainPath);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const tmp = path.join(path.dirname(target), `.novelty-samples.tmp-${process.pid}`);
-    fs.writeFileSync(tmp, JSON.stringify({ version: 1, samples } satisfies SamplesFile) + '\n');
-    fs.renameSync(tmp, target);
+    // Shares store.ts's Windows EPERM/EBUSY rename retry.
+    writeFileAtomic(samplesPath(brainPath), JSON.stringify({ version: 1, samples } satisfies SamplesFile) + '\n');
   } catch {
     /* fail-open: calibration telemetry must never break a hook */
   }

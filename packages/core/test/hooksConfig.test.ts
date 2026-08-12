@@ -135,6 +135,71 @@ describe('hooksConfig', () => {
 // no hook output can set it, terminalSequence is allowlisted to notification
 // escapes, and claudeCode.useTerminal defaults to false so there is usually no
 // terminal to type /model into. Verified against Claude Code 2.1.228.
+// `install-hooks --apply-model` on a workspace that already has the plain
+// prompt hook must UPGRADE it. Reporting "skipped" and doing nothing is how the
+// actuator silently fails to turn on.
+describe('installHooks --apply-model upgrade', () => {
+  const promptCommand = (): string => {
+    const s = read();
+    return s.hooks.UserPromptSubmit[0].hooks[0].command;
+  };
+
+  it('adds the flag to an existing prompt hook and reports it as upgraded', () => {
+    installHooks(settingsPath);
+    expect(promptCommand()).toBe('nff-brain novelty --stdin-hook');
+
+    const r = installHooks(settingsPath, { applyModel: true });
+    expect(r.upgraded).toContain('UserPromptSubmit');
+    expect(r.skipped).not.toContain('UserPromptSubmit');
+    expect(promptCommand()).toBe('nff-brain novelty --stdin-hook --apply-model');
+  });
+
+  it('is idempotent — no double-append, and reports skipped the second time', () => {
+    installHooks(settingsPath);
+    installHooks(settingsPath, { applyModel: true });
+    const r = installHooks(settingsPath, { applyModel: true });
+    expect(promptCommand()).toBe('nff-brain novelty --stdin-hook --apply-model');
+    expect(r.upgraded).not.toContain('UserPromptSubmit');
+    expect(r.skipped).toContain('UserPromptSubmit');
+  });
+
+  it('a later plain reinstall does NOT strip the flag', () => {
+    installHooks(settingsPath, { applyModel: true });
+    installHooks(settingsPath); // routine reinstall, no flag
+    expect(promptCommand()).toContain('--apply-model');
+  });
+
+  it('installs with the flag from scratch', () => {
+    const r = installHooks(settingsPath, { applyModel: true });
+    expect(r.installed).toContain('UserPromptSubmit');
+    expect(promptCommand()).toBe('nff-brain novelty --stdin-hook --apply-model');
+  });
+
+  it("leaves the user's own UserPromptSubmit hook alone", () => {
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] } }),
+    );
+    installHooks(settingsPath, { applyModel: true });
+    const commands = read().hooks.UserPromptSubmit.flatMap((m: any) => m.hooks.map((h: any) => h.command));
+    expect(commands).toContain('echo mine'); // untouched
+    expect(commands).toContain('nff-brain novelty --stdin-hook --apply-model');
+  });
+
+  it('still repairs a missing distill timeout alongside the upgrade', () => {
+    installHooks(settingsPath);
+    // Simulate a pre-timeout install.
+    const s = read();
+    delete s.hooks.SessionEnd[0].hooks[0].timeout;
+    fs.writeFileSync(settingsPath, JSON.stringify(s));
+
+    installHooks(settingsPath, { applyModel: true });
+    expect(read().hooks.SessionEnd[0].hooks[0].timeout).toBe(DISTILL_TIMEOUT_S);
+    expect(promptCommand()).toContain('--apply-model');
+  });
+});
+
 describe('writeModelSetting', () => {
   it('creates the file when absent', () => {
     expect(writeModelSetting(settingsPath, 'fable')).toEqual({ previous: null });

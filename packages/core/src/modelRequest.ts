@@ -8,6 +8,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { NoveltyContributor } from './novelty.js';
+import { writeFileAtomic } from './store.js';
 
 export const MODEL_REQUEST_FILE = 'model-request.json';
 
@@ -36,12 +37,11 @@ export function readModelRequest(brainPath: string): ModelRequest | null {
   }
 }
 
-/** Atomic write (temp + rename) so the watcher never sees a half-written file. */
+/**
+ * Atomic write so the watcher never sees a half-written file. Shares store.ts's
+ * Windows EPERM/EBUSY rename retry; its temp files are dotfiles in the same
+ * directory, which the extension's `model-request.json` watcher ignores.
+ */
 export function writeModelRequest(brainPath: string, req: ModelRequest): void {
-  const target = modelRequestPath(brainPath);
-  const dir = path.dirname(target);
-  fs.mkdirSync(dir, { recursive: true });
-  const tmp = path.join(dir, `.model-request.tmp-${process.pid}`);
-  fs.writeFileSync(tmp, JSON.stringify(req, null, 2) + '\n');
-  fs.renameSync(tmp, target);
+  writeFileAtomic(modelRequestPath(brainPath), JSON.stringify(req, null, 2) + '\n');
 }

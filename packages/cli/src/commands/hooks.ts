@@ -23,6 +23,7 @@ export async function cmdInstallHooks(argv: string[]): Promise<void> {
   const result = installHooks(settingsPath, { autoModel, applyModel });
   if (result.backedUpTo) console.log(`backed up settings to ${result.backedUpTo}`);
   for (const ev of result.installed) console.log(`wired ${ev} hook in ${settingsPath}`);
+  for (const ev of result.upgraded) console.log(`${ev} hook already present — added --apply-model to it`);
   for (const ev of result.skipped) console.log(`${ev} hook already present — skipped`);
   if (result.installed.length) {
     console.log('\nClaude Code will now recall the brain at session start, light up the graph');
@@ -37,12 +38,12 @@ export async function cmdInstallHooks(argv: string[]): Promise<void> {
   }
   if (applyModel) {
     if (result.skipped.includes('UserPromptSubmit')) {
-      console.log('\n⚠ UserPromptSubmit already had an nff-brain hook, so --apply-model was NOT added.');
-      console.log('  Run uninstall-hooks first, or add --apply-model to that command by hand.');
+      console.log('\napply-model: already enabled on the UserPromptSubmit hook — nothing to change.');
     } else {
       console.log('\napply-model: the prompt hook now writes the chosen tier into .claude/settings.local.json.');
       console.log('Claude Code binds the model at session creation, so each session starts on the tier');
       console.log('the brain settled at during the previous one. Nothing can retier a running session.');
+      console.log('No /model is ever typed, so no model-switch confirmation appears.');
     }
   }
 }

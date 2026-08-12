@@ -6,13 +6,16 @@ import { cmdImport } from './commands/import.js';
 import { cmdIndex } from './commands/indexVectors.js';
 import { cmdExpand, cmdIngestGraphify } from './commands/ingestGraphify.js';
 import { cmdInit } from './commands/init.js';
+import { cmdLayout } from './commands/layout.js';
 import { cmdMerge } from './commands/merge.js';
 import { cmdAdd, cmdEdit, cmdList, cmdRm, cmdShow } from './commands/nodes.js';
 import { cmdNovelty } from './commands/novelty.js';
 import { cmdModel } from './commands/model.js';
+import { cmdPair } from './commands/pair.js';
 import { cmdRecall } from './commands/recall.js';
 import { cmdSearch } from './commands/search.js';
 import { cmdSemantic } from './commands/semantic.js';
+import { cmdServe } from './commands/serve.js';
 import { cmdUpgrade } from './commands/upgrade.js';
 import { cliVersion } from './util.js';
 
@@ -23,16 +26,25 @@ usage: nff-brain <command> [options]
 setup
   init [--hooks] [--global] [--import]
                                    create the brain; ingest CLAUDE.md/AGENTS.md via claude -p
+  import                           bare, in a terminal: interactive wizard — scan, pick scope and
+                                   time range, watch the mining live, review and apply in place
   import [--limit 40] [--since 7d] [--all] [--project P] [--min-confidence 0.5]
-         [--concurrency 4] [--model m] [--force] [--yes]
+         [--concurrency 4] [--model m] [--force] [--yes] [--no-interactive]
                                    mine PAST Claude Code sessions for durable memories, decisions,
                                    preferences, open tasks and past failures → .nff-brain/import-preview.md
-                                   (writes nothing to the brain; sends transcript excerpts to claude -p)
+                                   (writes nothing to the brain; sends transcript excerpts to claude -p;
+                                   any flag, a pipe, or --no-interactive skips the wizard)
   import --apply [--max-new 60] [--force]
                                    commit the items still checked in that preview
-  install-hooks [--global] [--auto-model]
-                                   wire SessionStart recall + SessionEnd distill into .claude/settings.json;
-                                   --auto-model also wires UserPromptSubmit novelty scoring (model switching)
+  install-hooks [--global] [--apply-model] [--auto-model]
+                                   wire SessionStart recall + SessionEnd distill into .claude/settings.json
+                                   --apply-model  let the prompt hook write the chosen tier into
+                                                  .claude/settings.local.json — the only thing that actually
+                                                  changes the model (applies to the NEXT session, no prompt).
+                                                  Upgrades an already-installed prompt hook in place
+                                   --auto-model   DEPRECATED: have the VS Code extension type /model into a
+                                                  terminal. Needs claudeCode.useTerminal (not the default) and
+                                                  triggers Claude's mid-session switch confirmation
   uninstall-hooks [--global]       remove exactly the nff-brain hook entries
   doctor                           check claude CLI, brain files, locks, hooks
   upgrade                          npm install -g nff-brain@latest
@@ -62,6 +74,12 @@ graph
   unlink <a> <b>                   remove a connection
   reinforce <a> <b> [--delta 0.1]  strengthen a connection
   merge [--ratio 0.25] [--llm]     fold least-used nodes into neighbours; --llm also dedups
+  layout [--full] [--iterations 300] [--dry-run]
+                                   settle node positions with the force-directed layout, so
+                                   connected nodes sit together and each disconnected component
+                                   becomes its own island. Incremental by default: nodes already
+                                   laid out keep their coordinates and only new ones are placed.
+                                   --full re-settles everything from scratch
 
 semantic search (optional — search works without it)
   semantic [status|install|uninstall]
@@ -74,6 +92,16 @@ codebase map (graphify bridge)
   ingest-graphify [--dir graphify-out] [--max-per-repo 10] [--no-llm]
                                    import a graphify graph as ≤10 intent nodes per repo
   expand <id>                      list a codebase-map node's underlying code entities
+
+browser (Chrome extension transport)
+  serve [--port 7373] [--target global|project] [--allow-origin o] [--quiet]
+                                   loopback HTTP server the Chrome extension pairs with;
+                                   captures land in a clip queue the next session drains.
+                                   Foreground — Ctrl-C stops it
+  pair [--list] [--revoke <id>] [--reset]
+                                   open a 5-minute pairing window and print the code;
+                                   --reset revokes every client and rotates the server
+                                   identity (works with the server down)
 
 Writes target <workspace>/.nff-brain/brain.json; add --global for ~/.nff-brain/brain.json.
 `;
@@ -97,10 +125,13 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   unlink: cmdUnlink,
   reinforce: cmdReinforce,
   merge: cmdMerge,
+  layout: cmdLayout,
   semantic: cmdSemantic,
   index: cmdIndex,
   'ingest-graphify': cmdIngestGraphify,
   expand: cmdExpand,
+  serve: cmdServe,
+  pair: cmdPair,
   doctor: () => cmdDoctor(),
   upgrade: () => cmdUpgrade(),
 };

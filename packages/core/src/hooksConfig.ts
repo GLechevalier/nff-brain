@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeFileAtomic } from './store.js';
 
 // Safe editing of Claude Code's settings.json hook config. The cardinal rule:
 // MERGE, never clobber — users have their own hooks and unknown keys in there.
@@ -20,7 +21,8 @@ export const NOVELTY_COMMAND = 'nff-brain novelty --stdin-hook';
 // settings.json so the behaviour is discoverable rather than hidden in an env
 // var. Claude Code binds the model at session creation, so it steers the NEXT
 // session — see writeModelSetting.
-export const APPLY_MODEL_COMMAND = 'nff-brain novelty --stdin-hook --apply-model';
+export const APPLY_MODEL_FLAG = '--apply-model';
+export const APPLY_MODEL_COMMAND = `${NOVELTY_COMMAND} ${APPLY_MODEL_FLAG}`;
 // Without an explicit timeout Claude Code cancels SessionEnd hooks after a
 // short grace (<20s, proven in print mode) — a real haiku distill takes ~25s,
 // so the brain would silently never learn. 120s covers the 60s inner LLM
@@ -63,11 +65,11 @@ function readSettings(filePath: string): SettingsShape {
   }
 }
 
+// Shares store.ts's Windows EPERM/EBUSY rename retry — Defender and indexers
+// briefly hold files, and .claude/settings.json is exactly the kind of file an
+// editor also has open.
 function writeSettings(filePath: string, settings: SettingsShape): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n');
-  fs.renameSync(tmp, filePath);
+  writeFileAtomic(filePath, JSON.stringify(settings, null, 2) + '\n');
 }
 
 export function localSettingsPath(workspaceRoot: string): string {
@@ -114,6 +116,7 @@ function hasMarkerHook(matchers: HookMatcher[] | undefined): boolean {
 export interface InstallResult {
   installed: string[]; // event names newly wired
   skipped: string[]; // event names that already had an nff-brain hook
+  upgraded: string[]; // already present, but the command gained a flag in place
   backedUpTo?: string;
 }
 
@@ -122,7 +125,7 @@ export function installHooks(
   opts: { autoModel?: boolean; applyModel?: boolean } = {},
 ): InstallResult {
   const settings = readSettings(settingsPath);
-  const result: InstallResult = { installed: [], skipped: [] };
+  const result: InstallResult = { installed: [], skipped: [], upgraded: [] };
 
   // One-time backup before our first ever edit of this file.
   const backup = `${settingsPath}.bak-nff-brain`;
@@ -157,7 +160,23 @@ export function installHooks(
           }
         }
       }
-      result.skipped.push(event);
+      // Upgrade an existing prompt hook in place: `install-hooks --apply-model`
+      // on a workspace that already has the plain hook would otherwise report
+      // "skipped" and quietly do nothing. Add-only — a later plain reinstall
+      // must never strip the flag back off and silently disable the actuator.
+      let upgraded = false;
+      if (event === 'UserPromptSubmit' && opts.applyModel) {
+        for (const m of matchers) {
+          for (const h of m.hooks ?? []) {
+            if (typeof h.command === 'string' && h.command.includes(MARKER) && !h.command.includes(APPLY_MODEL_FLAG)) {
+              h.command = `${h.command} ${APPLY_MODEL_FLAG}`;
+              patched = true;
+              upgraded = true;
+            }
+          }
+        }
+      }
+      (upgraded ? result.upgraded : result.skipped).push(event);
       continue;
     }
     const entry: HookEntry = { type: 'command', command };

@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { makeClaudeShim, writeOneShot, writeSession as writeSessionIn } from './fixtures/history.js';
 
 // End-to-end for `nff-brain import` over the BUILT CLI (run
 // `npm run build -w nff-brain` first) against a SYNTHETIC ~/.claude tree and
@@ -39,39 +40,8 @@ function runCli(
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
-/** Encode a cwd the way Claude Code names its project folders. */
-const enc = (cwd: string) => path.resolve(cwd).replace(/[^A-Za-z0-9]/g, '-');
-
-/** A synthetic transcript, padded past the size floors. */
-function writeSession(sessionId: string, opts: { marker?: string; title?: string; cwd: string }): void {
-  const dir = path.join(fakeHome, 'projects', enc(opts.cwd));
-  fs.mkdirSync(dir, { recursive: true });
-  const base = { sessionId, cwd: opts.cwd, version: '2.1.210', gitBranch: 'main' };
-  const lines: string[] = [
-    // Real transcripts open with a state record carrying no cwd.
-    JSON.stringify({ type: 'queue-operation', operation: 'enqueue', sessionId }),
-    JSON.stringify({
-      ...base,
-      type: 'user',
-      message: { role: 'user', content: `Please fix the thing. ${opts.marker ?? ''}` },
-      timestamp: '2026-08-01T10:00:00.000Z',
-    }),
-    JSON.stringify({
-      ...base,
-      type: 'user',
-      message: { role: 'user', content: 'and also the other thing' },
-      timestamp: '2026-08-01T10:05:00.000Z',
-    }),
-    JSON.stringify({
-      ...base,
-      type: 'assistant',
-      message: { role: 'assistant', content: [{ type: 'text', text: `working on it ${'y'.repeat(6000)}` }] },
-      timestamp: '2026-08-01T10:06:00.000Z',
-    }),
-  ];
-  if (opts.title) lines.push(JSON.stringify({ type: 'ai-title', aiTitle: opts.title, sessionId }));
-  fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), lines.join('\n'));
-}
+const writeSession = (sessionId: string, opts: { marker?: string; title?: string; cwd: string }): void =>
+  writeSessionIn(fakeHome, sessionId, opts);
 
 const previewPath = () => path.join(ws, '.nff-brain', 'import-preview.md');
 const preview = () => fs.readFileSync(previewPath(), 'utf8');
@@ -96,14 +66,7 @@ beforeAll(() => {
   fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'nff-brain-e2e-home-'));
 
   shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nff-brain-e2e-impshim-'));
-  if (process.platform === 'win32') {
-    shimBin = path.join(shimDir, 'claude.cmd');
-    fs.writeFileSync(shimBin, `@echo off\r\nnode "${SHIM_JS}" %*\r\n`);
-  } else {
-    shimBin = path.join(shimDir, 'claude');
-    fs.writeFileSync(shimBin, `#!/bin/sh\nexec node "${SHIM_JS}" "$@"\n`);
-    fs.chmodSync(shimBin, 0o755);
-  }
+  shimBin = makeClaudeShim(shimDir, SHIM_JS);
 
   writeSession('sess-alpha', { marker: 'MARKER-ALPHA', title: 'atomic-save-fix', cwd: ws });
   writeSession('sess-beta', { marker: 'MARKER-BETA', title: 'packaging-cleanup', cwd: ws });
@@ -111,17 +74,7 @@ beforeAll(() => {
 
   // nff-brain's OWN claude -p call. Its project folder holds these alongside
   // real sessions, and mining one back in would feed the brain its own prompt.
-  fs.writeFileSync(
-    path.join(fakeHome, 'projects', enc(ws), 'sess-oneshot.jsonl'),
-    [
-      JSON.stringify({ type: 'queue-operation', operation: 'enqueue' }),
-      JSON.stringify({
-        type: 'user',
-        cwd: ws,
-        message: { role: 'user', content: `You are the memory distiller for a coding agent. ${'z'.repeat(6000)}` },
-      }),
-    ].join('\n'),
-  );
+  writeOneShot(fakeHome, ws);
 
   // A different project — out of scope for the default run.
   writeSession('sess-elsewhere', {
@@ -238,6 +191,13 @@ describe('e2e import (mocked claude)', () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/no past sessions found/);
     await rmRetry(bare);
+  });
+
+  it('stays non-interactive when stdio is piped — no ANSI escapes anywhere', () => {
+    // spawnSync pipes stdio, so isTTY is false in the child; the wizard gate
+    // must stay closed and the classic byte-for-byte output must come back.
+    const r = runCli(['import', '--force']);
+    expect(r.stdout + r.stderr).not.toMatch(/\u001b\[/);
   });
 
   it('fails open when the LLM hangs — exit 0, and no brain is written', async () => {

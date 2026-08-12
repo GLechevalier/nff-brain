@@ -50,12 +50,16 @@ export function loadBrain(filePath: string): BrainFile | null {
  * Atomic write: temp file in the same dir, fsync, rename over the target, with
  * the Windows EPERM/EBUSY retry loop (Defender and indexers briefly hold files).
  * Shared by saveBrain and the vector sidecar — do not reimplement the retry.
+ *
+ * `mode` is applied to the TEMP file at creation, so the renamed result is
+ * never briefly world-readable. serve.json (which holds bearer tokens) passes
+ * 0600; saveServeConfig also chmods afterwards to defeat a restrictive umask.
  */
-export function writeFileAtomic(filePath: string, text: string): void {
+export function writeFileAtomic(filePath: string, text: string, mode?: number): void {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `.brain.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
-  const fd = fs.openSync(tmp, 'w');
+  const fd = mode === undefined ? fs.openSync(tmp, 'w') : fs.openSync(tmp, 'w', mode);
   try {
     fs.writeSync(fd, text);
     fs.fsyncSync(fd);

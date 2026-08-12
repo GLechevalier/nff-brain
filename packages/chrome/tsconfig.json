@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    // NOT "WebWorker". DOM + WebWorker in one program produces hundreds of
+    // duplicate-identifier errors (self, fetch, Event, MessageEvent, …). The
+    // service worker only needs chrome.*, fetch, AbortSignal and
+    // crypto.randomUUID — all present in DOM + ES2022.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["chrome", "node"]
+  },
+  "include": ["src/**/*.ts", "popup/**/*.ts", "test/**/*.ts", "build.mjs", "zip.mjs"]
+}

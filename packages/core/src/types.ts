@@ -56,6 +56,10 @@ export interface BrainNode {
   x: number;
   y: number;
   size: number;
+  // True once a layout pass has settled this position. New nodes lack it, which
+  // is how the incremental layout tells "seed me next to my neighbours" from
+  // "leave me exactly where I am". Optional, so old brains load untouched.
+  laidOut?: boolean;
   // seed = init/user-authored (never auto-evicted)
   // graphify = imported codebase map (replaced wholesale on re-ingest, never folded)
   // import = mined from past Claude Code sessions (evictable and mergeable like agent)
