@@ -18,6 +18,7 @@ export const NFF_PROMPT_MARKERS = {
   curator: 'You are the memory curator',
   explainer: 'You are the graph explainer',
   archaeologist: 'You are the memory archaeologist',
+  clipper: 'You are the memory clipper',
 } as const;
 
 export const NFF_PROMPT_PREFIXES: readonly string[] = Object.values(NFF_PROMPT_MARKERS);

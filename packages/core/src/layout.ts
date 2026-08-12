@@ -44,14 +44,24 @@ export interface LayoutEdge {
 export const LABEL_PAD = 14;
 
 /**
- * Clear paper between two node squares, and the single biggest lever on how
- * spread out the board feels. Measured on a 103-node brain: 60 gave 16.6 Mpx of
- * board at 0.75% ink; 36 gives 9.9 Mpx at 1.26%, still ~50px of clear space
- * between two 32px squares, and no overlaps either way.
+ * Clear paper between two node squares — the single biggest lever on how spread
+ * out the board feels, and the only one still doing anything: the overlap pass
+ * is fully binding, so nearest-neighbour distance comes out at exactly
+ * `size_a + size_b + minGap + LABEL_PAD` everywhere.
+ *
+ * Measured on a 103-node brain (board area / ink coverage, always 0 overlaps):
+ *   60 → 16.6 Mpx / 0.75%      24 →  6.7 Mpx / 1.84%
+ *   36 →  9.9 Mpx / 1.36%      10 →  4.5 Mpx / 2.78%   ← here
+ *   16 →  5.4 Mpx / 2.30%       4 →  3.7 Mpx / 3.32%
+ *
+ * Hard floor: two 32px squares are 46px apart centre-to-centre even at minGap 0,
+ * so there is little left below 4. What degrades first is not the squares but
+ * the LABELS — titles are far wider than the nodes and already overlap; tighter
+ * spacing overlaps more of them. That, not collision, is the real limit.
  */
-export const DEFAULT_MIN_GAP = 36;
+export const DEFAULT_MIN_GAP = 10;
 /** Clear space between rings of the radial tree. Secondary to DEFAULT_MIN_GAP. */
-export const DEFAULT_RING_GAP = 120;
+export const DEFAULT_RING_GAP = 60;
 
 // Stable 32-bit string hash (FNV-1a) — for deterministic tie-breaks and for the
 // webview's per-node drift direction, which derives from the same hash.

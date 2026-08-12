@@ -12,6 +12,9 @@ const STATIC = [
   ['manifest.json', 'manifest.json'],
   ['popup/popup.html', 'popup.html'],
   ['popup/popup.css', 'popup.css'],
+  ['devtools/devtools.html', 'devtools.html'],
+  ['devtools/panel.html', 'panel.html'],
+  ['devtools/panel.css', 'panel.css'],
   ['icons', 'icons'],
 ];
 
@@ -37,13 +40,26 @@ const common = {
   minify: !watch,
 };
 
+// One content-script bundle per recorder adapter; a new adapter is one line
+// here plus its registry entry (src/recorderRegistry.ts scriptFile must match).
+const CONTENT = [
+  ['content/github.ts', 'rec-github.js'],
+  ['content/linkedin.ts', 'rec-linkedin.js'],
+];
+
 const swCtx = await esbuild.context({ ...common, entryPoints: ['src/sw.ts'], outfile: `${OUT}/sw.js` });
 const popupCtx = await esbuild.context({ ...common, entryPoints: ['popup/main.ts'], outfile: `${OUT}/popup.js` });
+const devtoolsCtx = await esbuild.context({ ...common, entryPoints: ['devtools/devtools.ts'], outfile: `${OUT}/devtools.js` });
+const panelCtx = await esbuild.context({ ...common, entryPoints: ['devtools/panel.ts'], outfile: `${OUT}/panel.js` });
+const contentCtxs = await Promise.all(
+  CONTENT.map(([entry, out]) => esbuild.context({ ...common, entryPoints: [entry], outfile: `${OUT}/${out}` })),
+);
+const contexts = [swCtx, popupCtx, devtoolsCtx, panelCtx, ...contentCtxs];
 
 copyStatic();
 
 if (watch) {
-  await Promise.all([swCtx.watch(), popupCtx.watch()]);
+  await Promise.all(contexts.map((c) => c.watch()));
   let timer;
   for (const [from] of STATIC) {
     if (!fs.existsSync(from)) continue;
@@ -55,7 +71,7 @@ if (watch) {
   }
   console.log(`watching… load unpacked from ${path.resolve(OUT)}`);
 } else {
-  await Promise.all([swCtx.rebuild(), popupCtx.rebuild()]);
-  await Promise.all([swCtx.dispose(), popupCtx.dispose()]);
-  console.log('built dist/sw.js + dist/popup.js + statics');
+  await Promise.all(contexts.map((c) => c.rebuild()));
+  await Promise.all(contexts.map((c) => c.dispose()));
+  console.log('built dist/sw.js + dist/popup.js + dist/devtools.js + dist/panel.js + statics');
 }

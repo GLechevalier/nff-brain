@@ -14,6 +14,7 @@ import {
   runClaude,
   type RawDelta,
 } from '@nff-brain/core';
+import { drainClips } from '../clipDrain.js';
 import { refreshVectors } from '../semanticRefresh.js';
 import { flagStr, logToBrainDir, parseArgs, parseHookPayload, readStdin } from '../util.js';
 
@@ -47,6 +48,18 @@ export async function cmdDistill(argv: string[]): Promise<void> {
     }
     const paths = resolveBrainPaths(cwd);
     const target = args.flags.global === true ? paths.global : paths.project;
+
+    // Drain queued browser clips BEFORE the transcript early-returns below: a
+    // browsing-only session is exactly when the queue has content and the
+    // transcript is short or absent. Fail-open internally; never throws.
+    const drained = await drainClips(paths, { model: flagStr(args, 'model') });
+    if (drained.created.length > 0 || drained.refined.length > 0) {
+      // Clip nodes can land in either brain (clips carry their own target).
+      for (const brainPath of new Set([paths.global, paths.project])) {
+        const vec = await refreshVectors(brainPath);
+        if (vec.ran) logToBrainDir(brainPath, 'last-distill.log', `re-embedded ${vec.embedded} node(s) after clip drain`);
+      }
+    }
 
     if (!transcriptPath) {
       if (isHook) return;

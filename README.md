@@ -3,9 +3,11 @@
   <img src="public/images/tumbnail.png" alt="nff" width="640">
 </p>
 
-# nff-brain, self-improving context for less token burn
+# nff-brain, browser agent that runs in your tab, with your logins
 
-**Coding agents burn too many tokens, so we made a dynamic context tool that lives on Chrome and VSCode to constantly feed your agent.**
+**Your coding agent lives in your terminal. This one lives in your browser.**
+
+nff-brain is a Chrome that allows an agent to live within your browser or VS Code (though use VS Code is mainly for dev testing, use it on Chrome).
 
 <p>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>

@@ -41,8 +41,11 @@ export function serializeNodeMd(
         ? 'codebase map'
         : node.origin === 'import'
           ? 'imported from history'
-          : 'learned',
+          : node.origin === 'clip'
+            ? 'clipped from the web'
+            : 'learned',
     ...(typeof node.confidence === 'number' ? [`confidence ${node.confidence.toFixed(2)}`] : []),
+    ...(node.sourceUrl ? [`source ${node.sourceUrl}`] : []),
     `recalled ${node.recallCount ?? 0}×`,
     `updated ${node.lastUpdated}`,
     ...(extra?.source ? [`source ${extra.source}`] : []),

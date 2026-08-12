@@ -10,8 +10,10 @@ import {
   ACTIVITY_TEXT_MAX,
   ACTIVITY_TITLE_MAX,
   ACTIVITY_URL_MAX,
+  RECENT_MAX,
+  RECENT_WINDOW_MS,
 } from './schema.js';
-import type { ActivityRecord, Delivery } from './schema.js';
+import type { ActivityRecord, Delivery, RecentClip } from './schema.js';
 import { getActivity, setActivity } from './storage.js';
 
 export interface NewActivity {
@@ -48,11 +50,11 @@ export async function appendActivity(item: NewActivity, now = new Date()): Promi
   return next;
 }
 
-export async function markDelivery(id: string, delivery: Delivery): Promise<void> {
+export async function markDelivery(id: string, delivery: Delivery, clipId?: string): Promise<void> {
   const all = await getActivity();
   const i = all.findIndex((r) => r.id === id);
   if (i < 0) return;
-  all[i] = { ...all[i]!, delivery };
+  all[i] = { ...all[i]!, delivery, ...(clipId ? { clipId } : {}) };
   await setActivity(all);
 }
 
@@ -63,4 +65,46 @@ export async function clearActivity(): Promise<void> {
 /** How many brain nodes are still traceable to buffered activity. */
 export function removableNodeCount(records: readonly ActivityRecord[]): number {
   return records.reduce((n, r) => n + r.nodeIds.length, 0);
+}
+
+/** Any record still waiting for the drain to report where its clip landed? */
+export function hasUnresolvedClips(records: readonly ActivityRecord[]): boolean {
+  return records.some((r) => r.clipId !== undefined && r.nodeIds.length === 0);
+}
+
+/**
+ * Fill nodeIds from a /v1/clips/map response. PURE — the caller persists.
+ * Only empty nodeIds are filled, so re-applying the same map is a no-op and a
+ * later (never expected, but wire is wire) conflicting map cannot rewrite what
+ * the user was already shown.
+ */
+export function applyClipMap(
+  records: readonly ActivityRecord[],
+  map: ReadonlyArray<{ clipId: string; nodeIds: string[] }>,
+): { records: ActivityRecord[]; changed: boolean } {
+  const byClip = new Map(map.map((m) => [m.clipId, m.nodeIds]));
+  let changed = false;
+  const next = records.map((r) => {
+    if (!r.clipId || r.nodeIds.length > 0) return r;
+    const nodeIds = byClip.get(r.clipId);
+    if (!nodeIds || nodeIds.length === 0) return r;
+    changed = true;
+    return { ...r, nodeIds: [...nodeIds] };
+  });
+  return { records: changed ? next : [...records], changed };
+}
+
+// ── recent-capture dedupe (pure halves; capture.ts persists the ring) ────────
+
+export function recentKey(kind: string, url: string | undefined, text: string): string {
+  return `${kind}|${url ?? ''}|${text.slice(0, 200)}`;
+}
+
+export function seenRecently(ring: readonly RecentClip[], key: string, nowMs: number): boolean {
+  return ring.some((r) => r.key === key && nowMs - r.atMs < RECENT_WINDOW_MS);
+}
+
+export function pushRecent(ring: readonly RecentClip[], key: string, nowMs: number): RecentClip[] {
+  const fresh = ring.filter((r) => nowMs - r.atMs < RECENT_WINDOW_MS && r.key !== key);
+  return [{ key, atMs: nowMs }, ...fresh].slice(0, RECENT_MAX);
 }

@@ -134,6 +134,19 @@ describe('pruneBrain', () => {
     expect(brain.nodes.filter((n) => n.origin === 'graphify')).toHaveLength(3);
     expect(brain.nodes.some((n) => n.id === 'n0')).toBe(false); // coldest agent evicted
   });
+
+  it('clip nodes are never victims and do not count toward the budget', () => {
+    const brain = emptyBrain();
+    // Same protected-class shape as graphify: clips live on their own cap
+    // (pruneClips) and must stay retractable, so the 400-cap ignores them.
+    for (let i = 0; i < 3; i++) upsertNode(brain, node(`clip${i}`, { origin: 'clip', recallCount: 0 }));
+    for (let i = 0; i < 3; i++) upsertNode(brain, node(`n${i}`, { recallCount: i }));
+    expect(pruneBrain(brain, 3)).toBe(0);
+    upsertNode(brain, node('n3', { recallCount: 9 }));
+    expect(pruneBrain(brain, 3)).toBe(1);
+    expect(brain.nodes.filter((n) => n.origin === 'clip')).toHaveLength(3);
+    expect(brain.nodes.some((n) => n.id === 'n0')).toBe(false);
+  });
 });
 
 describe('buildDistillPrompt', () => {

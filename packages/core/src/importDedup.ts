@@ -157,8 +157,10 @@ export function reconcileWithBrain(
   const seen = opts.seenHashes ?? new Set<string>();
 
   // graphify nodes are replaced wholesale on re-ingest, so refining one would
-  // silently lose the edit at the next `ingest-graphify`.
-  const pool: BrainNode[] = brain.nodes.filter((n) => n.origin !== 'graphify');
+  // silently lose the edit at the next `ingest-graphify`. Clip nodes must stay
+  // pure clip content (retraction deletes by origin), so imports may not refine
+  // them either.
+  const pool: BrainNode[] = brain.nodes.filter((n) => n.origin !== 'graphify' && n.origin !== 'clip');
   const byId = new Map(pool.map((n) => [n.id, n]));
   const taken = new Set(brain.nodes.map((n) => n.id));
   const counters: Record<string, number> = {};

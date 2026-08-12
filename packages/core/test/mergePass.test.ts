@@ -42,6 +42,10 @@ describe('chooseSurvivor', () => {
     expect(chooseSurvivor(node('a'), node('b', { origin: 'graphify' }), degree)).toBeNull();
     expect(chooseSurvivor(node('a', { origin: 'graphify' }), node('b', { origin: 'graphify' }), degree)).toBeNull();
   });
+  it('never merges when either node is a clip — retraction deletes by origin', () => {
+    expect(chooseSurvivor(node('a', { origin: 'clip' }), node('b'), degree)).toBeNull();
+    expect(chooseSurvivor(node('a'), node('b', { origin: 'clip' }), degree)).toBeNull();
+  });
   it('higher degree wins between agents, id tiebreak', () => {
     const deg = new Map([
       ['a', 1],
@@ -123,5 +127,20 @@ describe('foldLeastUsed', () => {
     const map = brain.nodes.find((n) => n.id === 'map');
     expect(map).toBeTruthy(); // never a victim
     expect(map!.content).toBe('content map'); // never absorbed anything
+  });
+
+  it('clip nodes are never victims nor absorb folded content', () => {
+    const brain = emptyBrain();
+    // Same trap as graphify: a cold clip node strongly linked to the coldest
+    // agent node. If it absorbed the fold, /v1/retract would delete agent
+    // knowledge along with the clip.
+    upsertNode(brain, node('web-clip', { origin: 'clip', recallCount: 0 }));
+    for (let i = 0; i < 12; i++) upsertNode(brain, node(`n${i}`, { recallCount: i + 1 }));
+    upsertEdge(brain, { from: 'n0', to: 'web-clip', strength: 0.95 });
+    const folded = foldLeastUsed(brain, 0.25);
+    expect(folded).toBeGreaterThan(0);
+    const webClip = brain.nodes.find((n) => n.id === 'web-clip');
+    expect(webClip).toBeTruthy();
+    expect(webClip!.content).toBe('content web-clip');
   });
 });

@@ -23,10 +23,12 @@
 
 import { createMenus, onMenuClicked } from './capture.js';
 import { paintBadge } from './badge.js';
+import { getNodes, retract, searchBrain } from './client.js';
 import { HEALTH_ALARM, currentPhase, ensureAlarm, pairWithServer, probe, unpair } from './connection.js';
 import { clearActivity, removableNodeCount } from './activity.js';
 import { parseRuleInput, ruleLabel } from './gate.js';
 import { derivePhase } from './health.js';
+import { ensureRecorderScripts, onRecorderEvent, recorderPublicState, setRecorderEnabled } from './recorder.js';
 import { getActivity, getAllowlist, getCapture, getHealth, getPairing, seedDefaults, setAllowlist, setCapture } from './storage.js';
 import type { PopupToSw, PublicState, SwToPopup } from './protocol.js';
 
@@ -48,6 +50,7 @@ async function publicState(): Promise<PublicState> {
     rules: allowlist.rules,
     activityCount: activity.length,
     removableNodeCount: removableNodeCount(activity),
+    recorders: await recorderPublicState(),
   };
 }
 
@@ -100,12 +103,47 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       break;
     }
 
-    case 'clearActivity':
-      // alsoRemoveNodes is accepted now and honoured once a drain reports which
-      // nodes came from which clip. Until then removableNodeCount is 0, so the
-      // popup never renders the checkbox and this can only be false.
+    // DevTools panel data — early returns with a data reply instead of the
+    // state snapshot. Routed through this worker so the panel never holds the
+    // bearer token.
+    case 'getNodes': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      return { type: 'nodes', data: await getNodes(pairing.port, pairing.token, msg.limit) };
+    }
+
+    case 'searchBrain': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      return { type: 'search', data: await searchBrain(pairing.port, pairing.token, msg.q, msg.limit) };
+    }
+
+    case 'setRecorderEnabled': {
+      const error = await setRecorderEnabled(msg.id, msg.enabled);
+      if (error) return { type: 'error', message: error };
+      break;
+    }
+
+    case 'clearActivity': {
+      if (msg.alsoRemoveNodes) {
+        const nodeIds = [...new Set((await getActivity()).flatMap((r) => r.nodeIds))];
+        if (nodeIds.length > 0) {
+          const pairing = await getPairing();
+          if (!pairing) return { type: 'error', message: 'not paired — nothing was deleted' };
+          try {
+            // The server enforces the real gates (origin 'clip', own-client
+            // attribution); `removed` is what actually went.
+            await retract(pairing.port, pairing.token, nodeIds);
+          } catch {
+            // Do NOT clear on failure: wiping the buffer now would orphan the
+            // clip→node mapping forever and the nodes would become undeletable.
+            return { type: 'error', message: 'could not reach the brain — nothing was deleted' };
+          }
+        }
+      }
       await clearActivity();
       break;
+    }
   }
   return { type: 'state', state: await publicState() };
 }
@@ -116,6 +154,9 @@ async function onInstalled(): Promise<void> {
   // and wipe the allowlist behind the user's back.
   await seedDefaults();
   createMenus();
+  // Registered content scripts are cleared on every extension update —
+  // reconcile them against stored recorder state here, idempotently.
+  await ensureRecorderScripts();
   await ensureAlarm();
   await paintBadge(await currentPhase(), (await getCapture()).enabled);
 }
@@ -139,7 +180,14 @@ chrome.alarms.onAlarm.addListener((alarm) => void onAlarm(alarm));
 chrome.contextMenus.onClicked.addListener((info, tab) => void onMenuClicked(info, tab));
 chrome.permissions.onAdded.addListener(() => void probe({ force: true }));
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Recorder events come from content scripts, are fire-and-forget, and must
+  // never flow into the popup message switch (their sender matters).
+  if ((msg as { type?: string })?.type === 'recorderEvent') {
+    void onRecorderEvent(msg, sender);
+    sendResponse({ type: 'state' }); // ack; content scripts ignore replies
+    return true;
+  }
   // NOT `async (msg) => …`: Chrome ignores a returned Promise (Firefox does
   // not). The literal `return true` below is what keeps the message port open
   // until sendResponse fires.

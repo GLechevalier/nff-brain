@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Brain</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <!--
+      STATIC SKELETON, same discipline as popup.html: panelPaint.ts only sets
+      textContent, toggles classes and replaces list children. Everything the
+      panel shows arrives via the service worker — this document never holds
+      the pairing token and never fetches.
+    -->
+    <header class="bar">
+      <span class="wordmark">nff-brain</span>
+      <span id="dot" class="dot"></span>
+      <span id="workspace" class="muted ellipsis"></span>
+      <span id="counts" class="muted push"></span>
+      <span id="updated" class="muted small"></span>
+    </header>
+
+    <div id="disconnected" class="banner hidden">
+      Brain not reachable — pair from the extension popup.
+    </div>
+
+    <nav class="tabs">
+      <button id="tab-search" class="tab active">Search</button>
+      <button id="tab-ask" class="tab">Ask</button>
+    </nav>
+
+    <section id="search-view" class="view">
+      <input id="q" class="input" placeholder="Search your brain…" autocomplete="off" spellcheck="false" />
+      <div id="results-label" class="muted small"></div>
+      <ul id="results" class="list"></ul>
+    </section>
+
+    <section id="ask-view" class="view hidden">
+      <div id="transcript" class="transcript"></div>
+      <form id="ask-form">
+        <input id="ask-input" class="input" placeholder="Ask your brain — e.g. what did I learn about OAuth callbacks" autocomplete="off" spellcheck="false" />
+      </form>
+      <p class="muted small">
+        Retrieval-only: answers are your saved nodes ranked by relevance — nothing is generated.
+      </p>
+    </section>
+
+    <script src="panel.js"></script>
+  </body>
+</html>

@@ -73,6 +73,21 @@ process.stdin.on('end', () => {
     } else {
       process.stdout.write('{"memories":[],"decisions":[],"preferences":[],"tasks":[],"failures":[]}');
     }
+  } else if (prompt.includes('memory clipper')) {
+    // clip drain: named category arrays, entries addressed by clip INDEX.
+    // Index 0 → a strategy node, index 1 → a rules node; anything past that is
+    // deliberately omitted (the "worthless clip" path — still ledgered).
+    process.stdout.write(
+      JSON.stringify({
+        strategy: [
+          { i: 0, title: 'MQTT keepalive default', content: 'Brokers drop idle clients at 90s, so keepalive must be under 60.' },
+        ],
+        rules: [
+          { i: 1, title: 'CORS preflight before auth', content: 'Answer OPTIONS before checking bearer tokens or the browser never sends them.' },
+        ],
+        duplicate: [],
+      }),
+    );
   } else if (prompt.includes('graph explainer')) {
     // ingest-graphify: batched intent explanations keyed by brain node id
     process.stdout.write(

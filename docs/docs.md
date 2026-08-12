@@ -645,6 +645,69 @@ Draining is two-phase (`takeClips` → `finishTake`) so the lock is never held
 across an LLM call. A batch whose drain died mid-flight is re-delivered — at
 least once, never zero times.
 
+### The drain (clips → nodes)
+
+The SessionEnd hook drains BOTH queues (global + project) before the transcript
+distill and before its early returns — a browsing-only session has a short
+transcript and a full queue, and must still mint nodes. One `claude -p` call
+(45 s cap, batch of ≤25; overflow stays queued) proposes nodes as six NAMED
+category arrays addressed by clip INDEX (`packages/core/src/clipDistill.ts` —
+a model cannot invent a category it never types, and clip ids never reach it).
+`applyClips` mints them as `origin: 'clip'` with a `sourceUrl`, and
+`nff-brain clips --drain` runs the same path on demand with no session.
+
+Clip nodes are a protected class, symmetric with graphify: exempt from the
+400-node agent cap and from every merge/fold (a clip node must contain ONLY
+clip content — `/v1/retract` deletes by origin, so folding agent knowledge into
+one would let the extension destroy it). They live on their own caps instead:
+at most 60 nodes (`pruneClips`, coldest first) and their own recall budget of 3
+preamble slots, rendered `- [clip] Title: … (from host)` — clips never displace
+the 12 agent slots and never trigger the whole-graph bypass.
+
+`clip-map.jsonl` beside each brain is the drain's ledger: one line per
+processed clip recording the node ids it minted (`nodeIds: []` = processed,
+judged worthless — still deduped). It is what makes at-least-once delivery
+effectively-once, and it powers the feedback loop: the extension polls
+`GET /v1/clips/map` (filtered server-side to the requesting client's own clips)
+to fill each activity record's `nodeIds`, which is what finally lights up the
+popup's "also delete the nodes" checkbox. That deletion is `POST /v1/retract`,
+gated three independent ways per node: requested by id ∧ `origin === 'clip'` ∧
+attributed to the requesting client's own clips in the ledger. The origin gate
+is the hard security line — the extension can never delete agent, seed or
+imported knowledge, even via a poisoned ledger.
+
+### The DevTools panel
+
+F12 → **Brain**: node counts (project/global/merged), a search tab, and an Ask
+tab. Both are served by `GET /v1/search` (plus `GET /v1/nodes` for counts and
+the recent list) — lexical `fuseRanked` over the merged brain, read as a
+lock-free mtime-cached snapshot, which is what makes the panel update within
+one 5-second poll of a SessionEnd write with zero file watchers. The Ask tab is
+deliberately **retrieval-only**: answers are ranked nodes with their related
+edges as citations, nothing is generated, and the panel says so. All panel HTTP
+goes through the service worker — the pairing token never enters the panel
+document, which makes zero network requests of its own.
+
+### Recorders
+
+Per-site, off by default, one adapter per domain (`github`: issues/PRs/comments
+you write; `linkedin`: invites you send). No static `content_scripts` — enabling
+a recorder runs `chrome.permissions.request` for that ONE site in the popup
+(the gesture lives there), then the worker registers the content script
+dynamically (`persistAcrossSessions`; re-reconciled on every update, which
+clears registrations). Disabling unregisters AND releases the permission.
+
+The bright line: a recorder observes only actions the user performs (form
+submits, the invite send click) — never profiles, feeds, or pages the user
+did not act on. Content scripts hold nothing worth stealing: no token, no
+fetch, no storage (CI-enforced by the content-isolation suite); they message
+the worker, which validates the sender, uses `sender.tab.url` (never the
+script's claim), and routes through the same `shouldCapture()` choke point as
+the context menu — so the global pause and the allowlist gate recorders with
+zero extra code. Events land in the ordinary clip queue as `kind: 'note'` with
+a machine-recognizable `recorder-event <action>` first line, and the drain
+distills them like any capture.
+
 ### Security
 
 Any web page can fetch `127.0.0.1`, and so can every other extension the user
@@ -703,13 +766,15 @@ and Administrators can.
 `packages/chrome` — MV3, built with esbuild into `packages/chrome/dist`, which
 is both the load-unpacked directory and the contents of the store zip.
 
-It requests exactly four permissions — `storage`, `alarms`, `activeTab`,
-`contextMenus` — **none of which shows an install-time warning**, and
-`manifest.test.ts` fails if that set ever widens. There are no
+It requests exactly five permissions — `storage`, `alarms`, `activeTab`,
+`contextMenus`, `scripting` — **none of which shows an install-time warning**,
+and `manifest.test.ts` fails if that set ever widens. There are no
 `host_permissions`: the extension reaches the server as an ordinary CORS request
 that the server answers. `optional_host_permissions` declares
-`http://127.0.0.1/*` as an escape hatch, requested from the popup's Connect
-button only if Chrome's local-network rules ever require it.
+`http://127.0.0.1/*` (an escape hatch, requested only if Chrome's local-network
+rules ever require it) plus one narrow pattern per recorder adapter
+(`https://github.com/*`, `https://www.linkedin.com/*`), each requested only
+when the user enables that recorder and released again on disable.
 
 `connect-src 'self' http://127.0.0.1:*` in the manifest makes Chrome itself
 enforce "no network calls off-device", and `bundlePurity.test.ts` asserts no

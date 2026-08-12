@@ -68,6 +68,23 @@ export interface ClipResponse {
   pending: number;
 }
 
+export interface ClipsMapEntry {
+  clipId: string;
+  nodeIds: string[];
+  at: string;
+}
+
+export interface ClipsMapResponse {
+  ok: true;
+  map: ClipsMapEntry[];
+}
+
+export interface RetractResponse {
+  ok: true;
+  /** Node ids the server actually deleted — reconcile against this, not the request. */
+  removed: string[];
+}
+
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
 }
@@ -101,6 +118,83 @@ export function isStatusResponse(v: unknown): v is StatusResponse {
   );
 }
 
+// ── DevTools Brain panel (item 3 + 5) ────────────────────────────────────────
+
+/** Poll cadence while the panel is visible; devtools pages live while open. */
+export const PANEL_POLL_MS = 5000;
+export const SEARCH_DEBOUNCE_MS = 300;
+
+export interface NodeSummary {
+  id: string;
+  title: string;
+  category: string;
+  origin: string;
+  source: 'project' | 'global';
+  lastUpdated: string;
+  excerpt: string;
+}
+
+export interface NodesResponse {
+  ok: true;
+  updatedAt: string | null;
+  merged: { nodes: number; edges: number };
+  workspace: { name: string; nodes: number; edges: number };
+  global: { nodes: number; edges: number };
+  recent: NodeSummary[];
+}
+
+export interface SearchHit extends NodeSummary {
+  score: number;
+  related: Array<{ id: string; title: string; strength: number }>;
+}
+
+export interface SearchResponse {
+  ok: true;
+  q: string;
+  count: number;
+  hits: SearchHit[];
+}
+
+export function isNodesResponse(v: unknown): v is NodesResponse {
+  return (
+    isObj(v) &&
+    v.ok === true &&
+    isObj(v.merged) &&
+    typeof v.merged.nodes === 'number' &&
+    Array.isArray(v.recent) &&
+    v.recent.every((n) => isObj(n) && typeof n.id === 'string' && typeof n.title === 'string')
+  );
+}
+
+export function isSearchResponse(v: unknown): v is SearchResponse {
+  return (
+    isObj(v) &&
+    v.ok === true &&
+    typeof v.q === 'string' &&
+    Array.isArray(v.hits) &&
+    v.hits.every((h) => isObj(h) && typeof h.id === 'string' && typeof h.title === 'string')
+  );
+}
+
+export function isClipsMapResponse(v: unknown): v is ClipsMapResponse {
+  return (
+    isObj(v) &&
+    v.ok === true &&
+    Array.isArray(v.map) &&
+    v.map.every(
+      (e) =>
+        isObj(e) &&
+        typeof e.clipId === 'string' &&
+        Array.isArray(e.nodeIds) &&
+        e.nodeIds.every((id: unknown) => typeof id === 'string'),
+    )
+  );
+}
+
+export function isRetractResponse(v: unknown): v is RetractResponse {
+  return isObj(v) && v.ok === true && Array.isArray(v.removed) && v.removed.every((id: unknown) => typeof id === 'string');
+}
+
 // ── popup ⇄ service worker ───────────────────────────────────────────────────
 
 export type PopupToSw =
@@ -111,13 +205,34 @@ export type PopupToSw =
   | { type: 'setCaptureEnabled'; enabled: boolean }
   | { type: 'addRule'; input: string }
   | { type: 'removeRule'; host: string }
-  | { type: 'clearActivity'; alsoRemoveNodes: boolean };
+  | { type: 'clearActivity'; alsoRemoveNodes: boolean }
+  // DevTools panel — routed through the worker so the token never enters the
+  // panel realm (same discipline as PublicState omitting it).
+  | { type: 'getNodes'; limit?: number }
+  | { type: 'searchBrain'; q: string; limit?: number }
+  // Recorders. The popup runs chrome.permissions.request itself (a user
+  // gesture is required there); this message only flips state + registration.
+  | { type: 'setRecorderEnabled'; id: string; enabled: boolean };
+
+/** The panel speaks the same channel as the popup. */
+export type PanelToSw = PopupToSw;
 
 /**
  * Everything the popup renders. Deliberately NOT StoredState: the bearer token
  * never crosses this channel. The popup has no use for it, and keeping it out
  * means a future popup bug cannot leak it into the DOM.
  */
+export interface RecorderRow {
+  id: string;
+  label: string;
+  hosts: string[];
+  enabled: boolean;
+  /** Whether the host permission is currently granted. */
+  granted: boolean;
+  /** Whether the adapter's hosts pass the allowlist right now. */
+  allowlisted: boolean;
+}
+
 export interface PublicState {
   phase: ConnectionPhase;
   port: number | null;
@@ -127,6 +242,13 @@ export interface PublicState {
   activityCount: number;
   /** Σ nodeIds.length — drives whether the clear-history checkbox renders. */
   removableNodeCount: number;
+  recorders: RecorderRow[];
 }
 
-export type SwToPopup = { type: 'state'; state: PublicState } | { type: 'error'; message: string };
+export type SwToPopup =
+  | { type: 'state'; state: PublicState }
+  | { type: 'error'; message: string }
+  | { type: 'nodes'; data: NodesResponse }
+  | { type: 'search'; data: SearchResponse };
+
+export type SwToPanel = SwToPopup;

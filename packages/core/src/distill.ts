@@ -176,12 +176,14 @@ export async function distill(brain: BrainFile, p: DistillParams): Promise<Set<s
  */
 export function pruneBrain(brain: BrainFile, maxTotalNodes: number): number {
   // graphify imports don't count toward the budget (they're bounded per repo and
-  // replaced wholesale on re-ingest) and are never eviction victims.
-  const countable = brain.nodes.filter((n) => n.origin !== 'graphify').length;
+  // replaced wholesale on re-ingest) and are never eviction victims. Clip nodes
+  // likewise: they have their own cap (pruneClips) and must stay retractable —
+  // evicting them here would silently break the extension's clip→node map.
+  const countable = brain.nodes.filter((n) => n.origin !== 'graphify' && n.origin !== 'clip').length;
   if (maxTotalNodes <= 0 || countable <= maxTotalNodes) return 0;
   const excess = countable - maxTotalNodes;
   const victims = brain.nodes
-    .filter((n) => n.origin !== 'seed' && n.origin !== 'graphify' && n.category !== 'core')
+    .filter((n) => n.origin !== 'seed' && n.origin !== 'graphify' && n.origin !== 'clip' && n.category !== 'core')
     .sort((a, b) => {
       if ((a.recallCount ?? 0) !== (b.recallCount ?? 0)) return (a.recallCount ?? 0) - (b.recallCount ?? 0);
       const at = Date.parse(a.lastRecalledAt ?? a.lastUpdated) || 0;

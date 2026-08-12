@@ -10,7 +10,8 @@
 // perhaps ten a minute.
 
 import { DEFAULTS, KEYS } from './schema.js';
-import type { ActivityRecord, Allowlist, Capture, Health, Pairing, StoredState } from './schema.js';
+import type { ActivityRecord, Allowlist, Capture, Health, Pairing, RecentClip, StoredState } from './schema.js';
+import type { RecorderSeenEntry, RecorderState } from './recorderTypes.js';
 
 async function raw<T>(key: string, fallback: T, valid: (v: unknown) => boolean): Promise<T> {
   try {
@@ -68,6 +69,30 @@ export function getActivity(): Promise<ActivityRecord[]> {
 
 export async function setActivity(records: ActivityRecord[]): Promise<void> {
   await chrome.storage.local.set({ [KEYS.activity]: records });
+}
+
+export function getRecent(): Promise<RecentClip[]> {
+  return raw<RecentClip[]>(KEYS.recent, [], (v) => Array.isArray(v));
+}
+
+export async function setRecent(ring: RecentClip[]): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.recent]: ring });
+}
+
+export function getRecorders(): Promise<RecorderState> {
+  return raw<RecorderState>(KEYS.recorders, { byId: {} }, (v) => isObj(v) && isObj(v.byId));
+}
+
+export async function setRecorders(state: RecorderState): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.recorders]: state });
+}
+
+export function getRecorderSeen(): Promise<RecorderSeenEntry[]> {
+  return raw<RecorderSeenEntry[]>(KEYS.recorderSeen, [], (v) => Array.isArray(v));
+}
+
+export async function setRecorderSeen(ring: RecorderSeenEntry[]): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.recorderSeen]: ring });
 }
 
 export async function getState(): Promise<StoredState> {

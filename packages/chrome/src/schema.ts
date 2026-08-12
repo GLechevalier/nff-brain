@@ -22,6 +22,9 @@ export const KEYS = {
   capture: 'nb.capture',
   allowlist: 'nb.allowlist',
   activity: 'nb.activity',
+  recent: 'nb.recent',
+  recorders: 'nb.recorders',
+  recorderSeen: 'nb.recorderSeen',
 } as const;
 
 // ── pairing ──────────────────────────────────────────────────────────────────
@@ -103,12 +106,33 @@ export interface ActivityRecord {
   text: string; // ≤2000
   delivery: Delivery;
   /**
+   * The server's own id for the delivered clip (`clp_…`, from POST /v1/clip).
+   * Absent when delivery failed. This is the join key the clips-map poll uses
+   * to fill nodeIds — without it the feedback loop cannot exist.
+   */
+  clipId?: string;
+  /**
    * Node ids the CLI reported creating from this clip. Filled only when a drain
    * reports a mapping back. EMPTY MEANS we cannot honestly claim any node came
    * from this — and the clear-history UI must then not offer to delete any.
    */
   nodeIds: string[];
 }
+
+// ── recent-capture dedupe ring ──────────────────────────────────────────────
+
+/**
+ * Client-side dedupe: two identical captures inside the window produce ONE
+ * clip. In storage, never a module variable — worker death would otherwise
+ * reset the window every ~30s idle.
+ */
+export interface RecentClip {
+  key: string;
+  atMs: number;
+}
+
+export const RECENT_MAX = 20;
+export const RECENT_WINDOW_MS = 10 * 60_000;
 
 export const ACTIVITY_MAX = 500;
 export const ACTIVITY_URL_MAX = 512;

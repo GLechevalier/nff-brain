@@ -5,11 +5,24 @@
 import {
   HOST,
   REQUEST_TIMEOUT_MS,
+  isClipsMapResponse,
   isHelloResponse,
+  isNodesResponse,
   isPairResponse,
+  isRetractResponse,
+  isSearchResponse,
   isStatusResponse,
 } from './protocol.js';
-import type { ClipResponse, HelloResponse, PairResponse, StatusResponse } from './protocol.js';
+import type {
+  ClipResponse,
+  ClipsMapResponse,
+  HelloResponse,
+  NodesResponse,
+  PairResponse,
+  RetractResponse,
+  SearchResponse,
+  StatusResponse,
+} from './protocol.js';
 
 export class HttpError extends Error {
   constructor(
@@ -91,6 +104,37 @@ export interface ClipPayload {
 
 export async function postClip(port: number, token: string, clip: ClipPayload): Promise<ClipResponse> {
   return (await call(port, '/v1/clip', { method: 'POST', token, body: JSON.stringify(clip) })) as ClipResponse;
+}
+
+/** Node counts + recent nodes for the DevTools Brain panel. */
+export async function getNodes(port: number, token: string, limit?: number): Promise<NodesResponse> {
+  const qs = limit ? `?limit=${encodeURIComponent(String(limit))}` : '';
+  const body = await call(port, `/v1/nodes${qs}`, { token });
+  if (!isNodesResponse(body)) throw new HttpError(0, 'protocol', 'unexpected nodes response');
+  return body;
+}
+
+/** Ranked retrieval — powers both the panel's Search tab and its Ask tab. */
+export async function searchBrain(port: number, token: string, q: string, limit?: number): Promise<SearchResponse> {
+  const qs = `?q=${encodeURIComponent(q)}${limit ? `&limit=${encodeURIComponent(String(limit))}` : ''}`;
+  const body = await call(port, `/v1/search${qs}`, { token });
+  if (!isSearchResponse(body)) throw new HttpError(0, 'protocol', 'unexpected search response');
+  return body;
+}
+
+/** The drain's clip→node ledger, filtered server-side to OUR clips. */
+export async function getClipsMap(port: number, token: string, since?: string): Promise<ClipsMapResponse> {
+  const qs = since ? `?since=${encodeURIComponent(since)}` : '';
+  const body = await call(port, `/v1/clips/map${qs}`, { token });
+  if (!isClipsMapResponse(body)) throw new HttpError(0, 'protocol', 'unexpected clips-map response');
+  return body;
+}
+
+/** Ask the server to delete clip nodes our captures created. */
+export async function retract(port: number, token: string, nodeIds: string[]): Promise<RetractResponse> {
+  const body = await call(port, '/v1/retract', { method: 'POST', token, body: JSON.stringify({ nodeIds }) });
+  if (!isRetractResponse(body)) throw new HttpError(0, 'protocol', 'unexpected retract response');
+  return body;
 }
 
 /**

@@ -73,6 +73,18 @@
 
     <section class="panel">
       <div class="row">
+        <span class="label">Recorders</span>
+      </div>
+      <p class="muted small">
+        Per-site, off by default: records only actions you perform there.
+        Enabling asks Chrome for that one site; disabling releases it.
+      </p>
+      <ul id="recorders" class="rules"></ul>
+      <div id="recorder-error" class="small error hidden"></div>
+    </section>
+
+    <section class="panel">
+      <div class="row">
         <span class="label">Activity</span>
         <span id="activity-count" class="muted push"></span>
       </div>

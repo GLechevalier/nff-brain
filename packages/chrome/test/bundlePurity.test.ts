@@ -16,7 +16,7 @@ const root = path.resolve(here, '..');
 
 function sources(): { file: string; rel: string; text: string }[] {
   const out: { file: string; rel: string; text: string }[] = [];
-  for (const dir of ['src', 'popup']) {
+  for (const dir of ['src', 'popup', 'devtools', 'content']) {
     const abs = path.join(root, dir);
     if (!fs.existsSync(abs)) continue;
     for (const name of fs.readdirSync(abs)) {
@@ -40,11 +40,20 @@ function code(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
+/**
+ * Recorder adapters legitimately NAME their own site — match patterns in the
+ * registry, URL-shape classifiers in the content scripts. Naming is not
+ * calling: the content-isolation suite below proves content scripts cannot
+ * fetch at all, and the manifest CSP confines every real request to loopback.
+ * Exact-match only, so a new host still fails until deliberately added here.
+ */
+const RECORDER_SITE_URLS = new Set(['https://github.com', 'https://www.linkedin.com']);
+
 /** Absolute URL literals with a concrete host. `http://${HOST}` is fine. */
 function offDeviceUrls(text: string): string[] {
   return [...text.matchAll(/https?:\/\/[A-Za-z0-9.-]+/g)]
     .map((m) => m[0])
-    .filter((u) => !u.startsWith('http://127.0.0.1'));
+    .filter((u) => !u.startsWith('http://127.0.0.1') && !RECORDER_SITE_URLS.has(u));
 }
 
 describe('source purity', () => {
@@ -93,10 +102,11 @@ describe('the capture choke point', () => {
   );
 
   it('routes every capture decision through shouldCapture()', () => {
-    // Any future entry point (content scripts in item 4) must call the same
-    // function; a second copy of the matching logic is the bug this catches.
+    // Every entry point must call the same function; a second copy of the
+    // matching logic is the bug this catches. Exactly two registered callers:
+    // the context menu (capture.ts) and the recorder event sink (recorder.ts).
     const callers = FILES.filter((f) => f.rel !== 'src/gate.ts' && /\bshouldCapture\(/.test(code(f.text)));
-    expect(callers.map((c) => c.rel).sort()).toEqual(['src/capture.ts']);
+    expect(callers.map((c) => c.rel).sort()).toEqual(['src/capture.ts', 'src/recorder.ts']);
   });
 
   it('implements host MATCHING in exactly one file', () => {
@@ -108,9 +118,16 @@ describe('the capture choke point', () => {
 
   it('reads a hostname only where it cannot grant capture', () => {
     // activity.ts labels a buffered record; main.ts labels the "Allow this
-    // site" button. Neither decides anything — gate.ts alone does.
+    // site" button; content/github.ts classifies a form's target (the worker
+    // re-gates on sender.tab.url regardless). None of them decides anything —
+    // gate.ts alone does.
     const readers = FILES.filter((f) => /\.hostname\b/.test(code(f.text)));
-    expect(readers.map((r) => r.rel).sort()).toEqual(['popup/main.ts', 'src/activity.ts', 'src/gate.ts']);
+    expect(readers.map((r) => r.rel).sort()).toEqual([
+      'content/githubClassify.ts',
+      'popup/main.ts',
+      'src/activity.ts',
+      'src/gate.ts',
+    ]);
   });
 
   it('reads chrome.storage from exactly one module', () => {
@@ -125,12 +142,20 @@ describe('MV3 service-worker discipline', () => {
   const topLevelBindings = (text: string) =>
     [...text.matchAll(/^(let|var) +([A-Za-z_$][\w$]*)/gm)].map((m) => m[2]!);
 
-  it.each(['src/sw.ts', 'src/capture.ts', 'src/storage.ts', 'src/badge.ts', 'src/activity.ts', 'src/gate.ts', 'src/health.ts'])(
-    '%s declares no mutable module-level state',
-    (rel) => {
-      expect(topLevelBindings(FILES.find((f) => f.rel === rel)!.text)).toEqual([]);
-    },
-  );
+  it.each([
+    'src/sw.ts',
+    'src/capture.ts',
+    'src/storage.ts',
+    'src/badge.ts',
+    'src/activity.ts',
+    'src/gate.ts',
+    'src/health.ts',
+    'src/recorder.ts',
+    'src/recorderFormat.ts',
+    'src/recorderRegistry.ts',
+  ])('%s declares no mutable module-level state', (rel) => {
+    expect(topLevelBindings(FILES.find((f) => f.rel === rel)!.text)).toEqual([]);
+  });
 
   it('permits exactly one documented module-level variable, in connection.ts', () => {
     const conn = FILES.find((f) => f.rel === 'src/connection.ts')!;
@@ -164,22 +189,65 @@ describe('MV3 service-worker discipline', () => {
   });
 });
 
+describe('content-script isolation', () => {
+  // The token-never-in-content invariant as CI, not a promise: a content
+  // script runs alongside a hostile page and must hold NOTHING worth stealing.
+  const contentFiles = FILES.filter((f) => f.rel.startsWith('content/'));
+
+  it('finds the content sources it means to check', () => {
+    expect(contentFiles.length).toBeGreaterThanOrEqual(3); // runtime + 2 adapters
+  });
+
+  it.each(['chrome\\.storage', 'postClip', 'nb\\.pairing', 'fetch\\(', '\\btoken\\b'])(
+    'no content script ever matches /%s/',
+    (pattern) => {
+      const re = new RegExp(pattern);
+      for (const f of contentFiles) {
+        expect(re.test(code(f.text)), `${f.rel} matches ${pattern}`).toBe(false);
+      }
+    },
+  );
+
+  it('content scripts send only recorderEvent messages', () => {
+    for (const f of contentFiles) {
+      const c = code(f.text);
+      if (/sendMessage/.test(c)) {
+        expect(f.rel).toBe('content/runtime.ts'); // one wire, one place
+        expect(c).toContain("type: 'recorderEvent'");
+      }
+    }
+  });
+});
+
 describe('built artifacts', () => {
   const dist = path.join(root, 'dist');
   const read = (name: string) => fs.readFileSync(path.join(dist, name), 'utf8');
 
-  it('ships manifest.json at the archive root alongside both bundles', () => {
+  it('ships manifest.json at the archive root alongside all bundles', () => {
     // Guarded like packages/cli/test/e2e.test.ts does: a missing dist means the
     // build has not run in this workspace, not that the assertion failed.
     if (!fs.existsSync(dist)) return;
-    for (const f of ['manifest.json', 'sw.js', 'popup.js', 'popup.html', 'popup.css']) {
+    for (const f of [
+      'manifest.json',
+      'sw.js',
+      'popup.js',
+      'popup.html',
+      'popup.css',
+      'devtools.js',
+      'devtools.html',
+      'panel.js',
+      'panel.html',
+      'panel.css',
+      'rec-github.js',
+      'rec-linkedin.js',
+    ]) {
       expect(fs.existsSync(path.join(dist, f)), `dist/${f} missing`).toBe(true);
     }
   });
 
   it('contains no off-device URL and no framework runtime', () => {
     if (!fs.existsSync(dist)) return;
-    for (const name of ['sw.js', 'popup.js']) {
+    for (const name of ['sw.js', 'popup.js', 'devtools.js', 'panel.js', 'rec-github.js', 'rec-linkedin.js']) {
       const text = read(name);
       // This is what actually ships — it catches an egress URL arriving through
       // a dependency rather than through our own source.

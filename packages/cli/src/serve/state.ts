@@ -16,7 +16,7 @@ import {
   saveServeConfig,
   serveConfigPath,
 } from '@nff-brain/core';
-import type { BrainFile, CaptureTarget, PairingWindow, ServeConfig } from '@nff-brain/core';
+import type { BrainFile, CaptureTarget, MergedBrain, PairingWindow, ServeConfig } from '@nff-brain/core';
 
 export interface ServeOptions {
   port: number;
@@ -158,10 +158,28 @@ export class ServeState {
     };
   }
 
-  /** What RECALL actually sees — project wins on id collision, global fills in. */
+  /**
+   * What RECALL actually sees — project wins on id collision, global fills in.
+   * Lock-free mtime-cached snapshot loads: a SessionEnd distill writing
+   * brain.json is picked up on the very next request with zero watchers, which
+   * is what makes the DevTools panel's "updating live" work.
+   */
+  mergedBrain(): MergedBrain {
+    return mergeBrains(this.brain(this.opts.projectBrainPath).brain, this.brain(this.opts.globalBrainPath).brain);
+  }
+
   mergedCounts(): { nodes: number; edges: number } {
-    const merged = mergeBrains(this.brain(this.opts.projectBrainPath).brain, this.brain(this.opts.globalBrainPath).brain);
+    const merged = this.mergedBrain();
     return { nodes: merged.nodes.length, edges: merged.edges.length };
+  }
+
+  /** Newest updatedAt across both brains — the panel's cheap change signal. */
+  latestUpdatedAt(): string | null {
+    const stamps = [this.opts.projectBrainPath, this.opts.globalBrainPath]
+      .map((f) => this.brain(f).brain?.updatedAt)
+      .filter((s): s is string => typeof s === 'string');
+    if (stamps.length === 0) return null;
+    return stamps.sort()[stamps.length - 1];
   }
 
   targetBrainPath(target: CaptureTarget): string {

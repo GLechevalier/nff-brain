@@ -35,9 +35,14 @@ published `key` to `manifest.json` so unpacked and store builds share one id.
 | `src/storage.ts` | the only module that touches `chrome.storage` |
 | `src/client.ts` | fetch wrapper; every URL it can build is loopback |
 | `src/connection.ts` | probe / pair / unpair |
-| `src/capture.ts` | the context menu → gate → `POST /v1/clip` |
+| `src/capture.ts` | the context menus (selection/link/page) → gate → `POST /v1/clip` |
+| `src/recorder.ts` | SW side of the per-site recorders — the SECOND registered `shouldCapture` caller |
+| `src/recorderRegistry.ts` / `recorderTypes.ts` / `recorderFormat.ts` | adapter metadata, wire validation, event formatting; all pure |
 | `src/sw.ts` | listener registration only — read its header before editing |
 | `popup/` | static skeleton + `paint(state)`; plain DOM, no framework |
+| `devtools/` | the Brain panel (F12 → Brain): counts + search + retrieval-only Ask; all HTTP via the worker, token never in the panel |
+| `content/` | recorder content scripts — no token, no fetch, no storage (CI-enforced); they message the worker |
+| `store/` | Web Store assets: privacy policy, permission justifications, listing copy, submission runbook |
 
 Two invariants are enforced by `test/bundlePurity.test.ts` rather than by
 memory: every capture decision goes through `shouldCapture()`, and the service
@@ -63,7 +68,15 @@ Automated tests cover the pure logic; the rest needs a browser. Prerequisite:
 | **Pause survives restart** | Set PAUSED. Quit Chrome entirely — verify no `chrome.exe` remains, or a background process keeps storage warm and invalidates the test. Relaunch → still PAUSED. **Then bump the version and reload the unpacked extension** so `onInstalled` fires with `reason: 'update'` → still PAUSED. That second half is what catches the default-reseeding bug. |
 | **Service-worker death** | Confirm connected, leave idle ≥60s until `chrome://extensions` reports the worker *inactive*, reopen the popup → connected with the right counts, **without re-pairing**. Then force-terminate the worker from `chrome://extensions` and repeat. Any regression to "unpaired" means state leaked into a module variable. |
 | **Default deny** | Empty allowlist, capture ON, unlisted site → right-click capture is a no-op. Add `*.example.com` → works on `example.com` and `a.example.com`. Confirm by hand once that `evilexample.com` still does nothing. |
-| **Clear activity history** | With records buffered: the dialog offers only "wipe the local buffer" and **no checkbox** — nothing is traceable to a node until a drain reports the mapping. With an empty buffer the button is **disabled**. |
+| **Clear activity history** | With records buffered but **no drain yet run**: the dialog offers only "wipe the local buffer" and no checkbox. With an empty buffer the button is **disabled**. |
+| **The loop (the epic's Done-when)** | Capture a selection (+ a link, + a page) → `nff-brain clips` lists them → `nff-brain clips --drain` → `brain.json` gains `origin:"clip"` nodes with `sourceUrl` → a new Claude Code session's preamble shows `[clip] …` lines. |
+| **Clip→node feedback + retract** | After a drain, within ~1 min (the probe piggyback) the clear dialog shows "Also delete the N brain nodes…". Confirm with the box ticked → the nodes are gone from `brain.json` and `clip-map.jsonl` no longer names them. Kill `serve` and try again → an error, and the buffer is NOT cleared. |
+| **DevTools Brain panel** | F12 anywhere → Brain tab: counts match `nff-brain list`. Hand-append a node to `brain.json` → count bumps ≤5 s without a reload; with a matching search active, the new node appears in the results. Inspect the panel document itself → Network: **zero requests** (everything rides the worker). Unpaired → the banner says to pair from the popup. |
+| **Ask tab** | "what did I learn about oauth callbacks" → an answer card citing nodes with related links; a nonsense query → the honest empty answer; the retrieval-only disclaimer is visible. |
+| **Recorder enable/disable** | Enable the GitHub recorder → Chrome prompts for github.com ONLY; `github.com` appears in the allowlist. Disable → `chrome://extensions` → site access shows the permission is **gone**. |
+| **Recorder events land** | With capture ON: open two issues and post one comment on GitHub → three `recorder-event` clips pending (`nff-brain clips`), titles and repos correct. Same on LinkedIn: send an invite → one event with the name (and note). Double-submit → still one event. |
+| **Recorder respects pause + allowlist** | Toggle capture PAUSED → a recorder action lands nothing, without reloading the page. Remove `github.com` from the allowlist while the recorder is enabled → nothing lands, and the popup row shows "blocked". |
+| **Recorder survives update** | Bump the version and reload the unpacked extension (`onInstalled` fires with `reason:'update'`, which CLEARS registered scripts) → the recorder still fires on the next action (the reconciliation re-registered it). |
 
 ### Local Network Access — findings
 
@@ -79,9 +92,16 @@ Automated tests cover the pure logic; the rest needs a browser. Prerequisite:
 - **Ports are ignored in allowlist matching.** A rule for `example.com` matches
   any port. Users think in sites, and a per-port list creates the trap where the
   same site is captured on 443 but silently not on 8443.
-- **"Also remove nodes created from this activity" cannot render yet.** Each
-  buffered record carries a `nodeIds` field, but nothing fills it until the
-  drain reports clip → node mappings. The popup deliberately shows no checkbox
-  rather than one that cannot do anything.
+- **"Also remove nodes" lights up only after a drain has run** and the ~1-min
+  probe piggyback has fetched the clip→node map. Until then the popup shows no
+  checkbox — honest, not broken.
+- **No graph drawing in the Brain panel** (deliberate): the acceptance needed
+  count + search, and porting the React webview renderer is banned by
+  `bundlePurity` (no react-dom in dist). If ever wanted, extract a
+  framework-free SVG painter around `@nff-brain/core/layout` — do not port.
+- **Recorder selectors rot.** GitHub detection is URL/form-shape-based and
+  should be sturdy; LinkedIn leans on accessible labels and WILL need
+  maintenance. The classifiers are pure (`test/recorder.test.ts`), so rot is a
+  named test failure, not a silently dead recorder.
 - **Incognito is not supported** (`"incognito": "not_allowed"`), deliberately: a
   memory tool silently recording incognito browsing is a landmine.

@@ -22,6 +22,7 @@ export interface PaintDeps {
   /** Host of the active tab, or null when the extension cannot see it. */
   currentHost: string | null;
   onRemoveRule: (host: string) => void;
+  onToggleRecorder: (id: string, enable: boolean) => void;
 }
 
 export function paint(state: PublicState, deps: PaintDeps, nowMs = Date.now()): void {
@@ -81,6 +82,32 @@ export function paint(state: PublicState, deps: PaintDeps, nowMs = Date.now()): 
   const known = deps.currentHost && !state.rules.some((r) => r.host === deps.currentHost);
   allowCurrent.classList.toggle('hidden', !known);
   if (known) allowCurrent.textContent = `+ Allow ${deps.currentHost}`;
+
+  // ── recorders ─────────────────────────────────────────────────────────────
+  $('recorders').replaceChildren(
+    ...state.recorders.map((rec) => {
+      const li = document.createElement('li');
+      const label = document.createElement('span');
+      label.textContent = rec.label;
+      const status = document.createElement('span');
+      status.className = 'muted small';
+      status.textContent = !rec.enabled
+        ? ''
+        : !state.capture.enabled
+          ? ' · paused — capture is off'
+          : !rec.allowlisted
+            ? ` · blocked — re-add ${rec.hosts[0]}`
+            : !rec.granted
+              ? ' · blocked — permission missing'
+              : ' · recording';
+      const btn = document.createElement('button');
+      btn.textContent = rec.enabled ? 'Disable' : 'Enable';
+      btn.title = rec.enabled ? `Stop recording on ${rec.hosts.join(', ')}` : `Ask Chrome for ${rec.hosts.join(', ')}`;
+      btn.addEventListener('click', () => deps.onToggleRecorder(rec.id, !rec.enabled));
+      li.append(label, status, btn);
+      return li;
+    }),
+  );
 
   // ── activity ──────────────────────────────────────────────────────────────
   const n = state.activityCount;

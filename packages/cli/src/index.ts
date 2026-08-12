@@ -1,3 +1,4 @@
+import { cmdClips } from './commands/clips.js';
 import { cmdDistill } from './commands/distill.js';
 import { cmdDoctor } from './commands/doctor.js';
 import { cmdLink, cmdReinforce, cmdUnlink } from './commands/edges.js';
@@ -120,6 +121,9 @@ browser (Chrome extension transport)
                                    open a 5-minute pairing window and print the code;
                                    --reset revokes every client and rotates the server
                                    identity (works with the server down)
+  clips [--drain] [--model m]      list queued captures for both brains; --drain mints
+                                   nodes from them now (one claude -p call) instead of
+                                   waiting for the next session's SessionEnd
 
 Writes target <workspace>/.nff-brain/brain.json; add --global for ~/.nff-brain/brain.json.
 `;
@@ -152,6 +156,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   expand: cmdExpand,
   serve: cmdServe,
   pair: cmdPair,
+  clips: cmdClips,
   doctor: () => cmdDoctor(),
   upgrade: () => cmdUpgrade(),
 };

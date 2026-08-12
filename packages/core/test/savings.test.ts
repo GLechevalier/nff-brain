@@ -53,7 +53,14 @@ describe('savings estimator', () => {
   it('rediscovery cost depends on origin', () => {
     expect(rediscoveryTokens(node('a', { origin: 'agent' }))).toBe(SAVINGS_MODEL.rediscoverAgentTokens);
     expect(rediscoveryTokens(node('s', { origin: 'seed' }))).toBe(SAVINGS_MODEL.rediscoverSeedTokens);
+    expect(rediscoveryTokens(node('c', { origin: 'clip' }))).toBe(SAVINGS_MODEL.rediscoverClipTokens);
     expect(rediscoveryTokens(graphifyNode('g', 4))).toBe(4 * SAVINGS_MODEL.graphifyPerChildTokens);
+  });
+
+  it('clip savings land in their own byOrigin bucket', () => {
+    const s = brainSavings([node('c', { origin: 'clip', recallCount: 2 })]);
+    expect(s.byOrigin.clip).toBeGreaterThan(0);
+    expect(s.byOrigin.agent).toBe(0);
   });
 
   it('caps a fat codebase-map node instead of letting it dominate', () => {

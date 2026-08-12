@@ -2,13 +2,14 @@
 // client, and derives the phase — but holds NO state of its own between calls,
 // because the service worker it runs in is destroyed after ~30s idle.
 
+import { applyClipMap, hasUnresolvedClips } from './activity.js';
 import { paintBadge } from './badge.js';
 import * as client from './client.js';
 import { HttpError } from './client.js';
 import { applyProbe, derivePhase, dueForProbe } from './health.js';
 import { DEFAULT_HEALTH } from './schema.js';
-import type { ConnectionPhase } from './schema.js';
-import { getCapture, getHealth, getPairing, setHealth, setPairing } from './storage.js';
+import type { ConnectionPhase, Pairing } from './schema.js';
+import { getActivity, getCapture, getHealth, getPairing, setActivity, setHealth, setPairing } from './storage.js';
 
 /**
  * The ONE permitted module-level variable in the whole extension: an in-flight
@@ -66,6 +67,9 @@ async function runProbe({ force }: { force?: boolean }): Promise<ConnectionPhase
         queuePending: s.queue.pending,
       },
     }, now);
+    // Piggyback on the healthy probe: resolve clip→node mappings the drain has
+    // reported since. One extra request, and only while something is unresolved.
+    await resolveClipMappings(pairing);
   } catch (err) {
     const http = err instanceof HttpError ? err : null;
     next = applyProbe(health, {
@@ -79,6 +83,23 @@ async function runProbe({ force }: { force?: boolean }): Promise<ConnectionPhase
   const phase = derivePhase(next, true, now);
   await paintBadge(phase, (await getCapture()).enabled);
   return phase;
+}
+
+/**
+ * Fill ActivityRecord.nodeIds from the drain's ledger. Failure is swallowed —
+ * this is best-effort enrichment riding a probe that already succeeded, and the
+ * next probe simply tries again (the unresolved records are still unresolved).
+ */
+async function resolveClipMappings(pairing: Pairing): Promise<void> {
+  try {
+    const records = await getActivity();
+    if (!hasUnresolvedClips(records)) return;
+    const res = await client.getClipsMap(pairing.port, pairing.token);
+    const { records: next, changed } = applyClipMap(records, res.map);
+    if (changed) await setActivity(next);
+  } catch {
+    /* best-effort; the next probe retries */
+  }
 }
 
 export interface PairOutcome {

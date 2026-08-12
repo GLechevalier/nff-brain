@@ -77,6 +77,51 @@ describe('recallBrain', () => {
     expect(r.nodes).toHaveLength(0);
   });
 
+  it('clip nodes ride their own budget and never displace agent slots', () => {
+    // 45 agent nodes (above bypass) all matching "docker", plus 10 clip nodes
+    // that ALSO match: without the partition the clips would crowd the 12.
+    const nodes: BrainNode[] = [];
+    for (let i = 0; i < 45; i++) nodes.push(node(`a${i}`, `Docker note ${i}`, `docker restart lesson ${i}`));
+    for (let i = 0; i < 10; i++)
+      nodes.push(
+        node(`c${i}`, `Docker clip ${i}`, `docker restart clipped fact ${i}`, {
+          origin: 'clip',
+          sourceUrl: 'https://docs.docker.example/page',
+        }),
+      );
+    const r = recallBrain({ nodes, edges: [] }, 'docker restart', { wholeGraphMax: 40 });
+    const clipsIn = r.nodes.filter((n) => n.origin === 'clip');
+    const agentIn = r.nodes.filter((n) => n.origin !== 'clip');
+    expect(clipsIn.length).toBeLessThanOrEqual(3); // clipBudget
+    expect(agentIn.length).toBeLessThanOrEqual(12); // clips never consume these
+    expect(r.nodes.length).toBeLessThanOrEqual(15);
+    // Clips come LAST and render as [clip] with their source host.
+    expect(r.nodes[r.nodes.length - 1].origin).toBe('clip');
+    expect(r.preamble).toMatch(/- \[clip\] Docker clip \d+:.*\(from docs\.docker\.example\)/);
+  });
+
+  it('the whole-graph bypass never injects the clip pool wholesale', () => {
+    // 5 agent nodes (bypass fires) + 50 clips: only clipBudget clips may ride.
+    const nodes: BrainNode[] = [];
+    for (let i = 0; i < 5; i++) nodes.push(node(`a${i}`, `Alpha ${i}`, `alpha ${i}`));
+    for (let i = 0; i < 50; i++)
+      nodes.push(node(`c${i}`, `Clip ${i}`, `clipped docker fact ${i}`, { origin: 'clip' }));
+    const r = recallBrain({ nodes, edges: [] }, 'docker fact');
+    expect(r.nodes.filter((n) => n.origin !== 'clip')).toHaveLength(5);
+    expect(r.nodes.filter((n) => n.origin === 'clip').length).toBeLessThanOrEqual(3);
+    expect(r.seedCount).toBe(5); // bypass semantics count only the agent side
+  });
+
+  it('a matching clip is injected even when no agent node matches', () => {
+    const nodes: BrainNode[] = [];
+    for (let i = 0; i < 45; i++) nodes.push(node(`a${i}`, `Filler ${i}`, `unrelated ${i}`));
+    nodes.push(node('the-clip', 'Webpack sourcemap trick', 'webpack devtool cheap-module fixes it', { origin: 'clip' }));
+    const r = recallBrain({ nodes, edges: [] }, 'webpack sourcemap broken', { wholeGraphMax: 40 });
+    expect(r.nodes.map((n) => n.id)).toEqual(['the-clip']);
+    expect(r.seedCount).toBe(0);
+    expect(r.preamble).toContain('[clip] Webpack sourcemap trick');
+  });
+
   it('bumpRecall increments count and stamps lastRecalledAt', () => {
     const brain = { nodes: [node('a', 'A', 'a'), node('b', 'B', 'b')] };
     bumpRecall(brain, ['a'], new Date('2026-02-02T00:00:00Z'));

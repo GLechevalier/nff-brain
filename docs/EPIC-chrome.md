@@ -1,9 +1,13 @@
 # EPIC — nff-brain in the browser
 
-**Status:** items 0 and 1 SHIPPED (incl. item 2's capture verb) · 3, 4, 5, 6 open
+**Status:** items 0–5 SHIPPED (2026-08-11) · item 6's assets written, store
+submission is the remaining manual step (`packages/chrome/store/`)
 **Goal:** the browser stops being the one place where learning evaporates.
 **Done when:** a fact you encountered in Chrome is recalled in a Claude Code
-session without you having filed it anywhere.
+session without you having filed it anywhere. **The loop is closed:** the
+SessionEnd hook (and `nff-brain clips --drain`) drains the queue into
+`origin: 'clip'` nodes with their own recall budget, and recall injects them
+as `[clip]` lines.
 
 ---
 
@@ -40,8 +44,8 @@ and draining it is item 2.
 | Native messaging vs localhost HTTP | **localhost HTTP.** A native-messaging host manifest must name an absolute launcher path in a per-OS registry/directory, which `npm i -g` cannot write, and it breaks one-click Web Store install. |
 | Global brain by default, or force a project picker? | **Global by default**, `"target":"project"` per request. The browser has no workspace concept; global is merged into every recall, so a global clip is never invisible while a mis-filed project clip is. No picker. |
 | Direct write vs queue-drained-by-CLI | **Queue.** Not for corruption (`mutateBrain` already locks) but because a clip must be distilled before it is a node, and "no LLM at click time" requires a holding area. |
-| Does `origin: 'clip'` get its own recall budget? | **Still open** — deferred to item 2, which is where clips first become nodes. |
-| Is item 4's output brain-shaped at all? | **Still open.** |
+| Does `origin: 'clip'` get its own recall budget? | **RESOLVED (2026-08-11): its own protected budget.** Clip nodes are exempt from the 400 agent cap and from every merge/fold (the retraction invariant: `/v1/retract` deletes by origin, so a clip node must hold only clip content), capped at 60 by `pruneClips`, and recalled through their own `clipBudget: 3` slots — never the agent 12, never the whole-graph bypass. |
+| Is item 4's output brain-shaped at all? | **RESOLVED (2026-08-11): yes, via the clip queue.** Recorder events ship as `kind: 'note'` clips with a `recorder-event <action>` first line — no fifth ClipKind — and the drain distills them like any capture. GitHub's output (issues/PRs you wrote) is exactly coding-recall-shaped; LinkedIn invites ride the same path, with CRM export still a possible follow-on. |
 
 ---
 
@@ -161,6 +165,14 @@ The existing renderer is pure inline SVG with no chart libraries, which is what
 makes the port feasible at all.
 
 The port is the cost here — panel registration itself is trivial.
+
+**Shipped 2026-08-11 as count + search + node list + Ask, deliberately with NO
+graph drawing.** The acceptance line never required one, the webview renderer
+is React and `bundlePurity` bans react-dom from dist, so shipping zero graph
+UIs in the panel is how the two-graph-UIs risk was avoided rather than
+incurred. If a panel graph is ever wanted: `packages/core/src/layout.ts`
+already holds the browser-safe geometry — extract a framework-free SVG painter
+both UIs wrap; do not port React.
 
 ---
 

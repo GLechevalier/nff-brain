@@ -10,6 +10,7 @@
 
 import { DEFAULT_PORT } from '../src/protocol.js';
 import type { PopupToSw, PublicState, SwToPopup } from '../src/protocol.js';
+import { adapterById } from '../src/recorderRegistry.js';
 import { hideClearConfirm, paint, paintClearConfirm, showFieldError } from './paint.js';
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -34,7 +35,36 @@ function send(msg: PopupToSw): Promise<SwToPopup> {
 
 function render(state: PublicState): void {
   latest = state;
-  paint(state, { currentHost, onRemoveRule: (host) => void dispatch({ type: 'removeRule', host }) });
+  paint(state, {
+    currentHost,
+    onRemoveRule: (host) => void dispatch({ type: 'removeRule', host }),
+    onToggleRecorder: (id, enable) => void toggleRecorder(id, enable),
+  });
+}
+
+/**
+ * Enable runs HERE, not in the worker: chrome.permissions.request needs a user
+ * gesture, and the popup click is that gesture. Only a granted permission
+ * flips the recorder on; a denied prompt leaves everything off.
+ */
+async function toggleRecorder(id: string, enable: boolean): Promise<void> {
+  if (!enable) {
+    await dispatch({ type: 'setRecorderEnabled', id, enabled: false }, 'recorder-error');
+    return;
+  }
+  const adapter = adapterById(id);
+  if (!adapter) return;
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ origins: adapter.originPatterns });
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    showFieldError('recorder-error', `Chrome permission for ${adapter.hosts.join(', ')} was not granted — the recorder stays off.`);
+    return;
+  }
+  await dispatch({ type: 'setRecorderEnabled', id, enabled: true }, 'recorder-error');
 }
 
 async function dispatch(msg: PopupToSw, errorField?: string): Promise<boolean> {
@@ -44,7 +74,9 @@ async function dispatch(msg: PopupToSw, errorField?: string): Promise<boolean> {
     return false;
   }
   if (errorField) showFieldError(errorField, null);
-  render(reply.state);
+  // Data replies (nodes/search) exist for the DevTools panel; the popup only
+  // ever sends state-returning messages, so anything else is ignored here.
+  if (reply.type === 'state') render(reply.state);
   return true;
 }
 

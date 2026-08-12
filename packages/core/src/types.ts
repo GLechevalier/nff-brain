@@ -63,8 +63,12 @@ export interface BrainNode {
   // seed = init/user-authored (never auto-evicted)
   // graphify = imported codebase map (replaced wholesale on re-ingest, never folded)
   // import = mined from past Claude Code sessions (evictable and mergeable like agent)
-  origin: 'seed' | 'agent' | 'graphify' | 'import';
+  // clip = distilled from a browser capture (own cap MAX_CLIP_NODES, own recall
+  //        budget, never merged/folded — must stay retractable from the extension)
+  origin: 'seed' | 'agent' | 'graphify' | 'import' | 'clip';
   sourceSession?: string;
+  // http(s) page the clip was captured from (origin 'clip' only).
+  sourceUrl?: string;
   lastUpdated: string; // ISO
   recallCount: number;
   lastRecalledAt?: string; // ISO

@@ -35,7 +35,10 @@ export function chooseSurvivor(
 ): [BrainNode, BrainNode] | null {
   // graphify nodes are replaced wholesale on re-ingest — anything folded into
   // (or out of) one would be silently lost, so they never take part in merges.
+  // Clip nodes must contain ONLY clip content: /v1/retract deletes by origin,
+  // so folding agent knowledge into one would make retraction destroy it.
   if (a.origin === 'graphify' || b.origin === 'graphify') return null;
+  if (a.origin === 'clip' || b.origin === 'clip') return null;
   const aSeed = a.origin === 'seed';
   const bSeed = b.origin === 'seed';
   if (aSeed && bSeed) return null; // never fold one curated node into another
@@ -182,7 +185,7 @@ const MIN_KEEP = 8;
  */
 export function foldLeastUsed(brain: BrainFile, fraction = 0.25, now = new Date()): number {
   const foldable = brain.nodes.filter(
-    (n) => n.origin !== 'seed' && n.origin !== 'graphify' && n.category !== 'core',
+    (n) => n.origin !== 'seed' && n.origin !== 'graphify' && n.origin !== 'clip' && n.category !== 'core',
   );
   const budget = Math.min(
     Math.floor(foldable.length * fraction),
@@ -202,9 +205,11 @@ export function foldLeastUsed(brain: BrainFile, fraction = 0.25, now = new Date(
 
   let folded = 0;
   for (const victim of victims) {
-    // graphify nodes may not absorb folded content either — it would vanish on re-ingest.
+    // graphify nodes may not absorb folded content either — it would vanish on
+    // re-ingest. Clip nodes may not absorb either: retraction deletes them by
+    // origin, taking anything folded in with them.
     const keepers = brain.nodes.filter(
-      (n) => n.id !== victim.id && !victimIds.has(n.id) && n.origin !== 'graphify',
+      (n) => n.id !== victim.id && !victimIds.has(n.id) && n.origin !== 'graphify' && n.origin !== 'clip',
     );
     if (keepers.length === 0) break;
 

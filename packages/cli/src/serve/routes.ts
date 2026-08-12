@@ -8,9 +8,14 @@ import {
   SERVE_PROTOCOL,
   addClient,
   appendClip,
+  compactClipMap,
   findClientById,
+  fuseRanked,
   helloProof,
+  mutateBrain,
+  readClipMap,
   removeClient,
+  removeNode,
   verifyPairingCode,
 } from '@nff-brain/core';
 import type { CaptureTarget, ServeClient } from '@nff-brain/core';
@@ -208,6 +213,188 @@ const clip: Handler = async (req, res, ctx) => {
   sendJson(res, 201, { ok: true, id: result.id, target, pending: result.pending }, ctx.cors);
 };
 
+// ── GET /v1/nodes + /v1/search (the DevTools Brain panel) ────────────────────
+
+const NODES_LIMIT_DEFAULT = 20;
+const NODES_LIMIT_MAX = 100;
+const SEARCH_LIMIT_DEFAULT = 8;
+const SEARCH_LIMIT_MAX = 25;
+const SEARCH_Q_MAX = 256;
+const EXCERPT_MAX = 240;
+const MAX_RELATED = 3;
+
+function clampLimit(raw: string | null, dflt: number, max: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return dflt;
+  return Math.min(Math.floor(n), max);
+}
+
+function excerpt(content: string | undefined): string {
+  const t = (content ?? '').replace(/\s+/g, ' ').trim();
+  return t.length > EXCERPT_MAX ? `${t.slice(0, EXCERPT_MAX - 1)}…` : t;
+}
+
+/**
+ * Node counts + recent nodes for the panel header and its idle view. Read-only
+ * over the merged (project-wins) snapshot, same semantics as recall.
+ */
+const nodes: Handler = (req, res, ctx) => {
+  const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+  const limit = clampLimit(url.searchParams.get('limit'), NODES_LIMIT_DEFAULT, NODES_LIMIT_MAX);
+  const { state } = ctx;
+  const merged = state.mergedBrain();
+
+  const recent = [...merged.nodes]
+    .sort((a, b) => (a.lastUpdated < b.lastUpdated ? 1 : a.lastUpdated > b.lastUpdated ? -1 : 0))
+    .slice(0, limit)
+    .map((n) => ({
+      id: n.id,
+      title: n.title,
+      category: n.category,
+      origin: n.origin,
+      source: merged.sourceById.get(n.id) ?? 'global',
+      lastUpdated: n.lastUpdated,
+      excerpt: excerpt(n.content),
+    }));
+
+  const ws = state.summarize(state.opts.projectBrainPath);
+  const gl = state.summarize(state.opts.globalBrainPath);
+  sendJson(
+    res,
+    200,
+    {
+      ok: true,
+      updatedAt: state.latestUpdatedAt(),
+      merged: { nodes: merged.nodes.length, edges: merged.edges.length },
+      workspace: {
+        name: state.opts.workspaceRoot.split(/[\\/]/).filter(Boolean).pop() ?? '',
+        nodes: ws.nodes,
+        edges: ws.edges,
+      },
+      global: { nodes: gl.nodes, edges: gl.edges },
+      recent,
+    },
+    ctx.cors,
+  );
+};
+
+/**
+ * Ranked retrieval for the panel's Search tab AND its Ask tab (item 5 is this
+ * same response rendered conversationally — retrieval-only, no LLM). Lexical
+ * ranking only: the semantic runtime (model download, embedding cache) stays
+ * out of the serve request path by design. `score` is the fused scale — the UI
+ * must render rank order, never the absolute number, so enabling semantic
+ * fusion later is shape-compatible.
+ */
+const search: Handler = (req, res, ctx) => {
+  const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+  const q = (url.searchParams.get('q') ?? '').trim().slice(0, SEARCH_Q_MAX);
+  const limit = clampLimit(url.searchParams.get('limit'), SEARCH_LIMIT_DEFAULT, SEARCH_LIMIT_MAX);
+  if (!q) {
+    // As-you-type friendly: an empty box is an empty result, not an error.
+    sendJson(res, 200, { ok: true, q: '', count: 0, hits: [] }, ctx.cors);
+    return;
+  }
+
+  const merged = ctx.state.mergedBrain();
+  const titleById = new Map(merged.nodes.map((n) => [n.id, n.title]));
+  const ranked = fuseRanked(q, merged.nodes, null, { limit });
+
+  const hits = ranked.map((r) => {
+    const related = merged.edges
+      .filter((e) => e.from === r.node.id || e.to === r.node.id)
+      .map((e) => ({ id: e.from === r.node.id ? e.to : e.from, strength: e.strength }))
+      .filter((e) => titleById.has(e.id))
+      .sort((a, b) => b.strength - a.strength)
+      .slice(0, MAX_RELATED)
+      .map((e) => ({ id: e.id, title: titleById.get(e.id)!, strength: e.strength }));
+    return {
+      id: r.node.id,
+      title: r.node.title,
+      category: r.node.category,
+      origin: r.node.origin,
+      source: merged.sourceById.get(r.node.id) ?? 'global',
+      lastUpdated: r.node.lastUpdated,
+      score: r.fused,
+      excerpt: excerpt(r.node.content),
+      related,
+    };
+  });
+
+  sendJson(res, 200, { ok: true, q, count: hits.length, hits }, ctx.cors);
+};
+
+// ── GET /v1/clips/map ────────────────────────────────────────────────────────
+
+/** Both brains — a clip's node lands wherever the clip's target routed it. */
+function brainPaths(state: ServeState): string[] {
+  const { projectBrainPath, globalBrainPath } = state.opts;
+  return projectBrainPath === globalBrainPath ? [globalBrainPath] : [globalBrainPath, projectBrainPath];
+}
+
+/**
+ * The drain's clip→node ledger, filtered to the REQUESTING client's own clips.
+ * This is how the extension fills ActivityRecord.nodeIds, which is what makes
+ * the popup's "also remove nodes created from this activity" checkbox real.
+ */
+const clipsMap: Handler = (req, res, ctx) => {
+  const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+  const since = url.searchParams.get('since') ?? undefined;
+  const clientId = ctx.client!.id;
+  const map = brainPaths(ctx.state)
+    .flatMap((p) => readClipMap(p, { clientId, since }))
+    .map((e) => ({ clipId: e.clipId, nodeIds: e.nodeIds, at: e.at }));
+  sendJson(res, 200, { ok: true, map }, ctx.cors);
+};
+
+// ── POST /v1/retract ─────────────────────────────────────────────────────────
+
+const RETRACT_MAX_IDS = 200;
+
+/**
+ * Delete clip nodes at the extension's request ("clear activity history, also
+ * remove nodes"). Three INDEPENDENT gates per node, each load-bearing:
+ *   1. it was requested by id;
+ *   2. origin === 'clip' — the hard security line: the extension can never
+ *      delete agent/seed/import knowledge, even via a poisoned ledger;
+ *   3. the requesting client's own clips created it — one paired browser
+ *      cannot delete another's.
+ * Ids that fail a gate (or were already evicted by pruneClips) are silently
+ * absent from `removed`; the extension reconciles against that list.
+ */
+const retract: Handler = async (req, res, ctx) => {
+  const body = (await readJsonBody(req, CLIP_BODY_MAX)) as { nodeIds?: unknown };
+  const requested = Array.isArray(body?.nodeIds)
+    ? body.nodeIds.filter((v): v is string => typeof v === 'string').slice(0, RETRACT_MAX_IDS)
+    : [];
+  if (requested.length === 0) {
+    sendJson(res, 200, { ok: true, removed: [] }, ctx.cors);
+    return;
+  }
+
+  const clientId = ctx.client!.id;
+  const removed: string[] = [];
+  for (const brainPath of brainPaths(ctx.state)) {
+    const attributed = new Set(readClipMap(brainPath, { clientId }).flatMap((e) => e.nodeIds));
+    const candidates = requested.filter((id) => attributed.has(id));
+    if (candidates.length === 0) continue;
+
+    const removedHere = mutateBrain(brainPath, (brain) => {
+      const out: string[] = [];
+      for (const id of candidates) {
+        const node = brain.nodes.find((n) => n.id === id);
+        if (node && node.origin === 'clip' && removeNode(brain, id)) out.push(id);
+      }
+      return out;
+    });
+    if (removedHere.length > 0) {
+      compactClipMap(brainPath, { dropNodeIds: new Set(removedHere) });
+      removed.push(...removedHere);
+    }
+  }
+  sendJson(res, 200, { ok: true, removed }, ctx.cors);
+};
+
 // ── admin (loopback + adminToken; unreachable from any browser) ───────────────
 
 const adminPairWindow: Handler = (_req, res, ctx) => {
@@ -241,6 +428,10 @@ export const ROUTES: Record<string, Route> = {
   '/v1/pair': { method: 'POST', auth: 'none', origin: 'extension', handler: pair },
   '/v1/status': { method: 'GET', auth: 'client', origin: 'paired', handler: status },
   '/v1/clip': { method: 'POST', auth: 'client', origin: 'paired', handler: clip },
+  '/v1/clips/map': { method: 'GET', auth: 'client', origin: 'paired', handler: clipsMap },
+  '/v1/retract': { method: 'POST', auth: 'client', origin: 'paired', handler: retract },
+  '/v1/nodes': { method: 'GET', auth: 'client', origin: 'paired', handler: nodes },
+  '/v1/search': { method: 'GET', auth: 'client', origin: 'paired', handler: search },
   '/v1/admin/pair-window': { method: 'POST', auth: 'admin', origin: 'absent', handler: adminPairWindow },
   '/v1/admin/clients': { method: 'GET', auth: 'admin', origin: 'absent', handler: adminClients },
   '/v1/admin/revoke': { method: 'POST', auth: 'admin', origin: 'absent', handler: adminRevoke },
