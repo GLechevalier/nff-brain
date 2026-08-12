@@ -16,7 +16,7 @@ const root = path.resolve(here, '..');
 
 function sources(): { file: string; rel: string; text: string }[] {
   const out: { file: string; rel: string; text: string }[] = [];
-  for (const dir of ['src', 'popup', 'devtools', 'content']) {
+  for (const dir of ['src', 'popup', 'devtools', 'content', 'agent']) {
     const abs = path.join(root, dir);
     if (!fs.existsSync(abs)) continue;
     for (const name of fs.readdirSync(abs)) {
@@ -94,7 +94,7 @@ describe('the capture choke point', () => {
     }
   });
 
-  it.each(['src/gate.ts', 'src/schema.ts', 'src/health.ts', 'src/protocol.ts'])(
+  it.each(['src/gate.ts', 'src/schema.ts', 'src/health.ts', 'src/protocol.ts', 'src/agentGate.ts'])(
     '%s never touches chrome.*',
     (rel) => {
       expect(code(FILES.find((f) => f.rel === rel)!.text)).not.toMatch(/\bchrome\./);
@@ -119,13 +119,16 @@ describe('the capture choke point', () => {
   it('reads a hostname only where it cannot grant capture', () => {
     // activity.ts labels a buffered record; main.ts labels the "Allow this
     // site" button; content/github.ts classifies a form's target (the worker
-    // re-gates on sender.tab.url regardless). None of them decides anything —
-    // gate.ts alone does.
+    // re-gates on sender.tab.url regardless); agentGate.ts is item 7's OWN
+    // separate choke point (a different question — is DOM automation allowed
+    // here — never a second copy of shouldCapture's decision). None of them
+    // decides capture — gate.ts alone does that.
     const readers = FILES.filter((f) => /\.hostname\b/.test(code(f.text)));
     expect(readers.map((r) => r.rel).sort()).toEqual([
       'content/githubClassify.ts',
       'popup/main.ts',
       'src/activity.ts',
+      'src/agentGate.ts',
       'src/gate.ts',
     ]);
   });
@@ -153,6 +156,9 @@ describe('MV3 service-worker discipline', () => {
     'src/recorder.ts',
     'src/recorderFormat.ts',
     'src/recorderRegistry.ts',
+    'src/agentRunner.ts',
+    'src/agentRegistry.ts',
+    'src/agentGate.ts',
   ])('%s declares no mutable module-level state', (rel) => {
     expect(topLevelBindings(FILES.find((f) => f.rel === rel)!.text)).toEqual([]);
   });
@@ -238,8 +244,12 @@ describe('built artifacts', () => {
       'panel.js',
       'panel.html',
       'panel.css',
+      'agent.js',
+      'agent.html',
+      'agent.css',
       'rec-github.js',
       'rec-linkedin.js',
+      'rec-linkedin-agent.js',
     ]) {
       expect(fs.existsSync(path.join(dist, f)), `dist/${f} missing`).toBe(true);
     }
@@ -247,7 +257,7 @@ describe('built artifacts', () => {
 
   it('contains no off-device URL and no framework runtime', () => {
     if (!fs.existsSync(dist)) return;
-    for (const name of ['sw.js', 'popup.js', 'devtools.js', 'panel.js', 'rec-github.js', 'rec-linkedin.js']) {
+    for (const name of ['sw.js', 'popup.js', 'devtools.js', 'panel.js', 'agent.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js']) {
       const text = read(name);
       // This is what actually ships — it catches an egress URL arriving through
       // a dependency rather than through our own source.

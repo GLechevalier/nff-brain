@@ -195,6 +195,195 @@ export function isRetractResponse(v: unknown): v is RetractResponse {
   return isObj(v) && v.ok === true && Array.isArray(v.removed) && v.removed.every((id: unknown) => typeof id === 'string');
 }
 
+// ── web agent (item 7) — extension → nff-brain serve ────────────────────────
+//
+// Independently redeclared rather than imported from @nff-brain/core, same
+// discipline as everything above this line: bundlePurity.test.ts only allows
+// this package to import the browser-safe core subpaths (score/vector/rank/
+// activity), so every server response shape this bundle needs to trust gets
+// its own local type + type guard here.
+
+export type WebAgentVerb = 'navigate' | 'readResultCards' | 'clickConnect';
+export type RunPhase = 'planning' | 'awaiting_approval' | 'running' | 'stopping' | 'stopped' | 'done' | 'error';
+export type PlanVerb = 'searchPeople' | 'evaluateCards';
+
+export interface AgentCardResult {
+  cardIndex: number;
+  name: string;
+  headline: string;
+  company?: string;
+}
+
+export interface PlanStep {
+  id: string;
+  summary: string;
+  verb: PlanVerb;
+  args: Record<string, string>;
+}
+
+export interface WebAgentPlan {
+  goal: string;
+  site: 'linkedin';
+  criteria: string;
+  steps: PlanStep[];
+  maxActions: number;
+  createdAt: string;
+}
+
+export interface McpToolDef {
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface WebAgentListTarget {
+  server: string;
+  tool: string;
+  toolDef: McpToolDef;
+}
+
+export interface ActionResult {
+  ok: boolean;
+  summary: string;
+  fields?: Record<string, string>;
+  cards?: AgentCardResult[];
+  reportedAt: string;
+  listWriteError?: string;
+}
+
+export interface ActionRecord {
+  stepId: string;
+  verb: WebAgentVerb;
+  args: Record<string, string>;
+  requestedAt: string;
+  result?: ActionResult;
+}
+
+export interface WebAgentRun {
+  id: string;
+  phase: RunPhase;
+  clientId: string;
+  goal: string;
+  plan: WebAgentPlan | null;
+  listTarget: WebAgentListTarget | null;
+  cursor: number;
+  pendingConnects: AgentCardResult[];
+  pendingConnectsStepId: string | null;
+  actionsTaken: number;
+  maxActions: number;
+  nextAllowedAtMs: number;
+  createdAt: string;
+  updatedAt: string;
+  history: ActionRecord[];
+  error?: string;
+}
+
+export interface NextAction {
+  stepId: string;
+  verb: WebAgentVerb;
+  args: Record<string, string>;
+}
+
+export interface AgentGoalResponse {
+  ok: true;
+  runId: string;
+}
+
+export interface AgentStatusResponse {
+  ok: true;
+  run: WebAgentRun | null;
+}
+
+export interface AgentNextActionResponse {
+  ok: true;
+  action: NextAction | null;
+  nextAllowedAtMs?: number;
+}
+
+function isRunPhase(v: unknown): v is RunPhase {
+  return (
+    typeof v === 'string' &&
+    ['planning', 'awaiting_approval', 'running', 'stopping', 'stopped', 'done', 'error'].includes(v)
+  );
+}
+
+/** NEVER TRUST THE WIRE. A malformed run reads as null — the page shows "no active run", never a crash. */
+function isWebAgentRun(v: unknown): v is WebAgentRun {
+  return (
+    isObj(v) &&
+    typeof v.id === 'string' &&
+    isRunPhase(v.phase) &&
+    typeof v.goal === 'string' &&
+    typeof v.cursor === 'number' &&
+    typeof v.actionsTaken === 'number' &&
+    typeof v.maxActions === 'number' &&
+    Array.isArray(v.history)
+  );
+}
+
+export function isAgentGoalResponse(v: unknown): v is AgentGoalResponse {
+  return isObj(v) && v.ok === true && typeof v.runId === 'string';
+}
+
+export function isAgentStatusResponse(v: unknown): v is AgentStatusResponse {
+  return isObj(v) && v.ok === true && (v.run === null || isWebAgentRun(v.run));
+}
+
+export function isAgentNextActionResponse(v: unknown): v is AgentNextActionResponse {
+  return isObj(v) && v.ok === true && (v.action === null || (isObj(v.action) && typeof v.action.stepId === 'string'));
+}
+
+// ── MCP servers (item 7) — extension → nff-brain serve ───────────────────────
+
+export interface McpServerSummary {
+  id: string;
+  name: string;
+  enabled: boolean;
+}
+
+export interface McpServersResponse {
+  ok: true;
+  servers: McpServerSummary[];
+}
+
+export interface McpToolsResponse {
+  ok: true;
+  tools: McpToolDef[];
+}
+
+export function isMcpServersResponse(v: unknown): v is McpServersResponse {
+  return (
+    isObj(v) &&
+    v.ok === true &&
+    Array.isArray(v.servers) &&
+    v.servers.every((s: unknown) => isObj(s) && typeof s.id === 'string' && typeof s.name === 'string')
+  );
+}
+
+export function isMcpToolsResponse(v: unknown): v is McpToolsResponse {
+  return (
+    isObj(v) &&
+    v.ok === true &&
+    Array.isArray(v.tools) &&
+    v.tools.every((t: unknown) => isObj(t) && typeof t.name === 'string')
+  );
+}
+
+// ── SW ↔ content script (LinkedIn agent adapter) ─────────────────────────────
+//
+// A THIRD, narrower channel than the two above: only two verbs ever cross it,
+// and unlike popup⇄SW it flows SW→content (a command) and content→SW (via
+// sendResponse inside the SAME onMessage call, never a separate sendMessage —
+// bundlePurity.test.ts pins that content scripts only ever call sendMessage
+// with type:'recorderEvent', so this reply path deliberately never does).
+
+export type SwToContent = { type: 'agentReadCards' } | { type: 'agentClickConnect'; cardIndex: number };
+
+export type ContentToAgentReply =
+  | { ok: true; verb: 'readResultCards'; cards: AgentCardResult[] }
+  | { ok: true; verb: 'clickConnect'; fields: { name: string; headline?: string; company?: string } }
+  | { ok: false; error: string };
+
 // ── popup ⇄ service worker ───────────────────────────────────────────────────
 
 export type PopupToSw =
@@ -212,10 +401,25 @@ export type PopupToSw =
   | { type: 'searchBrain'; q: string; limit?: number }
   // Recorders. The popup runs chrome.permissions.request itself (a user
   // gesture is required there); this message only flips state + registration.
-  | { type: 'setRecorderEnabled'; id: string; enabled: boolean };
+  | { type: 'setRecorderEnabled'; id: string; enabled: boolean }
+  // Web agent (item 7) — the agent page speaks this same channel (AgentPageToSw
+  // below), so the token stays SW-side exactly like getNodes/searchBrain above.
+  // Enabling the LinkedIn adapter runs chrome.permissions.request in the
+  // CALLING page (popup or agent page — a user gesture is required there);
+  // this message only flips state + registration, same split as recorders.
+  | { type: 'setAgentAdapterEnabled'; id: string; enabled: boolean }
+  | { type: 'agentSubmitGoal'; goal: string; maxActions: number; listTarget: WebAgentListTarget | null }
+  | { type: 'agentApprovePlan'; runId: string }
+  | { type: 'agentRejectPlan'; runId: string }
+  | { type: 'agentStop'; runId: string }
+  | { type: 'getAgentStatus' }
+  | { type: 'getMcpServers' }
+  | { type: 'getMcpTools'; server: string };
 
 /** The panel speaks the same channel as the popup. */
 export type PanelToSw = PopupToSw;
+/** So does the web agent page. */
+export type AgentPageToSw = PopupToSw;
 
 /**
  * Everything the popup renders. Deliberately NOT StoredState: the bearer token
@@ -233,6 +437,15 @@ export interface RecorderRow {
   allowlisted: boolean;
 }
 
+/** Same shape as RecorderRow — a distinct type because it is a distinct opt-in. */
+export interface AgentAdapterRow {
+  id: string;
+  label: string;
+  hosts: string[];
+  enabled: boolean;
+  granted: boolean;
+}
+
 export interface PublicState {
   phase: ConnectionPhase;
   port: number | null;
@@ -243,12 +456,17 @@ export interface PublicState {
   /** Σ nodeIds.length — drives whether the clear-history checkbox renders. */
   removableNodeCount: number;
   recorders: RecorderRow[];
+  agentAdapters: AgentAdapterRow[];
 }
 
 export type SwToPopup =
   | { type: 'state'; state: PublicState }
   | { type: 'error'; message: string }
   | { type: 'nodes'; data: NodesResponse }
-  | { type: 'search'; data: SearchResponse };
+  | { type: 'search'; data: SearchResponse }
+  | { type: 'agentStatus'; run: WebAgentRun | null }
+  | { type: 'mcpServers'; servers: McpServerSummary[] }
+  | { type: 'mcpTools'; tools: McpToolDef[] };
 
 export type SwToPanel = SwToPopup;
+export type SwToAgentPage = SwToPopup;

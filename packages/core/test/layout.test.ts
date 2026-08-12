@@ -3,12 +3,30 @@ import {
   DEFAULT_MIN_GAP,
   LABEL_PAD,
   connectedComponents,
+  requiredSeparation,
   layoutBrain,
   spaceOutNodes,
   type LayoutEdge,
   type LayoutNode,
   type Pt,
 } from '../src/layout.js';
+
+
+/**
+ * The spacing contract is a BOX, not a circle: two nodes are clear as soon as
+ * they are apart on either axis. Asserting a radial distance would demand more
+ * separation than the layout promises (and than the eye needs).
+ */
+function boxesClear(
+  a: { size: number },
+  b: { size: number },
+  pa: Pt,
+  pb: Pt,
+  minGap: number,
+): boolean {
+  const req = requiredSeparation(a.size, b.size, minGap);
+  return Math.abs(pb.x - pa.x) >= req.x - 0.5 || Math.abs(pb.y - pa.y) >= req.y - 0.5;
+}
 
 function node(id: string, extra: Partial<LayoutNode> = {}): LayoutNode {
   return { id, x: 0, y: 0, size: 16, ...extra };
@@ -160,8 +178,7 @@ describe('layoutBrain', () => {
       for (let j = i + 1; j < nodes.length; j++) {
         const a = nodes[i];
         const b = nodes[j];
-        const req = a.size + b.size + minGap + LABEL_PAD;
-        expect(dist(pos[a.id], pos[b.id])).toBeGreaterThanOrEqual(req - 0.5);
+        expect(boxesClear(a, b, pos[a.id], pos[b.id], minGap), `${a.id}/${b.id} overlap`).toBe(true);
       }
     }
   });
@@ -227,8 +244,10 @@ describe('layoutBrain — radial tree along a spine', () => {
     const all = [...nodes, { id: 'spine:1-0', x: 0, y: 0, size: 22 }];
     for (let i = 0; i < all.length; i++) {
       for (let j = i + 1; j < all.length; j++) {
-        const req = all[i].size + all[j].size + minGap + LABEL_PAD;
-        expect(dist(pos[all[i].id], pos[all[j].id])).toBeGreaterThanOrEqual(req - 0.5);
+        expect(
+          boxesClear(all[i], all[j], pos[all[i].id], pos[all[j].id], minGap),
+          `${all[i].id}/${all[j].id} overlap`,
+        ).toBe(true);
       }
     }
   });
@@ -279,8 +298,7 @@ describe('layoutBrain — incremental', () => {
     expect(dist(pos.new, { x: 100, y: 100 })).toBeLessThan(400);
     // …but not on top of the neighbour. Derived from the default rather than
     // repeating the number, so re-tuning the spacing cannot silently break this.
-    const req = a.size + fresh.size + DEFAULT_MIN_GAP + LABEL_PAD;
-    expect(dist(pos.new, pos.a)).toBeGreaterThanOrEqual(req - 0.5);
+    expect(boxesClear(a, fresh, pos.a, pos.new, DEFAULT_MIN_GAP)).toBe(true);
   });
 
   it('parks an all-new component clear of the settled board', () => {
@@ -331,7 +349,10 @@ describe('spaceOutNodes', () => {
       { id: 'b', x: 105, y: 100, size: 16 },
     ];
     const pos = spaceOutNodes(nodes, { minGap: 24 });
-    expect(dist(pos.a, pos.b)).toBeGreaterThanOrEqual(16 + 16 + 24 + LABEL_PAD - 0.5);
+    // Side by side, so only the horizontal requirement applies — the label pad
+    // is vertical clearance and must not be charged here.
+    expect(Math.abs(pos.b.x - pos.a.x)).toBeGreaterThanOrEqual(16 + 16 + 24 - 0.5);
+    expect(boxesClear(nodes[0], nodes[1], pos.a, pos.b, 24)).toBe(true);
   });
 
   it('separates exactly coincident nodes deterministically', () => {

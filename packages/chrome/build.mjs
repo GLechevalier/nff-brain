@@ -15,6 +15,8 @@ const STATIC = [
   ['devtools/devtools.html', 'devtools.html'],
   ['devtools/panel.html', 'panel.html'],
   ['devtools/panel.css', 'panel.css'],
+  ['agent/agent.html', 'agent.html'],
+  ['agent/agent.css', 'agent.css'],
   ['icons', 'icons'],
 ];
 
@@ -45,16 +47,18 @@ const common = {
 const CONTENT = [
   ['content/github.ts', 'rec-github.js'],
   ['content/linkedin.ts', 'rec-linkedin.js'],
+  ['content/linkedinAgent.ts', 'rec-linkedin-agent.js'],
 ];
 
 const swCtx = await esbuild.context({ ...common, entryPoints: ['src/sw.ts'], outfile: `${OUT}/sw.js` });
 const popupCtx = await esbuild.context({ ...common, entryPoints: ['popup/main.ts'], outfile: `${OUT}/popup.js` });
 const devtoolsCtx = await esbuild.context({ ...common, entryPoints: ['devtools/devtools.ts'], outfile: `${OUT}/devtools.js` });
 const panelCtx = await esbuild.context({ ...common, entryPoints: ['devtools/panel.ts'], outfile: `${OUT}/panel.js` });
+const agentCtx = await esbuild.context({ ...common, entryPoints: ['agent/agent.ts'], outfile: `${OUT}/agent.js` });
 const contentCtxs = await Promise.all(
   CONTENT.map(([entry, out]) => esbuild.context({ ...common, entryPoints: [entry], outfile: `${OUT}/${out}` })),
 );
-const contexts = [swCtx, popupCtx, devtoolsCtx, panelCtx, ...contentCtxs];
+const contexts = [swCtx, popupCtx, devtoolsCtx, panelCtx, agentCtx, ...contentCtxs];
 
 copyStatic();
 
@@ -73,5 +77,5 @@ if (watch) {
 } else {
   await Promise.all(contexts.map((c) => c.rebuild()));
   await Promise.all(contexts.map((c) => c.dispose()));
-  console.log('built dist/sw.js + dist/popup.js + dist/devtools.js + dist/panel.js + statics');
+  console.log('built dist/sw.js + dist/popup.js + dist/devtools.js + dist/panel.js + dist/agent.js + statics');
 }

@@ -20,6 +20,7 @@ const VALUE_FLAGS = new Set([
   'since', 'project', 'min-confidence', 'concurrency', 'max-new',
   'port', 'target', 'allow-origin', 'revoke', 'name',
   'iterations', 'fanout', 'min-sim', 'floor', 'cap', 'min-gap', 'ring-gap',
+  'header',
 ]);
 
 export function parseArgs(argv: string[]): Args {

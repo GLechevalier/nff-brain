@@ -25,6 +25,8 @@ export const KEYS = {
   recent: 'nb.recent',
   recorders: 'nb.recorders',
   recorderSeen: 'nb.recorderSeen',
+  agentAdapters: 'nb.agentAdapters',
+  agentTab: 'nb.agentTab',
 } as const;
 
 // ── pairing ──────────────────────────────────────────────────────────────────

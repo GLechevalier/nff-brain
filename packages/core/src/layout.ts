@@ -49,19 +49,21 @@ export const LABEL_PAD = 14;
  * is fully binding, so nearest-neighbour distance comes out at exactly
  * `size_a + size_b + minGap + LABEL_PAD` everywhere.
  *
- * Measured on a 103-node brain (board area / ink coverage, always 0 overlaps):
- *   60 → 16.6 Mpx / 0.75%      24 →  6.7 Mpx / 1.84%
- *   36 →  9.9 Mpx / 1.36%      10 →  4.5 Mpx / 2.78%   ← here
- *   16 →  5.4 Mpx / 2.30%       4 →  3.7 Mpx / 3.32%
+ * Measured on a 103-node brain, with box separation and the matching ring gap
+ * (board area / ink coverage, always 0 overlaps):
+ *   60/200 → 16.6 Mpx / 0.75%     6/30 → 3.47 Mpx / 3.57%
+ *   36/120 →  9.9 Mpx / 1.36%     4/20 → 3.25 Mpx / 3.82%   ← here
+ *   10/60  →  4.29 Mpx / 2.89%    2/12 → 2.99 Mpx / 4.15%
  *
- * Hard floor: two 32px squares are 46px apart centre-to-centre even at minGap 0,
- * so there is little left below 4. What degrades first is not the squares but
- * the LABELS — titles are far wider than the nodes and already overlap; tighter
- * spacing overlaps more of them. That, not collision, is the real limit.
+ * 4 leaves 4px of paper between two squares horizontally and 18px vertically.
+ * Below that they read as one block, and the floor is only ~3.0 Mpx anyway —
+ * there is nothing left to win. What degrades first is not collision but the
+ * LABELS: titles are far wider than the 32px squares and already overlap, and
+ * tighter spacing overlaps more of them. That is the real limit here.
  */
-export const DEFAULT_MIN_GAP = 10;
+export const DEFAULT_MIN_GAP = 4;
 /** Clear space between rings of the radial tree. Secondary to DEFAULT_MIN_GAP. */
-export const DEFAULT_RING_GAP = 60;
+export const DEFAULT_RING_GAP = 20;
 
 // Stable 32-bit string hash (FNV-1a) — for deterministic tie-breaks and for the
 // webview's per-node drift direction, which derives from the same hash.
@@ -88,9 +90,34 @@ export interface SpaceOutOptions {
 }
 
 /**
+ * Clear space two nodes need, PER AXIS.
+ *
+ * Nodes are squares with a label underneath, so what has to stay clear is a
+ * box, not a circle. Separating them by a single radial distance — the original
+ * approach — reserves the label's height in every direction, including
+ * horizontally where there is no label to clear.
+ *
+ * Worth ~5% of board area in practice, not the large win the geometry suggests:
+ * the radial tree, not local packing, is what sets the overall size. It is
+ * still the correct model, and it is what lets minGap go near zero without the
+ * squares actually touching.
+ */
+export function requiredSeparation(
+  sizeA: number,
+  sizeB: number,
+  minGap: number,
+): { x: number; y: number } {
+  return { x: sizeA + sizeB + minGap, y: sizeA + sizeB + minGap + LABEL_PAD };
+}
+
+/**
  * Minimum-spacing pass: relaxes ONLY overlaps, deterministically. Used as the
  * final cleanup after the force pass, which optimises for edge structure and
  * will happily leave two unrelated nodes sitting on top of each other.
+ *
+ * Axis-aligned box separation: two nodes are clear as soon as they are apart on
+ * EITHER axis, and overlaps are resolved along whichever axis needs the smaller
+ * push — the standard AABB resolution, and much denser than a radial one.
  */
 export function spaceOutNodes(nodes: SpacedNode[], opts: SpaceOutOptions = {}): Record<string, Pt> {
   const { minGap = 24, pinnedId = null, pinned = null, iterations = 60 } = opts;
@@ -107,22 +134,28 @@ export function spaceOutNodes(nodes: SpacedNode[], opts: SpaceOutOptions = {}): 
         const nb = nodes[b];
         const pa = pos[na.id];
         const pb = pos[nb.id];
-        // Squares of side size*2 → half-extent = size. Required centre distance keeps a
-        // `minGap` between the squares plus a little room for the label beneath.
-        const req = na.size + nb.size + minGap + LABEL_PAD;
-        let dx = pb.x - pa.x;
-        let dy = pb.y - pa.y;
-        let dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist >= req) continue;
-        if (dist < 0.01) {
-          // Exactly coincident: pick a deterministic direction from the id hashes.
-          dx = ((hash(na.id + nb.id) % 100) - 50) / 50 || 1;
-          dy = ((hash(nb.id + na.id) % 100) - 50) / 50 || 1;
-          dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const req = requiredSeparation(na.size, nb.size, minGap);
+        const dx = pb.x - pa.x;
+        const dy = pb.y - pa.y;
+        const penX = req.x - Math.abs(dx);
+        const penY = req.y - Math.abs(dy);
+        // Clear on either axis ⇒ the boxes do not overlap at all.
+        if (penX <= 0 || penY <= 0) continue;
+
+        // Push along the axis of least penetration, so nodes settle into rows
+        // and columns rather than drifting diagonally away from each other.
+        let ox = 0;
+        let oy = 0;
+        if (penX <= penY) {
+          // dx === 0 is a real case (a column of nodes): pick a side from the
+          // id hashes so the choice is deterministic rather than arbitrary.
+          const sign = dx === 0 ? (hash(na.id + nb.id) % 2 ? 1 : -1) : Math.sign(dx);
+          ox = penX * sign;
+        } else {
+          const sign = dy === 0 ? (hash(nb.id + na.id) % 2 ? 1 : -1) : Math.sign(dy);
+          oy = penY * sign;
         }
-        const sep = (req - dist) / dist; // scale factor to reach the required distance
-        const ox = dx * sep;
-        const oy = dy * sep;
+
         const aPinned = isPinned(na.id);
         const bPinned = isPinned(nb.id);
         if (aPinned && bPinned) continue;

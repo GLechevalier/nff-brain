@@ -5,8 +5,13 @@
 import {
   HOST,
   REQUEST_TIMEOUT_MS,
+  isAgentGoalResponse,
+  isAgentNextActionResponse,
+  isAgentStatusResponse,
   isClipsMapResponse,
   isHelloResponse,
+  isMcpServersResponse,
+  isMcpToolsResponse,
   isNodesResponse,
   isPairResponse,
   isRetractResponse,
@@ -14,14 +19,22 @@ import {
   isStatusResponse,
 } from './protocol.js';
 import type {
+  AgentCardResult,
+  AgentGoalResponse,
+  AgentNextActionResponse,
+  AgentStatusResponse,
   ClipResponse,
   ClipsMapResponse,
   HelloResponse,
+  McpServersResponse,
+  McpToolsResponse,
   NodesResponse,
   PairResponse,
   RetractResponse,
   SearchResponse,
   StatusResponse,
+  WebAgentListTarget,
+  WebAgentVerb,
 } from './protocol.js';
 
 export class HttpError extends Error {
@@ -134,6 +147,84 @@ export async function getClipsMap(port: number, token: string, since?: string): 
 export async function retract(port: number, token: string, nodeIds: string[]): Promise<RetractResponse> {
   const body = await call(port, '/v1/retract', { method: 'POST', token, body: JSON.stringify({ nodeIds }) });
   if (!isRetractResponse(body)) throw new HttpError(0, 'protocol', 'unexpected retract response');
+  return body;
+}
+
+// ── web agent (item 7) ────────────────────────────────────────────────────────
+
+export async function submitAgentGoal(
+  port: number,
+  token: string,
+  params: { goal: string; maxActions: number; listTarget: WebAgentListTarget | null },
+): Promise<AgentGoalResponse> {
+  const body = await call(port, '/v1/agent/goal', { method: 'POST', token, body: JSON.stringify(params) });
+  if (!isAgentGoalResponse(body)) throw new HttpError(0, 'protocol', 'unexpected goal response');
+  return body;
+}
+
+export async function getAgentStatus(port: number, token: string): Promise<AgentStatusResponse> {
+  const body = await call(port, '/v1/agent/status', { token });
+  if (!isAgentStatusResponse(body)) throw new HttpError(0, 'protocol', 'unexpected agent status response');
+  return body;
+}
+
+export async function approveAgentPlan(port: number, token: string, runId: string): Promise<AgentStatusResponse> {
+  const body = await call(port, '/v1/agent/plan/approve', { method: 'POST', token, body: JSON.stringify({ runId }) });
+  if (!isAgentStatusResponse(body)) throw new HttpError(0, 'protocol', 'unexpected agent status response');
+  return body;
+}
+
+export async function rejectAgentPlan(port: number, token: string, runId: string): Promise<AgentStatusResponse> {
+  const body = await call(port, '/v1/agent/plan/reject', { method: 'POST', token, body: JSON.stringify({ runId }) });
+  if (!isAgentStatusResponse(body)) throw new HttpError(0, 'protocol', 'unexpected agent status response');
+  return body;
+}
+
+/** Idempotent server-side — never throws on an already-terminal or unknown run. */
+export async function stopAgentRun(port: number, token: string, runId: string): Promise<void> {
+  await call(port, '/v1/agent/stop', { method: 'POST', token, body: JSON.stringify({ runId }) });
+}
+
+export async function getAgentNextAction(port: number, token: string): Promise<AgentNextActionResponse> {
+  const body = await call(port, '/v1/agent/next-action', { token });
+  if (!isAgentNextActionResponse(body)) throw new HttpError(0, 'protocol', 'unexpected next-action response');
+  return body;
+}
+
+export interface ReportAgentActionParams {
+  runId: string;
+  stepId: string;
+  verb: WebAgentVerb;
+  args: Record<string, string>;
+  result: {
+    ok: boolean;
+    summary: string;
+    fields?: Record<string, string>;
+    cards?: AgentCardResult[];
+  };
+}
+
+export async function reportAgentAction(
+  port: number,
+  token: string,
+  params: ReportAgentActionParams,
+): Promise<AgentStatusResponse> {
+  const body = await call(port, '/v1/agent/action-result', { method: 'POST', token, body: JSON.stringify(params) });
+  if (!isAgentStatusResponse(body)) throw new HttpError(0, 'protocol', 'unexpected agent status response');
+  return body;
+}
+
+// ── MCP servers (item 7) ────────────────────────────────────────────────────
+
+export async function getMcpServers(port: number, token: string): Promise<McpServersResponse> {
+  const body = await call(port, '/v1/mcp/servers', { token });
+  if (!isMcpServersResponse(body)) throw new HttpError(0, 'protocol', 'unexpected mcp servers response');
+  return body;
+}
+
+export async function getMcpTools(port: number, token: string, serverId: string): Promise<McpToolsResponse> {
+  const body = await call(port, `/v1/mcp/tools?server=${encodeURIComponent(serverId)}`, { token });
+  if (!isMcpToolsResponse(body)) throw new HttpError(0, 'protocol', 'unexpected mcp tools response');
   return body;
 }
 

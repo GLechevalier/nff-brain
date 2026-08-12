@@ -19,6 +19,9 @@ export const NFF_PROMPT_MARKERS = {
   explainer: 'You are the graph explainer',
   archaeologist: 'You are the memory archaeologist',
   clipper: 'You are the memory clipper',
+  agentPlanner: 'You are the web agent planner',
+  agentFilter: "You are the web agent's judgment call",
+  agentListWrite: "You are the web agent's list-write field mapper",
 } as const;
 
 export const NFF_PROMPT_PREFIXES: readonly string[] = Object.values(NFF_PROMPT_MARKERS);

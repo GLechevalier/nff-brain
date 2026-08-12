@@ -38,10 +38,14 @@ published `key` to `manifest.json` so unpacked and store builds share one id.
 | `src/capture.ts` | the context menus (selection/link/page) → gate → `POST /v1/clip` |
 | `src/recorder.ts` | SW side of the per-site recorders — the SECOND registered `shouldCapture` caller |
 | `src/recorderRegistry.ts` / `recorderTypes.ts` / `recorderFormat.ts` | adapter metadata, wire validation, event formatting; all pure |
+| `src/agentGate.ts` | **the agent's own choke point** (item 7) — pure, zero imports, a separate question from `shouldCapture()`: is DOM automation allowed here right now |
+| `src/agentRegistry.ts` / `agentTypes.ts` | web-agent adapter metadata — mirrors the recorder registry, but a distinct opt-in |
+| `src/agentRunner.ts` | SW side of the web agent: adapter enable/disable, the alarm-redriven poll loop, tab driving, dispatch to the LinkedIn content script |
 | `src/sw.ts` | listener registration only — read its header before editing |
 | `popup/` | static skeleton + `paint(state)`; plain DOM, no framework |
 | `devtools/` | the Brain panel (F12 → Brain): counts + search + retrieval-only Ask; all HTTP via the worker, token never in the panel |
-| `content/` | recorder content scripts — no token, no fetch, no storage (CI-enforced); they message the worker |
+| `agent/` | the Web Agent page (item 7): submit a goal, review the plan, approve/stop a run — all HTTP via the worker, same as the panel |
+| `content/` | recorder + web-agent content scripts — no token, no fetch, no storage (CI-enforced); `linkedinAgent.ts` is the one exception that RECEIVES commands (`sendResponse` only, never `sendMessage`) |
 | `store/` | Web Store assets: privacy policy, permission justifications, listing copy, submission runbook |
 
 Two invariants are enforced by `test/bundlePurity.test.ts` rather than by
@@ -77,6 +81,9 @@ Automated tests cover the pure logic; the rest needs a browser. Prerequisite:
 | **Recorder events land** | With capture ON: open two issues and post one comment on GitHub → three `recorder-event` clips pending (`nff-brain clips`), titles and repos correct. Same on LinkedIn: send an invite → one event with the name (and note). Double-submit → still one event. |
 | **Recorder respects pause + allowlist** | Toggle capture PAUSED → a recorder action lands nothing, without reloading the page. Remove `github.com` from the allowlist while the recorder is enabled → nothing lands, and the popup row shows "blocked". |
 | **Recorder survives update** | Bump the version and reload the unpacked extension (`onInstalled` fires with `reason:'update'`, which CLEARS registered scripts) → the recorder still fires on the next action (the reconciliation re-registered it). |
+| **Web agent — LinkedIn DOM (unverified, see docs/EPIC-chrome.md item 7)** | Register an MCP server (`nff-brain mcp add`), enable the LinkedIn agent adapter from the Web Agent page (Chrome prompts for `www.linkedin.com` — confirm it's a SEPARATE grant from the recorder's), submit a small goal with `maxActions: 2`. Confirm: the plan appears for approval; approving starts polling; the SW opens/reuses one background tab and navigates it; `readResultCards` actually finds the visible people-search cards (this is where LinkedIn's real DOM will have rotted the selectors in `content/linkedinAgent.ts` if anything did); at most 2 Connect clicks fire, each with a **randomized, multi-minute** gap (never back-to-back); each produces a clip (`nff-brain clips`) AND a call to the configured MCP tool. |
+| **Web agent — Stop is immediate** | Mid-run, click Stop on the Web Agent page. Confirm no further Connect click ever fires (poll the SW's alarm via `chrome://extensions` → service worker → Application → the alarm should be cleared), and the one action already in flight (if any) still completes and records before the run shows `stopped`. |
+| **Web agent — opt-in is separate from the recorder** | With the LinkedIn recorder OFF and the web agent ON (or vice versa), confirm each toggle is independent in the popup/agent page and that disabling the agent releases its own permission grant without touching the recorder's. |
 
 ### Local Network Access — findings
 
@@ -105,3 +112,16 @@ Automated tests cover the pure logic; the rest needs a browser. Prerequisite:
   named test failure, not a silently dead recorder.
 - **Incognito is not supported** (`"incognito": "not_allowed"`), deliberately: a
   memory tool silently recording incognito browsing is a landmine.
+- **The web agent's LinkedIn selectors are the least-verified code in this
+  package** (item 7). `content/linkedinAgent.ts` reads search-result cards and
+  finds the Connect button by accessible label, same discipline as the
+  recorder, but has never been run against a live results page — selector rot
+  here is a broken run, not a missing clip. See the manual checklist above.
+- **The web agent's MCP client supports only the stateless flavor of
+  Streamable HTTP** (one JSON-RPC POST → one JSON or single-frame-SSE
+  response). A server that requires a session handshake or a live SSE stream
+  is out of scope for v1 and fails with a clear error from `nff-brain mcp
+  test`, not a silent hang.
+- **One active web-agent run globally**, not per-tab or per-goal — the browser
+  has no workspace concept, so a second `agentSubmitGoal` while one is active
+  is refused (409) until the first is stopped or finishes.

@@ -88,6 +88,24 @@ process.stdin.on('end', () => {
         duplicate: [],
       }),
     );
+  } else if (prompt.includes('web agent planner')) {
+    // web agent: one searchPeople step then one evaluateCards step.
+    process.stdout.write(
+      JSON.stringify({
+        steps: [
+          { summary: 'Search LinkedIn for robotics engineers', verb: 'searchPeople', args: { query: 'robotics engineer' } },
+          { summary: 'Judge the results against the goal', verb: 'evaluateCards', args: {} },
+        ],
+        criteria: 'robotics engineer at a Series A startup',
+      }),
+    );
+  } else if (prompt.includes("web agent's judgment call")) {
+    // web agent filter: always match card #0 — deterministic for a single-page test.
+    process.stdout.write(JSON.stringify({ matches: [{ i: 0, reason: 'matches the criteria' }] }));
+  } else if (prompt.includes("web agent's list-write field mapper")) {
+    // web agent list-write: map whatever name was read straight through.
+    const m = /"name":"([^"]*)"/.exec(prompt);
+    process.stdout.write(JSON.stringify({ args: { name: m?.[1] ?? 'Unknown' } }));
   } else if (prompt.includes('graph explainer')) {
     // ingest-graphify: batched intent explanations keyed by brain node id
     process.stdout.write(

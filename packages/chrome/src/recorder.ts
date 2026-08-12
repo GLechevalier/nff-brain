@@ -12,6 +12,7 @@ import { currentPhase } from './connection.js';
 import { isAllowed, shouldCapture } from './gate.js';
 import { ADAPTERS, adapterById } from './recorderRegistry.js';
 import { formatRecorderClip, pushRecorderSeen, recorderSeenRecently, validateRecorderEvent } from './recorderFormat.js';
+import type { RecorderEventMsg } from './recorderTypes.js';
 import {
   getAllowlist,
   getCapture,
@@ -114,27 +115,30 @@ export async function recorderPublicState(): Promise<
   return out;
 }
 
-/** The content-script event sink — the second registered shouldCapture caller. */
-export async function onRecorderEvent(raw: unknown, sender: chrome.runtime.MessageSender): Promise<void> {
-  // Only our own content scripts, and only ones running in a real tab.
-  if (sender.id !== chrome.runtime.id) return;
-  const url = sender.tab?.url;
-  if (!url) return;
-
-  const msg = validateRecorderEvent(raw);
-  if (!msg) return;
-  const adapter = adapterById(msg.adapter);
-  if (!adapter || !adapter.actions.includes(msg.action)) return;
-  const state = await getRecorders();
-  if (state.byId[msg.adapter]?.enabled !== true) return;
-
+/**
+ * The gate→dedupe→post-clip tail, shared by every real caller of the clip
+ * pipeline: the content-script event sink below, AND (item 7) agentRunner.ts
+ * for a real, agent-caused LinkedIn connect. Deliberately stays inside this
+ * file — bundlePurity.test.ts pins shouldCapture()'s callers to exactly
+ * ['src/capture.ts', 'src/recorder.ts'], and keeping the agent's audit-clip
+ * write as an internal caller of THIS file (never a new one) is what keeps
+ * that invariant true without editing the test.
+ *
+ * `url` is the caller's OWN best evidence of where this happened — a
+ * sender.tab.url claim from a content script, or a chrome.tabs.get() lookup
+ * the service worker did itself for an agent-driven tab it is controlling.
+ * Either way it is never a raw, unchecked claim from untrusted page content.
+ */
+export async function deliverRecorderClip(url: string, msg: RecorderEventMsg): Promise<void> {
   const [capture, allowlist] = await Promise.all([getCapture(), getAllowlist()]);
-  // THE CHOKE POINT, on the SENDER'S url — never the script's claim. Global
-  // pause and allowlist removal silence an injected recorder right here.
+  // THE CHOKE POINT. Global pause and allowlist removal silence a recorder —
+  // passive OR agent-driven — right here, with zero extra code either way.
   if (!shouldCapture(url, { enabled: capture.enabled, rules: allowlist.rules })) return;
 
   // Persistent dedupe (a submit can double-fire; a page-load Set died with the
-  // navigation). In storage, never a module variable.
+  // navigation; an agent-caused connect and a simultaneously-enabled passive
+  // recorder can independently observe the SAME real click — this ring is
+  // what collapses that into one clip, whichever path posts first).
   const nowMs = Date.now();
   const ring = await getRecorderSeen();
   if (recorderSeenRecently(ring, msg.key, nowMs)) return;
@@ -169,4 +173,21 @@ export async function onRecorderEvent(raw: unknown, sender: chrome.runtime.Messa
   setTimeout(() => {
     void currentPhase().then((phase) => paintBadge(phase, capture.enabled));
   }, 1200);
+}
+
+/** The content-script event sink — the second registered shouldCapture caller (via deliverRecorderClip). */
+export async function onRecorderEvent(raw: unknown, sender: chrome.runtime.MessageSender): Promise<void> {
+  // Only our own content scripts, and only ones running in a real tab.
+  if (sender.id !== chrome.runtime.id) return;
+  const url = sender.tab?.url;
+  if (!url) return;
+
+  const msg = validateRecorderEvent(raw);
+  if (!msg) return;
+  const adapter = adapterById(msg.adapter);
+  if (!adapter || !adapter.actions.includes(msg.action)) return;
+  const state = await getRecorders();
+  if (state.byId[msg.adapter]?.enabled !== true) return;
+
+  await deliverRecorderClip(url, msg);
 }

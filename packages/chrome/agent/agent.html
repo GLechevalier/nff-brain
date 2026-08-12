@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>nff-brain — Web Agent</title>
+    <!-- Reuses the popup's stylesheet: both land as siblings at dist/ root. -->
+    <link rel="stylesheet" href="popup.css" />
+    <link rel="stylesheet" href="agent.css" />
+  </head>
+  <body>
+    <!--
+      STATIC SKELETON, same discipline as popup.html: paint.ts only sets
+      textContent, toggles classes and replaces list children.
+    -->
+    <header class="bar">
+      <span class="wordmark">nff-brain — Web Agent</span>
+    </header>
+
+    <section id="adapter-panel" class="panel">
+      <div class="row">
+        <span class="strong">LinkedIn — search & connect</span>
+        <button id="adapter-toggle" class="btn push">Enable</button>
+      </div>
+      <p class="muted small">
+        Autonomous, not passive: once you approve a plan, this clicks Connect on your behalf, up to
+        the cap you set, with a random pause between each. It knowingly crosses the recorder's
+        "observe-only" line — its own opt-in, separate from the LinkedIn recorder.
+      </p>
+      <div id="adapter-error" class="small error hidden"></div>
+    </section>
+
+    <section id="goal-panel" class="panel">
+      <div class="row"><span class="label">New goal</span></div>
+      <textarea id="goal-input" class="input grow" rows="3" placeholder="e.g. find robotics engineers at Series A startups on LinkedIn, connect with them, and add them to my CRM"></textarea>
+      <div class="row gap">
+        <label class="small" for="max-actions">Max connects</label>
+        <input id="max-actions" class="input port" type="number" min="1" max="25" value="5" />
+      </div>
+      <div class="row gap">
+        <label class="small" for="list-server">Add matches to</label>
+        <select id="list-server" class="input grow"></select>
+        <select id="list-tool" class="input grow"></select>
+      </div>
+      <p id="list-target-hint" class="muted small"></p>
+      <button id="goal-submit" class="btn primary wide">Plan it</button>
+      <div id="goal-error" class="small error hidden"></div>
+    </section>
+
+    <section id="plan-panel" class="panel hidden">
+      <div class="row"><span class="label">Plan — review before it runs</span></div>
+      <p id="plan-summary" class="small"></p>
+      <ol id="plan-steps" class="rules"></ol>
+      <div class="row gap">
+        <button id="plan-approve" class="btn primary">Approve & run</button>
+        <button id="plan-reject" class="btn">Discard</button>
+      </div>
+    </section>
+
+    <section id="run-panel" class="panel hidden">
+      <div class="row">
+        <span id="run-phase" class="strong"></span>
+        <span id="run-progress" class="muted push"></span>
+      </div>
+      <p id="run-goal" class="small muted"></p>
+      <div id="run-error" class="small error hidden"></div>
+      <ol id="run-history" class="rules"></ol>
+      <button id="run-stop" class="btn danger wide">Stop</button>
+    </section>
+
+    <script src="agent.js"></script>
+  </body>
+</html>

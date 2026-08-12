@@ -21,6 +21,8 @@ import {
 import type { CaptureTarget, ServeClient } from '@nff-brain/core';
 import { readJsonBody, sendError, sendJson } from './http.js';
 import type { ServeState } from './state.js';
+import { AGENT_ROUTES } from './agentRoutes.js';
+import { MCP_ROUTES } from './mcpRoutes.js';
 
 const PAIR_BODY_MAX = 8 * 1024;
 const CLIP_BODY_MAX = 64 * 1024;
@@ -435,4 +437,6 @@ export const ROUTES: Record<string, Route> = {
   '/v1/admin/pair-window': { method: 'POST', auth: 'admin', origin: 'absent', handler: adminPairWindow },
   '/v1/admin/clients': { method: 'GET', auth: 'admin', origin: 'absent', handler: adminClients },
   '/v1/admin/revoke': { method: 'POST', auth: 'admin', origin: 'absent', handler: adminRevoke },
+  ...AGENT_ROUTES,
+  ...MCP_ROUTES,
 };

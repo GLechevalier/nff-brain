@@ -1,7 +1,10 @@
 # EPIC — nff-brain in the browser
 
 **Status:** items 0–5 SHIPPED (2026-08-11) · item 6's assets written, store
-submission is the remaining manual step (`packages/chrome/store/`)
+submission is the remaining manual step (`packages/chrome/store/`) · item 7
+SHIPPED (2026-08-12), pending only the manual LinkedIn-DOM verification row in
+`packages/chrome/README.md` — selectors were written and unit-tested but never
+run against a live results page
 **Goal:** the browser stops being the one place where learning evaporates.
 **Done when:** a fact you encountered in Chrome is recalled in a Claude Code
 session without you having filed it anywhere. **The loop is closed:** the
@@ -240,10 +243,72 @@ Store" is bullet one of the MVP.
 
 ---
 
+## 7. Web agent
+
+*New — the only item that writes on the user's behalf, and the only one that
+knowingly crosses item 4's "observe-only, never automate" bright line.*
+
+| | |
+|---|---|
+| **Scope** | A natural-language goal produces a plan the user approves once (`packages/chrome/agent/`), then the local server drives a LinkedIn content script through a narrow, fixed action vocabulary (`navigate`, `readResultCards`, `clickConnect` — never arbitrary DOM eval) up to a configurable cap, with server-authoritative randomized pacing and an always-visible Stop. Every real action lands in the existing clip pipeline via `deliverRecorderClip()`, and every matched person is written to a **user-registered, plug-and-play HTTP MCP server** (`nff-brain mcp add/list/remove/test`, `/v1/mcp/*`) — not a hardcoded CRM integration. |
+| **Example** | "find robotics engineers at Series A startups on LinkedIn, connect, and add them to my CRM" → plan review → up to N connects, each logged and each triggering a `tools/call` on whichever MCP tool the user picked for that run. |
+| **Acceptance** | Approve a plan capped at 3 → at most 3 Connect clicks happen, each with a randomized (never fixed-interval) 1–4 min delay, each produces a clip AND an MCP tool call, and Stop mid-run halts new actions within one poll cycle while letting an in-flight action finish. |
+| **Depends on** | 0, 1, 4 (reuses the recorder's clip pipeline and the LinkedIn host-permission opt-in machinery) |
+| **Package** | `packages/core` (`webAgent*.ts`, `mcpClient.ts`, `mcpServers.ts` — pure prompt/parse + the hand-rolled MCP client), `packages/cli` (`webAgentRun.ts` orchestration, `serve/agentRoutes.ts` + `serve/mcpRoutes.ts`, `commands/mcp.ts`), `packages/chrome` (`agentGate.ts`, `agentRegistry.ts`, `agentRunner.ts`, `content/linkedinAgent(Classify).ts`, `agent/`) |
+| **Size** | XL — shipped |
+
+**Four risks, priced and answered:**
+
+1. **Recording ≠ scraping, but this is automation, not recording.** Item 4's
+   defense ("capturing your own actions is defensible") does not extend here:
+   an unattended click loop is exactly what LinkedIn's anti-automation systems
+   and Chrome Web Store review are built to catch. **Decision: ships in the
+   SAME listing as the recorder** (not a separate unlisted build) — a
+   deliberate call, revisit if it draws review friction.
+2. **Web Store review.** No new permissions were needed (`https://www.linkedin.com/*`
+   and `scripting` were already granted for the item-4 recorder — `manifest.test.ts`
+   required zero edits, which is itself the proof), but *what the code does*
+   is a materially different risk profile than what item 4 was reviewed for.
+3. **Selector rot**, same as item 4, now with a second content script
+   (`content/linkedinAgent.ts`: read cards, click Connect) subject to the same
+   DOM churn — and unlike the recorder's selectors, these have never been
+   run against a live page (see the README checklist).
+4. **Autonomous-action safety.** Priced by: a server-authoritative cap the
+   extension cannot raise by asking twice (`WEB_AGENT_MAX_ACTIONS_CEILING`,
+   clamped at plan-creation time, never model-controlled), a randomized 1–4
+   min inter-action delay (the floor is `chrome.alarms`' own scheduling
+   minimum for packaged extensions, not an arbitrary choice), and a Stop
+   checked both server-side (`shouldGrantAction`) and client-side (the SW
+   cancels its own `nb.agentPoll` alarm immediately).
+
+**Design notes worth keeping visible:**
+
+- **The planning "brain" is interim by design.** v1 shells to the user's own
+  local `claude -p` (`runClaude()`/`makeOneShot()`, same as distill/merge) —
+  no API key ever touches this codebase. Every call site takes `brain:
+  OneShot` as a parameter rather than reaching for `runClaude()` directly, so
+  a future web-hosted planning brain is a rebind of one parameter in
+  `packages/cli/src/webAgentRun.ts`, not a rewrite of the prompt/parse logic.
+- **The generic MCP client is reusable infrastructure beyond this item.** It's
+  also the missing piece that would let a future revision of item 5's Ask
+  panel *call* tools, not just retrieve nodes — item 5 shipped retrieval-only
+  specifically to avoid this scope. `mcpClient.ts` is deliberately hand-rolled
+  (raw JSON-RPC over `fetch`, stateless-Streamable-HTTP only) rather than
+  `@modelcontextprotocol/sdk`, which would have cost the CLI its documented
+  zero-runtime-dependency property for a ~16-package transitive tree it does
+  not need.
+- **One active run globally**, no `paused` phase (Stop is terminal), the
+  judgment call (`evaluateCards`) batches one page of results per LLM call —
+  deliberate v1 scope limits, not oversights; see `packages/cli/src/webAgentRun.ts`'s
+  header comment and `WebAgentRun`'s phase doc-comment in
+  `packages/core/src/webAgentTypes.ts` for the reasoning.
+
+---
+
 ## Suggested order
 
 ```
-0 → 1 → 2 → 6 → 3 → 5 → 4
+0 → 1 → 2 → 6 → 3 → 5 → 4 → 7
 ```
 
 - **0 first** — everything blocks on transport.
@@ -251,8 +316,11 @@ Store" is bullet one of the MVP.
   new knowledge into the brain. Item 3 ships a viewer, not a capability.
 - **6 in parallel** with 1 — review latency is not on your critical path if it
   starts early.
-- **4 last** — XL, per-site, permanent maintenance, and the only item with
-  third-party ToS exposure.
+- **4 before 7** — item 7 reuses item 4's clip pipeline and permission
+  machinery directly; building it first would mean duplicating both.
+- **7 last** — XL, the only item with real ToS/automation exposure, and the
+  one most worth having the recorder's patterns already proven before
+  attempting.
 
 ---
 
@@ -262,4 +330,13 @@ Store" is bullet one of the MVP.
 - [ ] Global brain by default, or force a project picker? (structural fact B)
 - [ ] Direct write vs queue-drained-by-CLI (item 0)
 - [ ] Does `origin: 'clip'` get its own recall budget, or share the agent cap?
-- [ ] Is item 4's output brain-shaped at all, or should it go straight to CRM?
+- [x] Is item 4's output brain-shaped at all, or should it go straight to CRM?
+      **RESOLVED by item 7:** neither exclusively — it stays a brain clip
+      (audit trail) AND goes to whichever MCP tool the user configured
+      (CRM or otherwise), via the generic `/v1/mcp/call` path.
+- [ ] Item 7's "the list" is a free-text tag (`how_we_met`) on whatever object
+      the configured MCP tool creates — no first-class list/tag object exists.
+      Worth a dedicated concept if a second consumer of "the list" appears.
+- [ ] Item 7 ships in the SAME Web Store listing as the recorder — revisit if
+      LinkedIn's anti-automation systems or a review rejection ever makes that
+      look like the wrong call in hindsight.

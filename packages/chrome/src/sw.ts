@@ -23,12 +23,31 @@
 
 import { createMenus, onMenuClicked } from './capture.js';
 import { paintBadge } from './badge.js';
-import { getNodes, retract, searchBrain } from './client.js';
+import {
+  approveAgentPlan,
+  getAgentStatus,
+  getMcpServers,
+  getMcpTools,
+  getNodes,
+  rejectAgentPlan,
+  retract,
+  searchBrain,
+  stopAgentRun,
+  submitAgentGoal,
+} from './client.js';
 import { HEALTH_ALARM, currentPhase, ensureAlarm, pairWithServer, probe, unpair } from './connection.js';
 import { clearActivity, removableNodeCount } from './activity.js';
 import { parseRuleInput, ruleLabel } from './gate.js';
 import { derivePhase } from './health.js';
 import { ensureRecorderScripts, onRecorderEvent, recorderPublicState, setRecorderEnabled } from './recorder.js';
+import {
+  AGENT_POLL_ALARM,
+  agentAdapterPublicState,
+  clearAgentPollAlarm,
+  ensureAgentScripts,
+  pollAgent,
+  setAgentAdapterEnabled,
+} from './agentRunner.js';
 import { getActivity, getAllowlist, getCapture, getHealth, getPairing, seedDefaults, setAllowlist, setCapture } from './storage.js';
 import type { PopupToSw, PublicState, SwToPopup } from './protocol.js';
 
@@ -51,6 +70,7 @@ async function publicState(): Promise<PublicState> {
     activityCount: activity.length,
     removableNodeCount: removableNodeCount(activity),
     recorders: await recorderPublicState(),
+    agentAdapters: await agentAdapterPublicState(),
   };
 }
 
@@ -124,6 +144,81 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       break;
     }
 
+    // Web agent (item 7). Every mutating message replies with the fresh run
+    // (or null), same "always hand back the thing that changed" shape as the
+    // recorder/state pattern above — the agent page never needs a second
+    // round trip just to see what it just did.
+    case 'setAgentAdapterEnabled': {
+      const error = await setAgentAdapterEnabled(msg.id, msg.enabled);
+      if (error) return { type: 'error', message: error };
+      break;
+    }
+
+    case 'agentSubmitGoal': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      try {
+        await submitAgentGoal(pairing.port, pairing.token, {
+          goal: msg.goal,
+          maxActions: msg.maxActions,
+          listTarget: msg.listTarget,
+        });
+      } catch (err) {
+        return { type: 'error', message: err instanceof Error ? err.message : String(err) };
+      }
+      const status = await getAgentStatus(pairing.port, pairing.token);
+      return { type: 'agentStatus', run: status.run };
+    }
+
+    case 'agentApprovePlan': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      const status = await approveAgentPlan(pairing.port, pairing.token, msg.runId);
+      // Kicks the poll loop off immediately rather than waiting for an alarm
+      // — approving a plan is the strongest possible signal to start now.
+      void pollAgent();
+      return { type: 'agentStatus', run: status.run };
+    }
+
+    case 'agentRejectPlan': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      const status = await rejectAgentPlan(pairing.port, pairing.token, msg.runId);
+      return { type: 'agentStatus', run: status.run };
+    }
+
+    case 'agentStop': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      // Clear the alarm HERE too (belt-and-braces) — don't wait for a poll
+      // that may not come for up to 4 minutes to notice the run stopped.
+      await clearAgentPollAlarm();
+      await stopAgentRun(pairing.port, pairing.token, msg.runId);
+      const status = await getAgentStatus(pairing.port, pairing.token);
+      return { type: 'agentStatus', run: status.run };
+    }
+
+    case 'getAgentStatus': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'agentStatus', run: null };
+      const status = await getAgentStatus(pairing.port, pairing.token);
+      return { type: 'agentStatus', run: status.run };
+    }
+
+    case 'getMcpServers': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      const { servers } = await getMcpServers(pairing.port, pairing.token);
+      return { type: 'mcpServers', servers };
+    }
+
+    case 'getMcpTools': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      const { tools } = await getMcpTools(pairing.port, pairing.token, msg.server);
+      return { type: 'mcpTools', tools };
+    }
+
     case 'clearActivity': {
       if (msg.alsoRemoveNodes) {
         const nodeIds = [...new Set((await getActivity()).flatMap((r) => r.nodeIds))];
@@ -155,8 +250,10 @@ async function onInstalled(): Promise<void> {
   await seedDefaults();
   createMenus();
   // Registered content scripts are cleared on every extension update —
-  // reconcile them against stored recorder state here, idempotently.
+  // reconcile them against stored recorder AND agent-adapter state here,
+  // idempotently.
   await ensureRecorderScripts();
+  await ensureAgentScripts();
   await ensureAlarm();
   await paintBadge(await currentPhase(), (await getCapture()).enabled);
 }
@@ -165,11 +262,19 @@ async function onStartup(): Promise<void> {
   // Deliberately does NOT write nb.capture — pause must survive a restart.
   await ensureAlarm();
   await probe();
+  // chrome.alarms survive a browser restart, so a mid-run nb.agentPoll alarm
+  // should still fire on its own — this is just insurance in case it didn't.
+  void pollAgent();
 }
 
 async function onAlarm(alarm: chrome.alarms.Alarm): Promise<void> {
-  if (alarm.name !== HEALTH_ALARM) return;
-  await probe();
+  if (alarm.name === HEALTH_ALARM) {
+    await probe();
+    return;
+  }
+  if (alarm.name === AGENT_POLL_ALARM) {
+    await pollAgent();
+  }
 }
 
 // ── registration, synchronous, top level ────────────────────────────────────

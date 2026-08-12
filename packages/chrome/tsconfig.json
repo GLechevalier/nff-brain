@@ -11,5 +11,14 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["chrome", "node"]
   },
-  "include": ["src/**/*.ts", "popup/**/*.ts", "devtools/**/*.ts", "content/**/*.ts", "test/**/*.ts", "build.mjs", "zip.mjs"]
+  "include": [
+    "src/**/*.ts",
+    "popup/**/*.ts",
+    "devtools/**/*.ts",
+    "content/**/*.ts",
+    "agent/**/*.ts",
+    "test/**/*.ts",
+    "build.mjs",
+    "zip.mjs"
+  ]
 }

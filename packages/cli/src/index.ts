@@ -8,6 +8,7 @@ import { cmdIndex } from './commands/indexVectors.js';
 import { cmdExpand, cmdIngestGraphify } from './commands/ingestGraphify.js';
 import { cmdInit } from './commands/init.js';
 import { cmdLayout } from './commands/layout.js';
+import { cmdMcp } from './commands/mcp.js';
 import { cmdRestructure } from './commands/restructure.js';
 import { cmdSpine } from './commands/spine.js';
 import { cmdMerge } from './commands/merge.js';
@@ -124,6 +125,13 @@ browser (Chrome extension transport)
   clips [--drain] [--model m]      list queued captures for both brains; --drain mints
                                    nodes from them now (one claude -p call) instead of
                                    waiting for the next session's SessionEnd
+  mcp add <name> <url> [--header "Key: value"]
+                                   register an HTTP MCP server the web agent (and any
+                                   future MCP-calling feature) can call — a plug-and-play
+                                   target, e.g. nff-admin-data's /mcp endpoint
+  mcp list                        registered MCP servers
+  mcp remove <id>                 unregister one
+  mcp test <id>                   confirm it answers tools/list, print its tools
 
 Writes target <workspace>/.nff-brain/brain.json; add --global for ~/.nff-brain/brain.json.
 `;
@@ -157,6 +165,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   serve: cmdServe,
   pair: cmdPair,
   clips: cmdClips,
+  mcp: cmdMcp,
   doctor: () => cmdDoctor(),
   upgrade: () => cmdUpgrade(),
 };

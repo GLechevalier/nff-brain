@@ -16,7 +16,9 @@ export type ErrorCode =
   | 'payload_too_large'
   | 'queue_full'
   | 'pairing_closed'
-  | 'bad_code';
+  | 'bad_code'
+  | 'run_active'
+  | 'mcp_error';
 
 const BASE_HEADERS: Record<string, string> = {
   'content-type': 'application/json; charset=utf-8',
