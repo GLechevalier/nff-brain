@@ -88,9 +88,9 @@ export async function cmdSpine(argv: string[]): Promise<void> {
     const branch = depth === 0 ? '' : `${prefix}${last ? '└─ ' : '├─ '}`;
     if (isSpineId(id)) {
       const s = spineById.get(id)!;
-      console.log(
-        `${branch}◇ ${s.title}  (${s.memberIds.length} nodes, cohesion ${s.cohesion.toFixed(3)})`,
-      );
+      console.log(`${branch}◇ ${s.title}  (cohesion ${s.cohesion.toFixed(3)})`);
+      const indent = depth === 0 ? '' : `${prefix}${last ? '   ' : '│  '}`;
+      console.log(`${indent}  ${s.summary}`);
     } else {
       const size = islandOf.get(id)?.length ?? 1;
       const extra = size > 1 ? `  +${size - 1} in its island` : '';

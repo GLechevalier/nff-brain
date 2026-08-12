@@ -536,9 +536,13 @@ export function activate(context: vscode.ExtensionContext): void {
         // The capybara mascot as the editor-tab icon (instead of the generic file glyph).
         panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'capybara.png');
         const disposables: vscode.Disposable[] = [];
-        wireWebview(panel.webview, context.extensionUri, disposables);
+        // Capture the webview now: the panel is already marked disposed when
+        // onDidDispose fires, so panel.webview would throw inside the handler
+        // and leave `panel` stale (→ "Webview is disposed" on the next open).
+        const webview = panel.webview;
+        wireWebview(webview, context.extensionUri, disposables);
         panel.onDidDispose(() => {
-          channelViews.delete(panel!.webview);
+          channelViews.delete(webview);
           for (const d of disposables) d.dispose();
           panel = null;
         });

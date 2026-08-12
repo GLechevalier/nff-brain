@@ -156,6 +156,24 @@ describe('buildSpine', () => {
     expect(reachable('hub', all, [...edges, ...spine.edges]).size).toBe(all.length);
   });
 
+  it('spends the whole fan-out budget rather than making the fewest groups', () => {
+    // 12 islands with a fan-out of 7 could be held by 2 groups of 6 or by 7
+    // groups of ~2. Both are the same depth, so the wider one wins: smaller
+    // groups are more coherent. Minimising group count once forced 19 islands
+    // into 3 buckets and two came back labelled "misc".
+    const nodes: SpineInputNode[] = [root];
+    const edges: LayoutEdge[] = [];
+    for (let i = 0; i < 12; i++) {
+      const isl = island(`n${i}_`, 1, `topic${i}`);
+      nodes.push(...isl.nodes);
+      edges.push(...isl.edges);
+    }
+    const spine = buildSpine(nodes, edges, { fanout: 7 });
+    const top = spine.edges.filter((e) => e.from === 'hub').length;
+    expect(top).toBeGreaterThan(2);
+    expect(top).toBeLessThanOrEqual(7);
+  });
+
   it('nests deeper as the island count grows', () => {
     const nodes: SpineInputNode[] = [root];
     const edges: LayoutEdge[] = [];
@@ -236,6 +254,38 @@ describe('buildSpine', () => {
     expect(titles).toContain('misc');
     for (const n of spine.nodes) {
       expect(n.title === 'misc' || n.cohesion >= 0.13).toBe(true);
+    }
+  });
+
+  it('summarises what is under each grouping node', () => {
+    const a = island('a', 3, 'oauth token');
+    const b = island('b', 2, 'oauth pkce');
+    const c = island('c', 2, 'docker compose');
+    const nodes = [root, ...a.nodes, ...b.nodes, ...c.nodes].map((n) =>
+      n.id === 'hub' ? n : { ...n, category: 'analysis' },
+    );
+    const spine = buildSpine(nodes, [...a.edges, ...b.edges, ...c.edges], { fanout: 2 });
+    const g = spine.nodes[0];
+    // Counts, kind, and the islands' own titles — all extractive.
+    expect(g.summary).toMatch(/\d+ nodes across \d+ islands/);
+    expect(g.summary).toContain('mostly analysis');
+    // Every id it claims is really under it.
+    expect(g.memberIds.length).toBeGreaterThan(0);
+    for (const id of g.memberIds) expect(nodes.some((n) => n.id === id)).toBe(true);
+  });
+
+  it('summarises a single-island group without pluralising it', () => {
+    const nodes: SpineInputNode[] = [root];
+    const edges: LayoutEdge[] = [];
+    for (let i = 0; i < 6; i++) {
+      const isl = island(`n${i}_`, 1, `topic${i}`);
+      nodes.push(...isl.nodes);
+      edges.push(...isl.edges);
+    }
+    const spine = buildSpine(nodes, edges, { fanout: 2 });
+    for (const s of spine.nodes) {
+      expect(s.summary).not.toContain('1 islands');
+      expect(s.summary.length).toBeGreaterThan(0);
     }
   });
 

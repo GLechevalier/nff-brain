@@ -37,6 +37,13 @@ export interface SpineNode {
   level: number;
   /** Real node ids in this subtree, for wedge weighting and click-to-highlight. */
   memberIds: string[];
+  /**
+   * What is actually under this node, in prose. Extractive, not generated: the
+   * counts, the dominant categories and the islands' own titles. A grouping
+   * node has no knowledge of its own, so anything beyond a description of its
+   * children would be invention.
+   */
+  summary: string;
   size: number;
   /**
    * Mean pairwise similarity of the islands under this node, 0..1. Below
@@ -191,6 +198,45 @@ interface Cluster {
   cohesion?: number;
 }
 
+/**
+ * Describe a cluster by its children: how much is in there, what kind of
+ * knowledge it is, and which islands it holds. Extractive on purpose — this
+ * runs in the webview, where there is no LLM, and a grouping node inventing a
+ * description of knowledge it does not hold would be worse than no text at all.
+ */
+function summarise(
+  islands: readonly Island[],
+  byId: Map<string, SpineInputNode>,
+  maxTitles = 4,
+): string {
+  const ids = islands.flatMap((i) => i.ids);
+  const cats = new Map<string, number>();
+  for (const id of ids) {
+    const c = byId.get(id)?.category;
+    if (c) cats.set(c, (cats.get(c) ?? 0) + 1);
+  }
+  const topCats = [...cats.entries()]
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+    .slice(0, 2)
+    .map(([c]) => c);
+
+  // Each island speaks for itself through its anchor — the member the spine
+  // attached to, which is also its most connected node.
+  const titles = islands
+    .map((i) => byId.get(i.anchor)?.title ?? i.anchor)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const shown = titles.slice(0, maxTitles);
+  const rest = titles.length - shown.length;
+
+  const scale =
+    islands.length === 1
+      ? `${ids.length} node${ids.length === 1 ? '' : 's'}`
+      : `${ids.length} nodes across ${islands.length} islands`;
+  const kind = topCats.length ? ` · mostly ${topCats.join(' and ')}` : '';
+  const list = shown.length ? ` — ${shown.join('; ')}${rest > 0 ? `; +${rest} more` : ''}` : '';
+  return `${scale}${kind}${list}`;
+}
+
 /** Mean pairwise similarity among a cluster's islands. A lone island is trivially coherent. */
 function cohesionOf(islands: readonly Island[]): number {
   if (islands.length < 2) return 1;
@@ -318,7 +364,12 @@ function asLeaves(islands: readonly Island[]): Cluster[] {
  */
 function buildLevels(islands: Island[], fanout: number, floor: number): Cluster[] {
   if (islands.length <= fanout) return asLeaves(islands);
-  const target = Math.max(2, Math.min(fanout, Math.ceil(islands.length / fanout)));
+  // Use the WHOLE fan-out budget, not the minimum number of groups that fits.
+  // Any k between ceil(n/fanout) and fanout yields a tree of the same depth, so
+  // the only thing the choice changes is group size — and smaller groups are
+  // more coherent. Taking the minimum instead (the first version of this) forced
+  // 19 islands into 3 buckets and two of them came out as "misc".
+  const target = Math.max(2, Math.min(fanout, islands.length - 1));
   const groups = agglomerate(islands, target, floor, true);
   const labels = labelGroups(groups);
   groups.forEach((g, i) => {
@@ -422,6 +473,7 @@ export function buildSpine(
       title: cluster.label ?? 'misc',
       level,
       memberIds: cluster.islands.flatMap((i) => i.ids),
+      summary: summarise(cluster.islands, byId),
       size: Math.max(14, 26 - level * 4),
       cohesion: cluster.cohesion ?? cohesionOf(cluster.islands),
     });

@@ -7,6 +7,7 @@ import { cmdIndex } from './commands/indexVectors.js';
 import { cmdExpand, cmdIngestGraphify } from './commands/ingestGraphify.js';
 import { cmdInit } from './commands/init.js';
 import { cmdLayout } from './commands/layout.js';
+import { cmdRestructure } from './commands/restructure.js';
 import { cmdSpine } from './commands/spine.js';
 import { cmdMerge } from './commands/merge.js';
 import { cmdAdd, cmdEdit, cmdList, cmdRm, cmdShow } from './commands/nodes.js';
@@ -82,6 +83,14 @@ graph
                                    laid out keep their coordinates and only new ones are placed.
                                    --full re-settles everything as a radial tree along the spine
                                    (--no-spine falls back to packing the islands side by side)
+  restructure [--floor 0.4] [--cap 2] [--apply] [--global]
+                                   link islands that SHOULD already be linked, so the graph itself
+                                   gets better and the spine has less to invent. A backfill: the
+                                   importer links similar nodes only at creation time, against what
+                                   existed then — this runs that same rule across the whole brain.
+                                   Preview by default; prints the floor→islands curve (there is a
+                                   cliff — below it everything collapses into one blob) and uses
+                                   embeddings too when the brain has been indexed
   spine [--fanout 7] [--min-sim 0.08] [--dry-run]
                                    print the navigational spine — the derived tree that links every
                                    island of the graph to one root, through grouping nodes that
@@ -136,6 +145,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   merge: cmdMerge,
   layout: cmdLayout,
   spine: cmdSpine,
+  restructure: cmdRestructure,
   semantic: cmdSemantic,
   index: cmdIndex,
   'ingest-graphify': cmdIngestGraphify,

@@ -56,6 +56,22 @@ function driftVars(id: string, g: GlowInfo): React.CSSProperties {
   } as React.CSSProperties;
 }
 
+/** Greedy word wrap — SVG <text> has no wrapping, so each line is its own element. */
+function wrapText(text: string, cols: number): string[] {
+  const lines: string[] = [];
+  let line = '';
+  for (const word of text.split(/\s+/)) {
+    if (line.length > 0 && line.length + 1 + word.length > cols) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.slice(0, 6); // a label, not an essay
+}
+
 export interface BrainGraphHandle {
   resetView: () => void;
   zoomBy: (factor: number) => void;
@@ -107,7 +123,9 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
     [nodes, edges],
   );
   const laidOut = useMemo(
-    () => layoutBrain(nodes, edges, { incremental: true, minGap: 60, pinnedId: coreId, spine }),
+    // minGap is left to core's default so the webview and `nff-brain layout`
+    // cannot drift apart on spacing.
+    () => layoutBrain(nodes, edges, { incremental: true, pinnedId: coreId, spine }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [layoutKey, coreId, spine],
   );
@@ -311,7 +329,24 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
               >
                 {s.title}
               </text>
-              <title>{`${s.title} — ${s.memberIds.length} nodes (derived grouping, not a brain node)`}</title>
+              {/* What is under this node, spelled out. Only on selection: shown
+                  always it would be a wall of text across the whole board. */}
+              {isSel &&
+                wrapText(s.summary, 46).map((line, li) => (
+                  <text
+                    key={li}
+                    x={p.x}
+                    y={p.y + r + 27 + li * 12}
+                    textAnchor="middle"
+                    fontSize={9}
+                    fill={INK}
+                    fontFamily="var(--nb-mono)"
+                    style={{ pointerEvents: 'none', userSelect: 'none' }}
+                  >
+                    {line}
+                  </text>
+                ))}
+              <title>{`${s.title}\n${s.summary}\n\n(derived grouping — not a node in your brain)`}</title>
             </g>
           );
         })}

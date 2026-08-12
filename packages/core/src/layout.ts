@@ -43,6 +43,16 @@ export interface LayoutEdge {
 // Extra vertical room for the title label rendered below each node square.
 export const LABEL_PAD = 14;
 
+/**
+ * Clear paper between two node squares, and the single biggest lever on how
+ * spread out the board feels. Measured on a 103-node brain: 60 gave 16.6 Mpx of
+ * board at 0.75% ink; 36 gives 9.9 Mpx at 1.26%, still ~50px of clear space
+ * between two 32px squares, and no overlaps either way.
+ */
+export const DEFAULT_MIN_GAP = 36;
+/** Clear space between rings of the radial tree. Secondary to DEFAULT_MIN_GAP. */
+export const DEFAULT_RING_GAP = 120;
+
 // Stable 32-bit string hash (FNV-1a) — for deterministic tie-breaks and for the
 // webview's per-node drift direction, which derives from the same hash.
 export function hash(str: string): number {
@@ -362,10 +372,11 @@ export function layoutBrain(
   edges: readonly LayoutEdge[],
   opts: LayoutOptions = {},
 ): Record<string, Pt> {
+  // Both tunable per run: `layout --min-gap N --ring-gap N`.
   const {
-    minGap = 60,
+    minGap = DEFAULT_MIN_GAP,
     componentGutter = 180,
-    ringGap = 200,
+    ringGap = DEFAULT_RING_GAP,
     pinnedId = null,
     center = { x: 400, y: 300 },
     spine = null,
@@ -519,28 +530,19 @@ function layoutRadial(
     return d;
   };
 
-  // 3. Ring radii. Each ring must clear the one inside it AND be long enough
-  //    around for everything sitting on it.
-  const levels: string[][] = [[rootId]];
-  for (let depth = 0; ; depth++) {
-    const next = levels[depth].flatMap((id) => kids.get(id) ?? []);
-    if (next.length === 0) break;
-    levels.push(next);
-  }
+  /** How much space this node's own body takes: its island, or the mark itself. */
   const thickness = (id: string): number =>
     (kids.get(id)?.length ?? 0) === 0
       ? (islandOf.get(id)?.radius ?? 16)
       : (spineById.get(id)?.size ?? 16);
-  const ring: number[] = [0];
-  for (let L = 1; L < levels.length; L++) {
-    const prevThick = L === 1 ? (islandOf.get(rootId)?.radius ?? 0) : Math.max(...levels[L - 1].map(thickness));
-    const thick = Math.max(...levels[L].map(thickness));
-    let total = 0;
-    for (const id of levels[L]) total += demand(id);
-    ring[L] = Math.max(ring[L - 1] + prevThick + thick + ringGap, total / (2 * Math.PI) + thick);
-  }
 
   // 4. Walk the tree, splitting each wedge among the children by demand.
+  //
+  // Radius is computed PER SUBTREE, not as one ring per level. A shared ring is
+  // sized by the neediest branch on it, so a group of three small islands got
+  // pushed out as far as the 25-node one — which is how the board ended up 0.3%
+  // ink. Here a node sits just outside its parent, and is only pushed further
+  // out if its own wedge is too narrow to hold it (arc = radius × angle).
   const pos: Record<string, Pt> = {};
   const park = (id: string, at: Pt): void => {
     const island = islandOf.get(id);
@@ -551,11 +553,16 @@ function layoutRadial(
     for (const b of island.bodies) pos[b.id] = { x: at.x + b.x, y: at.y + b.y };
   };
 
-  const place = (id: string, a0: number, a1: number, level: number): void => {
+  const place = (id: string, a0: number, a1: number, parentR: number, level: number): void => {
+    const own = thickness(id);
+    let r = 0;
     if (level === 0) park(id, center);
     else {
+      const span = Math.max(a1 - a0, 1e-6);
+      // Just outside the parent, unless this subtree's wedge is too narrow at
+      // that distance to hold what hangs off it.
+      r = Math.max(parentR + ringGap + own, demand(id) / span);
       const mid = (a0 + a1) / 2;
-      const r = ring[level];
       park(id, { x: center.x + r * Math.cos(mid), y: center.y + r * Math.sin(mid) });
     }
     const cs = kids.get(id) ?? [];
@@ -566,18 +573,22 @@ function layoutRadial(
     let a = a0;
     for (const c of cs) {
       const w = ((a1 - a0) * demand(c)) / total;
-      place(c, a, a + w, level + 1);
+      place(c, a, a + w, r + own, level + 1);
       a += w;
     }
   };
   // Start at -π/2 so the first branch leaves the root upward rather than right.
-  place(rootId, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI, 0);
+  place(rootId, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI, islandOf.get(rootId)?.radius ?? 0, 0);
 
   // Any island the spine never reached (should not happen — buildSpine links
-  // them all — but a hand-built spine could omit one) still needs a home.
+  // them all — but a hand-built spine could omit one) still needs a home: below
+  // everything already placed, where the overlap pass will separate them.
+  let below = 0;
+  for (const p of Object.values(pos)) below = Math.max(below, p.y - center.y);
   for (const comp of comps) {
     if (comp.some((id) => pos[id])) continue;
-    park(comp[0], { x: center.x, y: center.y + ring[ring.length - 1] + ringGap });
+    below += ringGap;
+    park(comp[0], { x: center.x, y: center.y + below });
   }
 
   // 5. Residual overlap: wedges can crowd where two rings nearly touch.

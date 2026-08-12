@@ -6,6 +6,7 @@ export * from './vector.js';
 export * from './rank.js';
 export * from './layout.js';
 export * from './spine.js';
+export * from './restructure.js';
 export * from './semanticRuntime.js';
 export * from './embed.js';
 export * from './vectorStore.js';

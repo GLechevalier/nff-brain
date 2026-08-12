@@ -77,6 +77,8 @@ export async function cmdLayout(argv: string[]): Promise<void> {
     incremental: !effectivelyFull,
     iterations,
     spine,
+    minGap: flagNum(args, 'min-gap'),
+    ringGap: flagNum(args, 'ring-gap'),
   });
 
   const extent = boundsOf(brain.nodes, pos);

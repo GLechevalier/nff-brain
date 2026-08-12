@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_MIN_GAP,
   LABEL_PAD,
   connectedComponents,
   layoutBrain,
@@ -276,8 +277,9 @@ describe('layoutBrain — incremental', () => {
 
     // It landed in the neighbourhood, nowhere near (9999, 9999)…
     expect(dist(pos.new, { x: 100, y: 100 })).toBeLessThan(400);
-    // …but not on top of the neighbour.
-    const req = a.size + fresh.size + 60 + LABEL_PAD;
+    // …but not on top of the neighbour. Derived from the default rather than
+    // repeating the number, so re-tuning the spacing cannot silently break this.
+    const req = a.size + fresh.size + DEFAULT_MIN_GAP + LABEL_PAD;
     expect(dist(pos.new, pos.a)).toBeGreaterThanOrEqual(req - 0.5);
   });
 
