@@ -196,31 +196,91 @@ async function drive(runId: string, inspectedTabId: number): Promise<void> {
   // Replaying a workflow steers with its generalized steps; a free goal steers plainly.
   const prompt = workflow ? buildWorkflowRunPrompt(workflow, run.goal) : buildSteeringPrompt(run.goal);
 
-  const result = await runChatWithTools(prompt, buildActTools(ctx), {
-    maxTurns: ACT_MAX_TURNS,
-    onTurn: async () => {
-      const cur = await getActRun();
-      if (!cur || cur.id !== runId || cur.phase === 'stopping' || cur.phase === 'stopped') {
-        ctx.stopped = true;
-        return false;
-      }
-      if (ctx.actionsTaken >= ctx.maxActions) return false;
-      return true;
-    },
-  });
+  // PAIRED wins: drive the loop through the local server's `claude -p` (the
+  // user's Claude Code login — no API key). Only if unpaired do we fall back to
+  // the BYOK Anthropic tool-use loop.
+  const pairing = await getPairing();
+  const outcome = pairing
+    ? await runPairedLoop(ctx, runId, prompt, pairing.port, pairing.token)
+    : await runByokLoop(ctx, runId, prompt);
 
-  if (result === null) {
+  if (!outcome.ok) {
     await mutateActRun((r) => {
       r.phase = 'error';
-      r.error = 'add an API key in Settings to run the agent';
+      r.error = outcome.error;
     });
     await detach(tabId);
     return;
   }
 
-  if (result.answer) await appendTranscript({ kind: 'thought', text: result.answer });
+  if (outcome.answer) await appendTranscript({ kind: 'thought', text: outcome.answer });
   await mutateActRun((r) => {
     if (r.phase === 'running' || r.phase === 'stopping') r.phase = ctx.stopped || r.phase === 'stopping' ? 'stopped' : 'done';
   });
   await detach(tabId);
+}
+
+type LoopOutcome = { ok: true; answer: string } | { ok: false; error: string };
+
+/** Between-turns checkpoint shared by both loops: honor Stop and the action budget. */
+async function keepGoing(ctx: ActContext, runId: string): Promise<boolean> {
+  const cur = await getActRun();
+  if (!cur || cur.id !== runId || cur.phase === 'stopping' || cur.phase === 'stopped') {
+    ctx.stopped = true;
+    return false;
+  }
+  if (ctx.actionsTaken >= ctx.maxActions) return false;
+  return true;
+}
+
+/** BYOK Anthropic tool-use loop (standalone / unpaired). */
+async function runByokLoop(ctx: ActContext, runId: string, prompt: string): Promise<LoopOutcome> {
+  const result = await runChatWithTools(prompt, buildActTools(ctx), {
+    maxTurns: ACT_MAX_TURNS,
+    onTurn: () => keepGoing(ctx, runId),
+  });
+  if (result === null) return { ok: false, error: 'pair a local nff-brain server, or add an API key in Settings, to run the agent' };
+  return { ok: true, answer: result.answer };
+}
+
+/**
+ * Paired loop: each turn, send the assembled prompt (steering + contract +
+ * action history) to /v1/act/step (the server runs `claude -p`), parse ONE JSON
+ * action from the reply, run it through the SAME gate+engine the BYOK executors
+ * use, append the result, repeat. History is bounded so the prompt stays sane.
+ */
+async function runPairedLoop(ctx: ActContext, runId: string, systemPrompt: string, port: number, token: string): Promise<LoopOutcome> {
+  const snapshotIdRef = { id: '' };
+  const history: string[] = [];
+  let answer = '';
+
+  for (let turn = 0; turn < ACT_MAX_TURNS; turn++) {
+    if (!(await keepGoing(ctx, runId))) break;
+
+    let text: string;
+    try {
+      text = await postActStep(port, token, buildPairedActPrompt(systemPrompt, history));
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'the local server did not answer' };
+    }
+
+    const action = parseActAction(text);
+    if (action.kind === 'done') {
+      answer = action.summary;
+      break;
+    }
+    if (action.kind === 'invalid') {
+      history.push('> (your last reply was not a single JSON action — reply with exactly one JSON object)');
+      continue;
+    }
+
+    const res = await runActByName(ctx, action.name, action.args, snapshotIdRef);
+    history.push(`> ${JSON.stringify({ action: action.name, args: action.args }).slice(0, 400)}`);
+    history.push(`= ${res.resultText.slice(0, 6000)}`);
+    // Keep the transcript sent to claude -p bounded — the latest read_page is
+    // what carries the current refs, older entries are just breadcrumbs.
+    while (history.length > 16) history.shift();
+  }
+
+  return { ok: true, answer };
 }
