@@ -312,6 +312,45 @@ const graph: Handler = (_req, res, ctx) => {
   );
 };
 
+// ── POST /v1/layout ──────────────────────────────────────────────────────────
+
+const LAYOUT_ID_MAX = 200;
+
+/**
+ * Persist a node's position after a manual drag in the panel's Graph tab.
+ * Never recomputes anything (unlike `nff-brain layout`) — writes exactly the
+ * x/y the reader dropped the node at, to whichever brain file owns it. Routed
+ * via `sourceById` rather than trying both files: `mutateBrain` always bumps
+ * `updatedAt` on write, so blindly mutating the file that DOESN'T own this
+ * node would look like an unrelated change to anyone polling `/v1/graph`.
+ */
+const layout: Handler = async (req, res, ctx) => {
+  const body = (await readJsonBody(req, CLIP_BODY_MAX)) as { id?: unknown; x?: unknown; y?: unknown };
+  const id = typeof body?.id === 'string' ? body.id.slice(0, LAYOUT_ID_MAX) : '';
+  const x = typeof body?.x === 'number' && Number.isFinite(body.x) ? body.x : null;
+  const y = typeof body?.y === 'number' && Number.isFinite(body.y) ? body.y : null;
+  if (!id || x === null || y === null) {
+    sendError(res, 400, 'bad_request', 'layout needs a node id and finite x/y', ctx.cors);
+    return;
+  }
+
+  const source = ctx.state.mergedBrain().sourceById.get(id);
+  if (!source) {
+    sendJson(res, 200, { ok: true, moved: false }, ctx.cors);
+    return;
+  }
+  const brainPath =
+    source === 'project' ? ctx.state.opts.projectBrainPath : ctx.state.opts.globalBrainPath;
+  mutateBrain(brainPath, (brain) => {
+    const node = brain.nodes.find((n) => n.id === id);
+    if (!node) return;
+    node.x = x;
+    node.y = y;
+    node.laidOut = true;
+  });
+  sendJson(res, 200, { ok: true, moved: true }, ctx.cors);
+};
+
 /**
  * Ranked retrieval for the panel's Search tab AND its Ask tab (item 5 is this
  * same response rendered conversationally — retrieval-only, no LLM). Lexical
@@ -466,6 +505,7 @@ export const ROUTES: Record<string, Route> = {
   '/v1/retract': { method: 'POST', auth: 'client', origin: 'paired', handler: retract },
   '/v1/nodes': { method: 'GET', auth: 'client', origin: 'paired', handler: nodes },
   '/v1/graph': { method: 'GET', auth: 'client', origin: 'paired', handler: graph },
+  '/v1/layout': { method: 'POST', auth: 'client', origin: 'paired', handler: layout },
   '/v1/search': { method: 'GET', auth: 'client', origin: 'paired', handler: search },
   '/v1/admin/pair-window': { method: 'POST', auth: 'admin', origin: 'absent', handler: adminPairWindow },
   '/v1/admin/clients': { method: 'GET', auth: 'admin', origin: 'absent', handler: adminClients },

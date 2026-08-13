@@ -12,10 +12,12 @@ import { getAgentNextAction, getAgentStatus, reportAgentAction, type ReportAgent
 import { shouldRunAgentAction } from './agentGate.js';
 import { agentAdapterById, AGENT_ADAPTERS } from './agentRegistry.js';
 import {
+  getAgentActionAllow,
   getAgentAdapters,
   getAgentTab,
   getAllowlist,
   getPairing,
+  setAgentActionAllow,
   setAgentAdapters,
   setAgentTab,
   setAllowlist,
@@ -100,6 +102,45 @@ export async function agentAdapterPublicState(): Promise<
     });
   }
   return out;
+}
+
+// ── Manual-mode chat's action-intent permission prompt ───────────────────────
+// A sibling opt-in to the adapter enable/disable above, NOT the same
+// question: an adapter can be "never ask again for navigation" without the
+// autonomous DOM-automation agent being enabled at all — opening a tab needs
+// no chrome.permissions grant, unlike registering the adapter's content script.
+
+export async function agentActionAllowPublicState(): Promise<string[]> {
+  const state = await getAgentActionAllow();
+  return Object.entries(state.byId)
+    .filter(([, v]) => v.allowed)
+    .map(([id]) => id);
+}
+
+export async function setAgentActionAllowed(adapterId: string, allowed: boolean): Promise<string | null> {
+  if (!agentAdapterById(adapterId)) return 'unknown agent adapter';
+  const state = await getAgentActionAllow();
+  state.byId[adapterId] = { allowed, changedAt: new Date().toISOString() };
+  await setAgentActionAllow(state);
+  return null;
+}
+
+/**
+ * Navigates the DevTools-inspected tab to the adapter's site — the
+ * permission-prompt's "Yes"/"Always". Stays on the SAME tab (never opens a
+ * new one) so the F12 panel driving this stays attached to it; falls back to
+ * a new tab only if that tab is gone by the time this runs.
+ */
+export async function runAdapterNavigate(adapterId: string, tabId: number): Promise<string | null> {
+  const adapter = agentAdapterById(adapterId);
+  if (!adapter) return 'unknown agent adapter';
+  const url = `https://${adapter.hosts[0]}/`;
+  try {
+    await chrome.tabs.update(tabId, { url });
+  } catch {
+    await chrome.tabs.create({ url, active: true });
+  }
+  return null;
 }
 
 // ── the poll loop ─────────────────────────────────────────────────────────────

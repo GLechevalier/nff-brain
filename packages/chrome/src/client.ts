@@ -14,6 +14,7 @@ import {
   isGraphResponse,
   isHelloResponse,
   isImportResponse,
+  isLayoutResponse,
   isMcpServersResponse,
   isMcpToolsResponse,
   isNodesResponse,
@@ -34,6 +35,7 @@ import type {
   GraphResponse,
   HelloResponse,
   ImportResponse,
+  LayoutResponse,
   McpServersResponse,
   McpToolsResponse,
   NodesResponse,
@@ -167,6 +169,13 @@ export async function getNodes(port: number, token: string, limit?: number): Pro
 export async function getGraph(port: number, token: string): Promise<GraphResponse> {
   const body = await call(port, '/v1/graph', { token });
   if (!isGraphResponse(body)) throw new HttpError(0, 'protocol', 'unexpected graph response');
+  return body;
+}
+
+/** Persist a node the reader dragged and dropped on the Graph tab canvas. */
+export async function moveGraphNode(port: number, token: string, id: string, x: number, y: number): Promise<LayoutResponse> {
+  const body = await call(port, '/v1/layout', { method: 'POST', token, body: JSON.stringify({ id, x, y }) });
+  if (!isLayoutResponse(body)) throw new HttpError(0, 'protocol', 'unexpected layout response');
   return body;
 }
 

@@ -14,7 +14,8 @@ import { fuseRanked } from '@nff-brain/core/rank';
 import type { BrainFile } from '@nff-brain/core/types';
 import { clearActivity, removableNodeCount } from './activity.js';
 import { mutateLocalBrain, readLocalBrain } from './brainStore.js';
-import { makeProviderOneShot } from './providerClient.js';
+import { executeNavigate, NAVIGATE_TOOL_SPEC } from './navigateTool.js';
+import { runChatWithTools } from './providerClient.js';
 import { getActivity } from './storage.js';
 import type { NodesResponse, PopupToSw, SearchResponse, SwToPopup } from './protocol.js';
 
@@ -26,6 +27,13 @@ const SEARCH_Q_MAX = 256;
 const EXCERPT_MAX = 240;
 const MAX_RELATED = 3;
 const CHAT_RETRIEVAL_LIMIT = 8;
+
+// Only this (standalone) chat path actually has the navigate tool wired in —
+// the paired Manual-mode chat (chatRoutes.ts) has no tool-calling at all, so
+// this steering line stays out of the shared buildChatPrompt() and is
+// appended here instead, where it's true.
+const NAVIGATE_STEERING =
+  'You may use the navigate tool to open a page when the user clearly asks you to — not for a casual mention of a link, and never more than one page per request unless asked.';
 
 function clampLimit(raw: number | undefined, dflt: number, max: number): number {
   if (!Number.isFinite(raw) || (raw ?? 0) <= 0) return dflt;
@@ -87,19 +95,35 @@ function localSearch(brain: BrainFile, qRaw: string, limit: number): SearchRespo
   return { ok: true, q, count: hits.length, hits };
 }
 
-async function localChat(message: string, history: Array<{ role: 'user' | 'assistant'; text: string }>): Promise<SwToPopup> {
-  const oneShot = await makeProviderOneShot('chat');
-  if (!oneShot) {
-    return { type: 'error', message: 'add an API key in Settings to chat with your brain (or pair with a local server)' };
-  }
+async function localChat(
+  message: string,
+  history: Array<{ role: 'user' | 'assistant'; text: string }>,
+  tabId: number,
+): Promise<SwToPopup> {
   const brain = await readLocalBrain();
   const ranked = fuseRanked(message, brain.nodes, null, { limit: CHAT_RETRIEVAL_LIMIT });
   const nodes = ranked.map((r) => ({ id: r.node.id, title: r.node.title, content: r.node.content ?? '' }));
   try {
-    const raw = await oneShot(buildChatPrompt({ message, history, nodes }));
+    const prompt = `${buildChatPrompt({ message, history, nodes })}\n\n${NAVIGATE_STEERING}`;
+    const result = await runChatWithTools(prompt, [
+      { spec: NAVIGATE_TOOL_SPEC, run: (input) => executeNavigate(input, tabId) },
+    ]);
+    if (!result) {
+      return { type: 'error', message: 'add an API key in Settings to chat with your brain (or pair with a local server)' };
+    }
+    let answer = cleanChatAnswer(result.answer);
+    // A bare tool result is easy for the model to omit or phrase awkwardly —
+    // inject a confirmation note for a successful navigate. A FAILED navigate
+    // is left to the model's own prose: it already saw the failure reason as
+    // a tool_result and can narrate it, so no separate note is needed there.
+    const opened = result.toolEvents.filter((e) => e.name === 'navigate' && e.ok);
+    if (opened.length > 0) {
+      const note = opened.map((e) => e.summary).join(', ');
+      answer = answer ? `${answer}\n\n(${note})` : note;
+    }
     return {
       type: 'chatAnswer',
-      answer: cleanChatAnswer(raw),
+      answer,
       sources: nodes.map((n) => ({ id: n.id, title: n.title })),
     };
   } catch (err) {
@@ -168,8 +192,20 @@ export async function handleStandaloneMessage(msg: PopupToSw): Promise<SwToPopup
       };
     }
 
+    case 'moveGraphNode': {
+      const moved = await mutateLocalBrain((brain) => {
+        const node = brain.nodes.find((n) => n.id === msg.id);
+        if (!node) return false;
+        node.x = msg.x;
+        node.y = msg.y;
+        node.laidOut = true;
+        return true;
+      });
+      return { type: 'layout', moved };
+    }
+
     case 'chatAsk':
-      return localChat(msg.message, msg.history);
+      return localChat(msg.message, msg.history, msg.tabId);
 
     case 'clearActivity':
       return localClearActivity(msg.alsoRemoveNodes);

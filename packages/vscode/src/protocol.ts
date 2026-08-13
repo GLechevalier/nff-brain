@@ -80,4 +80,8 @@ export type WebToExt =
   | { type: 'embedQuery'; query: string; seq: number }
   // Positions the webview's incremental layout settled for nodes that had none.
   // Sent at most once per set of new nodes — see the loop guard in App.tsx.
-  | { type: 'layout'; positions: Array<{ id: string; x: number; y: number }> };
+  | { type: 'layout'; positions: Array<{ id: string; x: number; y: number }> }
+  // A node the reader dragged and dropped. Unlike `layout`, always overwrites —
+  // even a node that already has a laidOut position — since this is explicit
+  // user intent, not an auto-settle for a node that had none.
+  | { type: 'move'; positions: Array<{ id: string; x: number; y: number }> };

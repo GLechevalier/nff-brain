@@ -32,9 +32,9 @@ export function switchTab(tab: PanelTab): void {
 export type ChatMode = 'manual' | 'plan' | 'auto';
 
 const MODE_HINT: Record<ChatMode, string> = {
-  manual: 'Chat only — the brain answers from its own notes. No web action ever happens in this mode.',
-  plan: 'Type a goal. A plan is generated and shown for your approval before anything runs.',
-  auto: 'Type a goal. The plan is approved automatically the moment it is ready — no review step.',
+  manual: 'Chat answers from your notes. A "navigate to X" request still asks for confirmation first.',
+  plan: 'Type a goal. A plan is generated and shown for your approval before anything runs. A "navigate to X" request still asks first.',
+  auto: 'Type a goal. The plan is approved automatically the moment it is ready — no review step. A "navigate to X" request opens immediately too, no asking.',
 };
 
 export function paintMode(mode: ChatMode): void {
@@ -79,12 +79,17 @@ export type TranscriptEntry =
   | { kind: 'answer'; text: string; sources: ChatSource[] }
   | { kind: 'plan'; runId: string; run: WebAgentRun }
   | { kind: 'run'; runId: string; run: WebAgentRun }
-  | { kind: 'pending'; word: string };
+  | { kind: 'pending'; word: string }
+  // Manual-mode chat's action-intent permission prompt. Unresolved (no
+  // `decision`) shows Yes/No/Never-ask buttons; resolved shows a status line
+  // instead — same "mutate this entry in place" discipline as plan → run.
+  | { kind: 'permission'; requestId: string; adapterId: string; label: string; url: string; decision?: 'yes' | 'no' | 'always' };
 
 export interface TranscriptHandlers {
   onApprovePlan: (runId: string) => void;
   onDiscardPlan: (runId: string) => void;
   onStopRun: (runId: string) => void;
+  onPermissionDecision: (requestId: string, decision: 'yes' | 'no' | 'always') => void;
 }
 
 function userEntryEl(text: string): HTMLDivElement {
@@ -171,6 +176,52 @@ function planEntryEl(run: WebAgentRun, handlers: TranscriptHandlers): HTMLDivEle
   return div;
 }
 
+const PERMISSION_RESOLVED_TEXT: Record<'yes' | 'no' | 'always', string> = {
+  yes: 'Opened.',
+  no: 'Declined.',
+  always: 'Always allowed — opened.',
+};
+
+function permissionEntryEl(
+  entry: Extract<TranscriptEntry, { kind: 'permission' }>,
+  handlers: TranscriptHandlers,
+): HTMLDivElement {
+  const div = document.createElement('div');
+  div.className = 'entry entry-permission';
+
+  const title = document.createElement('div');
+  title.className = 'strong small';
+  title.textContent = `Navigate to "${entry.url}"?`;
+  div.append(title);
+
+  if (entry.decision) {
+    const status = document.createElement('p');
+    status.className = 'small';
+    status.textContent = PERMISSION_RESOLVED_TEXT[entry.decision];
+    div.append(status);
+    return div;
+  }
+
+  const row = document.createElement('div');
+  row.className = 'row gap';
+  const yes = document.createElement('button');
+  yes.className = 'btn primary';
+  yes.textContent = 'Yes';
+  yes.addEventListener('click', () => handlers.onPermissionDecision(entry.requestId, 'yes'));
+  const no = document.createElement('button');
+  no.className = 'btn';
+  no.textContent = 'No';
+  no.addEventListener('click', () => handlers.onPermissionDecision(entry.requestId, 'no'));
+  const always = document.createElement('button');
+  always.className = 'btn';
+  always.textContent = 'Never ask again';
+  always.addEventListener('click', () => handlers.onPermissionDecision(entry.requestId, 'always'));
+  row.append(yes, no, always);
+  div.append(row);
+
+  return div;
+}
+
 function historyLine(record: ActionRecord): HTMLLIElement {
   const li = document.createElement('li');
   const summary = document.createElement('span');
@@ -241,6 +292,8 @@ function entryEl(entry: TranscriptEntry, handlers: TranscriptHandlers): HTMLElem
       return runEntryEl(entry.run, handlers);
     case 'pending':
       return pendingEntryEl(entry.word);
+    case 'permission':
+      return permissionEntryEl(entry, handlers);
   }
 }
 
@@ -338,6 +391,11 @@ const GRAPH_LABEL_MAX = 24;
 
 export interface GraphViewBox { x: number; y: number; w: number; h: number; }
 
+export interface GraphHandlers {
+  /** A node's circle was pressed — the caller decides whether that starts a drag. */
+  onNodeMouseDown: (id: string, e: MouseEvent) => void;
+}
+
 function svgEl<K extends keyof SVGElementTagNameMap>(tag: K): SVGElementTagNameMap[K] {
   return document.createElementNS(SVG_NS, tag);
 }
@@ -346,15 +404,27 @@ function truncateLabel(title: string): string {
   return title.length > GRAPH_LABEL_MAX ? `${title.slice(0, GRAPH_LABEL_MAX - 1)}…` : title;
 }
 
+// Rebuilt fresh by every renderGraph call, read by setNodePosition — the
+// element identities a drag needs to move WITHOUT rebuilding the whole SVG.
+interface GraphNodeEls {
+  circle: SVGCircleElement;
+  label: SVGTextElement;
+  size: number;
+  edgeEnds: Array<{ line: SVGLineElement; end: 'x1y1' | 'x2y2' }>;
+}
+const graphNodeEls = new Map<string, GraphNodeEls>();
+
 /**
  * Rebuilds the graph SVG from scratch and returns a fitted view box (node
  * bounding box + padding) for the caller to hand to setGraphViewBox. Pan/zoom
- * afterwards must go through setGraphViewBox, not another renderGraph call —
- * this one always rebuilds every node/edge element.
+ * afterwards must go through setGraphViewBox, and a node drag through
+ * setNodePosition — neither ever calls renderGraph again mid-gesture, only on
+ * the next poll or tab entry, which always rebuilds every node/edge element.
  */
-export function renderGraph(nodes: readonly GraphNode[], edges: readonly GraphEdge[]): GraphViewBox {
+export function renderGraph(nodes: readonly GraphNode[], edges: readonly GraphEdge[], handlers: GraphHandlers): GraphViewBox {
   const host = $('graph-canvas');
   const svg = svgEl('svg');
+  graphNodeEls.clear();
 
   if (nodes.length === 0) {
     const box: GraphViewBox = { x: 0, y: 0, w: 400, h: 200 };
@@ -381,6 +451,9 @@ export function renderGraph(nodes: readonly GraphNode[], edges: readonly GraphEd
   const pad = 40;
   const box: GraphViewBox = { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
 
+  // Lines whose endpoint touches a given node id — setNodePosition re-anchors
+  // these during a drag so a node's connections never visually detach from it.
+  const edgeEndsByNode = new Map<string, Array<{ line: SVGLineElement; end: 'x1y1' | 'x2y2' }>>();
   const edgeGroup = svgEl('g');
   for (const e of edges) {
     const from = byId.get(e.from);
@@ -395,6 +468,8 @@ export function renderGraph(nodes: readonly GraphNode[], edges: readonly GraphEd
     line.setAttribute('stroke-width', '1');
     line.setAttribute('stroke-opacity', String(Math.min(1, Math.max(0.08, e.strength))));
     edgeGroup.append(line);
+    (edgeEndsByNode.get(e.from) ?? edgeEndsByNode.set(e.from, []).get(e.from)!).push({ line, end: 'x1y1' });
+    (edgeEndsByNode.get(e.to) ?? edgeEndsByNode.set(e.to, []).get(e.to)!).push({ line, end: 'x2y2' });
   }
   svg.append(edgeGroup);
 
@@ -406,6 +481,10 @@ export function renderGraph(nodes: readonly GraphNode[], edges: readonly GraphEd
     circle.setAttribute('cy', String(n.y));
     circle.setAttribute('r', String(n.size));
     circle.setAttribute('fill', n.color);
+    circle.addEventListener('mousedown', (e) => {
+      e.stopPropagation(); // a node drag must never also start a canvas pan
+      handlers.onNodeMouseDown(n.id, e);
+    });
     const title = svgEl('title');
     title.textContent = n.title;
     circle.append(title);
@@ -418,6 +497,13 @@ export function renderGraph(nodes: readonly GraphNode[], edges: readonly GraphEd
     label.setAttribute('text-anchor', 'middle');
     label.textContent = truncateLabel(n.title);
     nodeGroup.append(label);
+
+    graphNodeEls.set(n.id, {
+      circle,
+      label,
+      size: n.size,
+      edgeEnds: edgeEndsByNode.get(n.id) ?? [],
+    });
   }
   svg.append(nodeGroup);
 
@@ -431,6 +517,29 @@ export function setGraphViewBox(box: GraphViewBox): void {
   const svg = $('graph-canvas').querySelector('svg');
   if (!svg) return;
   svg.setAttribute('viewBox', `${box.x} ${box.y} ${box.w} ${box.h}`);
+}
+
+/**
+ * Cheap — moves one node's circle, label and touching edge-ends during a
+ * drag, never rebuilds the SVG. Elements come from the last renderGraph call;
+ * a stale/unknown id (deleted mid-drag) is a silent no-op.
+ */
+export function setNodePosition(id: string, x: number, y: number): void {
+  const els = graphNodeEls.get(id);
+  if (!els) return;
+  els.circle.setAttribute('cx', String(x));
+  els.circle.setAttribute('cy', String(y));
+  els.label.setAttribute('x', String(x));
+  els.label.setAttribute('y', String(y + els.size + 7));
+  for (const { line, end } of els.edgeEnds) {
+    if (end === 'x1y1') {
+      line.setAttribute('x1', String(x));
+      line.setAttribute('y1', String(y));
+    } else {
+      line.setAttribute('x2', String(x));
+      line.setAttribute('y2', String(y));
+    }
+  }
 }
 
 export function showFieldError(id: string, message: string | null): void {

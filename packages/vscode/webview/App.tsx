@@ -87,6 +87,13 @@ export function App() {
     vscode.postMessage({ type: 'layout', positions });
   }, []);
 
+  // Persist a node the reader dragged and dropped — a deliberate action, so
+  // unlike onLayout it always sends (no dedup-signature guard needed) and
+  // always overwrites, even for an already-laid-out node.
+  const onMove = useCallback((positions: Array<{ id: string; x: number; y: number }>) => {
+    vscode.postMessage({ type: 'move', positions });
+  }, []);
+
   // Hide the pan/zoom hint when the panel gets cramped.
   useEffect(() => {
     const el = containerRef.current;
@@ -178,7 +185,7 @@ export function App() {
           {notice && <span style={{ fontSize: 11, color: 'var(--nb-muted)' }}>{notice}</span>}
           {!narrow && (
             <span style={{ fontSize: 10, color: 'var(--nb-muted)' }}>
-              click a node to open its .md · grab to pan · scroll to zoom · +/−/0
+              click a node to open its .md · drag a node to move it · grab to pan · scroll to zoom · +/−/0
             </span>
           )}
           <input
@@ -258,6 +265,7 @@ export function App() {
           onSelect={openNode}
           onHover={setHoveredId}
           onLayout={onLayout}
+          onMove={onMove}
           onScaleChange={setScale}
           emptyState={
             <div style={{ fontSize: 12, color: 'var(--nb-faint)', textAlign: 'center', lineHeight: 2 }}>

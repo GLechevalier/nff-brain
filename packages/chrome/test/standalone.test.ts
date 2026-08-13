@@ -7,7 +7,7 @@ import type { BrainFile, BrainNode } from '@nff-brain/core/types';
 // satisfy the SAME protocol type guards the panel applies to server replies,
 // which is exactly what makes both modes render with zero panel changes.
 
-import { isGraphResponse, isNodesResponse, isSearchResponse } from '../src/protocol.js';
+import { isGraphResponse, isLayoutResponse, isNodesResponse, isSearchResponse } from '../src/protocol.js';
 
 function fixtureBrain(): BrainFile {
   const brain = emptyBrain();
@@ -80,10 +80,37 @@ describe('standalone message surfaces', () => {
     }
   });
 
+  it('moveGraphNode persists the drop and getGraph reflects it afterwards', async () => {
+    stubChrome(fixtureBrain());
+    const { handleStandaloneMessage } = await import('../src/standalone.js');
+
+    const moved = await handleStandaloneMessage({ type: 'moveGraphNode', id: 'esp32-cors-preflight', x: 42, y: -7 });
+    expect(moved && moved !== 'handled' && moved.type).toBe('layout');
+    if (moved && moved !== 'handled' && moved.type === 'layout') {
+      expect(isLayoutResponse({ ok: true, moved: moved.moved })).toBe(true);
+      expect(moved.moved).toBe(true);
+    }
+
+    const graph = await handleStandaloneMessage({ type: 'getGraph' });
+    if (graph && graph !== 'handled' && graph.type === 'graph') {
+      const node = graph.nodes.find((n) => n.id === 'esp32-cors-preflight');
+      expect(node?.x).toBe(42);
+      expect(node?.y).toBe(-7);
+    }
+  });
+
+  it('moveGraphNode on an unknown id is a no-op reply, not a throw', async () => {
+    stubChrome(fixtureBrain());
+    const { handleStandaloneMessage } = await import('../src/standalone.js');
+    const moved = await handleStandaloneMessage({ type: 'moveGraphNode', id: 'no-such-node', x: 1, y: 2 });
+    expect(moved && moved !== 'handled' && moved.type).toBe('layout');
+    if (moved && moved !== 'handled' && moved.type === 'layout') expect(moved.moved).toBe(false);
+  });
+
   it('chatAsk without a configured key returns a pointer at Settings, never a throw', async () => {
     stubChrome(fixtureBrain());
     const { handleStandaloneMessage } = await import('../src/standalone.js');
-    const reply = await handleStandaloneMessage({ type: 'chatAsk', message: 'hi', history: [] });
+    const reply = await handleStandaloneMessage({ type: 'chatAsk', message: 'hi', history: [], tabId: 1 });
     expect(reply && reply !== 'handled' && reply.type).toBe('error');
     if (reply && reply !== 'handled' && reply.type === 'error') {
       expect(reply.message).toContain('API key');

@@ -7,6 +7,7 @@
 // enters this realm, and this document makes zero network requests of its own.
 
 import { agentAdapterById } from '../src/agentRegistry.js';
+import { detectActionIntent, type ActionIntent } from '../src/actionIntent.js';
 import { PANEL_POLL_MS } from '../src/protocol.js';
 import type { ChatTurn, GraphEdge, GraphNode, McpServerSummary, McpToolDef, NodesResponse, PanelToSw, SwToPanel, WebAgentListTarget, WebAgentRun } from '../src/protocol.js';
 import {
@@ -19,9 +20,11 @@ import {
   renderMcpList,
   renderTranscript,
   setGraphViewBox,
+  setNodePosition,
   showFieldError,
   switchTab,
   type ChatMode,
+  type GraphHandlers,
   type GraphViewBox,
   type McpListItem,
   type PanelTab,
@@ -65,6 +68,7 @@ let panning = false;
 let panStartClientX = 0;
 let panStartClientY = 0;
 let panStartBox: GraphViewBox | null = null;
+let nodeDrag: { id: string; startClientX: number; startClientY: number; x0: number; y0: number; moved: boolean } | null = null;
 
 function send(msg: PanelToSw): Promise<SwToPanel> {
   return new Promise((resolve) => {
@@ -200,6 +204,7 @@ const transcriptHandlers = {
   onApprovePlan: (runId: string) => void approvePlan(runId),
   onDiscardPlan: (runId: string) => void discardPlan(runId),
   onStopRun: (runId: string) => void stopRun(runId),
+  onPermissionDecision: (requestId: string, decision: 'yes' | 'no' | 'always') => void resolvePermission(requestId, decision),
 };
 
 function paintTranscript(): void {
@@ -273,6 +278,23 @@ async function stopRun(runId: string): Promise<void> {
   if (reply.type === 'agentStatus' && reply.run) applyRunUpdate(reply.run);
 }
 
+// ── Manual-mode chat's action-intent permission prompt ──────────────────────
+
+function findPermissionEntry(requestId: string): Extract<TranscriptEntry, { kind: 'permission' }> | undefined {
+  return transcript.find((e): e is Extract<TranscriptEntry, { kind: 'permission' }> => e.kind === 'permission' && e.requestId === requestId);
+}
+
+async function resolvePermission(requestId: string, decision: 'yes' | 'no' | 'always'): Promise<void> {
+  const entry = findPermissionEntry(requestId);
+  if (!entry) return;
+  entry.decision = decision;
+  paintTranscript();
+
+  if (decision === 'no') return;
+  if (decision === 'always') await send({ type: 'setAgentActionAllowed', adapterId: entry.adapterId, allowed: true });
+  await send({ type: 'runAdapterNavigate', adapterId: entry.adapterId, tabId: chrome.devtools.inspectedWindow.tabId });
+}
+
 // ── submitting the prompt — branches on mode ─────────────────────────────────
 
 function pushChatTurn(turn: ChatTurn): void {
@@ -281,7 +303,7 @@ function pushChatTurn(turn: ChatTurn): void {
 }
 
 async function submitChat(message: string): Promise<void> {
-  const reply = await send({ type: 'chatAsk', message, history: chatHistory });
+  const reply = await send({ type: 'chatAsk', message, history: chatHistory, tabId: chrome.devtools.inspectedWindow.tabId });
   if (reply.type === 'error') {
     showFieldError('prompt-error', reply.message);
     return;
@@ -290,6 +312,42 @@ async function submitChat(message: string): Promise<void> {
   transcript.push({ kind: 'answer', text: reply.answer, sources: reply.sources });
   pushChatTurn({ role: 'user', text: message });
   pushChatTurn({ role: 'assistant', text: reply.answer });
+  paintTranscript();
+}
+
+/**
+ * The action-intent shortcut — checked BEFORE mode branching, in EVERY mode,
+ * so "navigate to linkedin" never gets misread as a recruiting goal by
+ * Plan/Auto's planner (which only understands searchPeople/evaluateCards).
+ * A match skips chatAsk/agentSubmitGoal entirely (no reason to pay for an
+ * LLM call to a request we're about to act on directly instead). Standing
+ * "never ask again" state is fetched fresh here, never cached, same
+ * discipline as refreshAdapterState.
+ *
+ * Auto mode's whole point is "no review step" — that applies here exactly
+ * like it does to a generated plan, so an intent match in Auto mode opens
+ * the tab immediately, same as an already-always-allowed adapter. Manual and
+ * Plan both still ask: Plan's entire premise is "show me before it runs".
+ */
+async function submitActionIntent(intent: ActionIntent): Promise<void> {
+  const stateReply = await send({ type: 'getState' });
+  const alwaysAllowed = stateReply.type === 'state' && stateReply.state.agentActionAllow.includes(intent.adapterId);
+
+  if (alwaysAllowed || mode === 'auto') {
+    await send({ type: 'runAdapterNavigate', adapterId: intent.adapterId, tabId: chrome.devtools.inspectedWindow.tabId });
+    transcript.push({
+      kind: 'permission',
+      requestId: crypto.randomUUID(),
+      adapterId: intent.adapterId,
+      label: intent.label,
+      url: intent.url,
+      decision: alwaysAllowed ? 'always' : 'yes',
+    });
+    paintTranscript();
+    return;
+  }
+
+  transcript.push({ kind: 'permission', requestId: crypto.randomUUID(), adapterId: intent.adapterId, label: intent.label, url: intent.url });
   paintTranscript();
 }
 
@@ -330,7 +388,9 @@ async function submitPrompt(): Promise<void> {
   pushPending();
 
   try {
-    if (mode === 'manual') await submitChat(message);
+    const intent = detectActionIntent(message);
+    if (intent) await submitActionIntent(intent);
+    else if (mode === 'manual') await submitChat(message);
     else await submitGoal(message);
   } finally {
     clearPending();
@@ -413,7 +473,7 @@ async function loadGraph(resetView: boolean): Promise<void> {
   showFieldError('graph-error', null);
   latestGraphNodes = reply.nodes;
   latestGraphEdges = reply.edges;
-  const fitted = renderGraph(latestGraphNodes, latestGraphEdges);
+  const fitted = renderGraph(latestGraphNodes, latestGraphEdges, graphHandlers);
   if (resetView || !graphViewBox) {
     graphViewBox = fitted;
   } else {
@@ -442,6 +502,34 @@ function panGraph(canvas: HTMLElement, dxClient: number, dyClient: number): void
   setGraphViewBox(graphViewBox);
 }
 
+// Only past this many client px does a press count as a drag rather than a
+// click — nodes have no click behaviour today, but a trivial jiggle still
+// must not fire a network write.
+const NODE_DRAG_THRESHOLD_PX = 3;
+
+function dragNode(canvas: HTMLElement, clientX: number, clientY: number): { x: number; y: number } | null {
+  if (!nodeDrag || !graphViewBox) return null;
+  const rect = canvas.getBoundingClientRect();
+  const dxClient = clientX - nodeDrag.startClientX;
+  const dyClient = clientY - nodeDrag.startClientY;
+  if (Math.abs(dxClient) + Math.abs(dyClient) > NODE_DRAG_THRESHOLD_PX) nodeDrag.moved = true;
+  // SVG-space delta follows the mouse directly — the opposite sign from
+  // panGraph, which moves the VIEW rather than the content.
+  const x = nodeDrag.x0 + (dxClient / rect.width) * graphViewBox.w;
+  const y = nodeDrag.y0 + (dyClient / rect.height) * graphViewBox.h;
+  setNodePosition(nodeDrag.id, x, y);
+  return { x, y };
+}
+
+const graphHandlers: GraphHandlers = {
+  onNodeMouseDown: (id, e) => {
+    const node = latestGraphNodes.find((n) => n.id === id);
+    if (!node) return;
+    nodeDrag = { id, startClientX: e.clientX, startClientY: e.clientY, x0: node.x, y0: node.y, moved: false };
+    $('graph-canvas').classList.add('dragging-node');
+  },
+};
+
 function wireGraphCanvas(): void {
   const canvas = $('graph-canvas');
 
@@ -461,11 +549,32 @@ function wireGraphCanvas(): void {
   });
 
   window.addEventListener('mousemove', (e) => {
+    if (nodeDrag) {
+      dragNode(canvas, e.clientX, e.clientY);
+      return;
+    }
     if (!panning) return;
     panGraph(canvas, e.clientX - panStartClientX, e.clientY - panStartClientY);
   });
 
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('mouseup', (e) => {
+    if (nodeDrag) {
+      const drag = nodeDrag;
+      const pos = dragNode(canvas, e.clientX, e.clientY);
+      nodeDrag = null;
+      canvas.classList.remove('dragging-node');
+      if (drag.moved && pos) {
+        const node = latestGraphNodes.find((n) => n.id === drag.id);
+        if (node) {
+          // Update the local copy now so the next poll's rebuild doesn't
+          // visually snap the node back before the server round-trips.
+          node.x = pos.x;
+          node.y = pos.y;
+        }
+        void send({ type: 'moveGraphNode', id: drag.id, x: pos.x, y: pos.y });
+      }
+      return;
+    }
     if (!panning) return;
     panning = false;
     panStartBox = null;

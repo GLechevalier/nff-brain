@@ -323,6 +323,36 @@ async function handleMessage(msg: WebToExt, webview: vscode.Webview): Promise<vo
         break;
       }
 
+      case 'move': {
+        // The reader dragged and dropped a node — explicit intent, so unlike
+        // `layout` this ALWAYS overwrites, even a node that already has a
+        // laidOut position. Same file-split logic as `layout`.
+        const byFile = new Map<string, Array<{ id: string; x: number; y: number }>>();
+        for (const p of msg.positions) {
+          const source = graph.sourceById.get(p.id);
+          if (!source) continue; // deleted between render and message
+          const file = fileFor(source);
+          (byFile.get(file) ?? byFile.set(file, []).get(file)!).push(p);
+        }
+        let written = 0;
+        for (const [file, positions] of byFile) {
+          const wanted = new Map(positions.map((p) => [p.id, p]));
+          mutateBrain(file, (brain) => {
+            for (const node of brain.nodes) {
+              const p = wanted.get(node.id);
+              if (!p) continue;
+              node.x = p.x;
+              node.y = p.y;
+              node.laidOut = true;
+              written++;
+            }
+          });
+        }
+        if (written === 0) return;
+        logLine(`move: repositioned ${written} node(s)`);
+        break;
+      }
+
       case 'createNodeRequest': {
         const title = await vscode.window.showInputBox({
           prompt: 'Title for the new brain node',

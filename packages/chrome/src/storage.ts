@@ -25,7 +25,7 @@ import type {
   StoredState,
 } from './schema.js';
 import type { RecorderSeenEntry, RecorderState } from './recorderTypes.js';
-import type { AgentAdapterState, AgentTabRef } from './agentTypes.js';
+import type { AgentActionAllowState, AgentAdapterState, AgentTabRef } from './agentTypes.js';
 
 async function raw<T>(key: string, fallback: T, valid: (v: unknown) => boolean): Promise<T> {
   try {
@@ -115,6 +115,14 @@ export function getAgentAdapters(): Promise<AgentAdapterState> {
 
 export async function setAgentAdapters(state: AgentAdapterState): Promise<void> {
   await chrome.storage.local.set({ [KEYS.agentAdapters]: state });
+}
+
+export function getAgentActionAllow(): Promise<AgentActionAllowState> {
+  return raw<AgentActionAllowState>(KEYS.agentActionAllow, { byId: {} }, (v) => isObj(v) && isObj(v.byId));
+}
+
+export async function setAgentActionAllow(state: AgentActionAllowState): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.agentActionAllow]: state });
 }
 
 export function getAgentTab(): Promise<AgentTabRef | null> {

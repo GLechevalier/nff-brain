@@ -16,7 +16,7 @@
 // storage at call time, so a key change applies to the very next call.
 
 import { PROVIDERS, ProviderError } from '@nff-brain/core/provider';
-import type { ModelSlot, ProviderRequest } from '@nff-brain/core/provider';
+import type { ChatContentBlock, ChatMessage, ModelSlot, ProviderChatResult, ProviderRequest, ToolSpec } from '@nff-brain/core/provider';
 import type { ProviderTestResult } from './schema.js';
 import { getProviderSettings, setProviderSettings } from './storage.js';
 
@@ -74,6 +74,99 @@ export async function makeProviderOneShot(slot: ModelSlot): Promise<OneShot | nu
       throw err;
     }
   };
+}
+
+/**
+ * Same null-if-unconfigured contract as makeProviderOneShot, plus: null also
+ * when the configured adapter doesn't implement the tool-calling methods yet
+ * (only anthropicAdapter does today) — callers degrade the same way either way.
+ */
+async function makeProviderChatOneShot(
+  slot: ModelSlot,
+): Promise<((messages: ChatMessage[], tools: ToolSpec[]) => Promise<ProviderChatResult>) | null> {
+  const s = await getProviderSettings();
+  const adapter = s && PROVIDERS[s.provider];
+  if (!s || !adapter || !adapter.buildChatRequest || !adapter.parseChatResponse) return null;
+  const model = s.models[slot] || adapter.defaultModels[slot];
+  const buildChatRequest = adapter.buildChatRequest;
+  const parseChatResponse = adapter.parseChatResponse;
+
+  return async (messages, tools) => {
+    const req = buildChatRequest({ messages, model, maxTokens: MAX_TOKENS[slot], tools }, s.apiKey);
+    const { status, body } = await send(req, PROVIDER_TIMEOUT_MS[slot]);
+    try {
+      return parseChatResponse(status, body);
+    } catch (err) {
+      if (err instanceof ProviderError && err.kind === 'auth') await recordAuthFailure(err.message);
+      throw err;
+    }
+  };
+}
+
+export interface ToolExecutor {
+  spec: ToolSpec;
+  /** NEVER THROWS — a failed call becomes a tool_result the model can narrate, not a crashed chat turn. */
+  run(input: unknown): Promise<{ ok: boolean; resultText: string }>;
+}
+
+export interface ChatWithToolsResult {
+  answer: string;
+  toolEvents: Array<{ name: string; ok: boolean; summary: string }>;
+}
+
+/** Small hard cap on provider round trips per chat turn — same safety-valve spirit as agentRunner's MAX_POLL_CHAIN. */
+export const MAX_CHAT_TOOL_TURNS = 3;
+
+/**
+ * Sends the prompt to the 'chat' slot with the given tools; if the model
+ * calls one, executes it locally and feeds the result back for up to
+ * MAX_CHAT_TOOL_TURNS round trips. Null means "no provider configured" (same
+ * contract as makeProviderOneShot) — standalone.ts's existing "add an API
+ * key" branch needs no new shape to handle it.
+ */
+export async function runChatWithTools(initialPrompt: string, tools: ToolExecutor[]): Promise<ChatWithToolsResult | null> {
+  const chatOneShot = await makeProviderChatOneShot('chat');
+  if (!chatOneShot) return null;
+
+  const specs = tools.map((t) => t.spec);
+  const byName = new Map(tools.map((t) => [t.spec.name, t]));
+  const messages: ChatMessage[] = [{ role: 'user', content: initialPrompt }];
+  const toolEvents: ChatWithToolsResult['toolEvents'] = [];
+  let lastText = '';
+
+  for (let turn = 0; turn < MAX_CHAT_TOOL_TURNS; turn++) {
+    const result = await chatOneShot(messages, specs);
+    lastText = result.text;
+    if (result.toolCalls.length === 0) return { answer: result.text, toolEvents };
+
+    const assistantContent: ChatContentBlock[] = [];
+    if (result.text) assistantContent.push({ type: 'text', text: result.text });
+    for (const call of result.toolCalls) assistantContent.push({ type: 'tool_use', id: call.id, name: call.name, input: call.input });
+    messages.push({ role: 'assistant', content: assistantContent });
+
+    const resultBlocks: ChatContentBlock[] = [];
+    for (const call of result.toolCalls) {
+      const executor = byName.get(call.name);
+      let ok = false;
+      let resultText = 'unknown tool';
+      if (executor) {
+        try {
+          const res = await executor.run(call.input);
+          ok = res.ok;
+          resultText = res.resultText;
+        } catch (err) {
+          resultText = err instanceof Error ? err.message : 'tool execution failed';
+        }
+      }
+      toolEvents.push({ name: call.name, ok, summary: resultText });
+      resultBlocks.push({ type: 'tool_result', tool_use_id: call.id, content: resultText, is_error: !ok });
+    }
+    messages.push({ role: 'user', content: resultBlocks });
+  }
+
+  // Cap hit while a tool_use was still pending — return the last text seen
+  // (often '') rather than looping forever, same discipline as pollAgent's MAX_POLL_CHAIN.
+  return { answer: lastText, toolEvents };
 }
 
 /** The options page's "Test connection": cheapest authenticated round trip. */

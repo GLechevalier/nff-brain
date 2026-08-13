@@ -201,6 +201,7 @@ describe('MV3 service-worker discipline', () => {
     'src/agentRegistry.ts',
     'src/agentGate.ts',
     'src/providerClient.ts',
+    'src/navigateTool.ts',
     'src/mode.ts',
     'src/standaloneDrain.ts',
     'src/standalone.ts',

@@ -30,6 +30,7 @@ export const KEYS = {
   recorders: 'nb.recorders',
   recorderSeen: 'nb.recorderSeen',
   agentAdapters: 'nb.agentAdapters',
+  agentActionAllow: 'nb.agentActionAllow',
   agentTab: 'nb.agentTab',
   // Standalone mode (no local server): BYOK provider + the in-browser brain.
   provider: 'nb.provider',

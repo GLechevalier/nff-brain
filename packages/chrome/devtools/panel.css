@@ -178,7 +178,7 @@ textarea.input { resize: vertical; }
 .entry-answer .entry-sources { margin-top: 6px; }
 .entry-answer .entry-sources .chip { margin-right: 4px; }
 
-.entry-plan, .entry-run { background: #20241c; border: 1px solid #3a3a20; }
+.entry-plan, .entry-run, .entry-permission { background: #20241c; border: 1px solid #3a3a20; }
 .entry-plan .list, .entry-run .list { margin-top: 6px; }
 .entry-plan .list li, .entry-run .list li {
   flex-direction: column;
@@ -245,7 +245,8 @@ code.inline {
 .graph-canvas.panning { cursor: grabbing; }
 .graph-canvas svg { display: block; width: 100%; height: 100%; }
 .graph-canvas .graph-edge { stroke: #555; }
-.graph-canvas .graph-node { stroke: #1e1e1e; stroke-width: 1; }
+.graph-canvas .graph-node { stroke: #1e1e1e; stroke-width: 1; cursor: grab; }
+.graph-canvas.dragging-node .graph-node { cursor: grabbing; }
 .graph-canvas .graph-label {
   fill: #ccc;
   font-size: 6px;

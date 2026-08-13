@@ -729,4 +729,84 @@ describe('DevTools panel routes (/v1/nodes + /v1/search)', () => {
     const body = res.json<any>();
     expect(body.nodes).toHaveLength(2); // the global side still serves
   });
+
+  describe('POST /v1/layout', () => {
+    it('writes exactly the dropped x/y to the file that owns the node, without touching the other one', async () => {
+      const token = await pair();
+      seedPanelBrains();
+      const beforeGlobal = JSON.parse(fs.readFileSync(globalBrain, 'utf8'));
+      const res = await request(port, {
+        path: '/v1/layout',
+        method: 'POST',
+        headers: auth(token, { 'content-type': 'application/json' }),
+        body: JSON.stringify({ id: 'docker-dns-wedge', x: 123.5, y: -40 }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.json<any>()).toEqual({ ok: true, moved: true });
+
+      const project = JSON.parse(fs.readFileSync(projectBrain, 'utf8'));
+      const node = project.nodes.find((n: any) => n.id === 'docker-dns-wedge');
+      expect(node.x).toBe(123.5);
+      expect(node.y).toBe(-40);
+      expect(node.laidOut).toBe(true);
+      // The file that does NOT own this node must not be resaved.
+      const afterGlobal = JSON.parse(fs.readFileSync(globalBrain, 'utf8'));
+      expect(afterGlobal.updatedAt).toBe(beforeGlobal.updatedAt);
+    });
+
+    it('routes to whichever file owns a collided id — project wins, matching /v1/graph', async () => {
+      const token = await pair();
+      seedPanelBrains();
+      const res = await request(port, {
+        path: '/v1/layout',
+        method: 'POST',
+        headers: auth(token, { 'content-type': 'application/json' }),
+        body: JSON.stringify({ id: 'shared', x: 10, y: 20 }),
+      });
+      expect(res.status).toBe(200);
+      const project = JSON.parse(fs.readFileSync(projectBrain, 'utf8'));
+      expect(project.nodes.find((n: any) => n.id === 'shared').x).toBe(10);
+      const global = JSON.parse(fs.readFileSync(globalBrain, 'utf8'));
+      expect(global.nodes.find((n: any) => n.id === 'shared').x).toBe(0); // untouched, seeded value
+    });
+
+    it('an unknown id is a 200 no-op, not an error', async () => {
+      const token = await pair();
+      seedPanelBrains();
+      const res = await request(port, {
+        path: '/v1/layout',
+        method: 'POST',
+        headers: auth(token, { 'content-type': 'application/json' }),
+        body: JSON.stringify({ id: 'no-such-node', x: 1, y: 2 }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.json<any>()).toEqual({ ok: true, moved: false });
+    });
+
+    it('rejects a missing id or non-finite x/y', async () => {
+      const token = await pair();
+      seedPanelBrains();
+      for (const body of [{ x: 1, y: 2 }, { id: 'shared', x: 'nope', y: 2 }, { id: 'shared', x: Infinity, y: 2 }]) {
+        const res = await request(port, {
+          path: '/v1/layout',
+          method: 'POST',
+          headers: auth(token, { 'content-type': 'application/json' }),
+          body: JSON.stringify(body),
+        });
+        expect(res.status).toBe(400);
+      }
+    });
+
+    it('demands auth + the paired origin like every client route', async () => {
+      const token = await pair();
+      seedPanelBrains();
+      const body = JSON.stringify({ id: 'shared', x: 1, y: 2 });
+      expect(
+        (await request(port, { path: '/v1/layout', method: 'POST', headers: { origin: ORIGIN }, body })).status,
+      ).toBe(401);
+      expect(
+        (await request(port, { path: '/v1/layout', method: 'POST', headers: auth(token, { origin: OTHER_ORIGIN }), body })).status,
+      ).toBe(403);
+    });
+  });
 });

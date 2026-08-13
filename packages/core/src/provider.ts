@@ -79,6 +79,46 @@ export interface ProviderAdapter {
   parseResponse(status: number, bodyText: string): string;
   /** Cheapest possible authenticated round trip, for the "Test connection" button. */
   buildKeyTestRequest(apiKey: string): ProviderRequest;
+  /**
+   * Tool-calling surface for the chat slot. Optional: a provider without an
+   * implementation simply can't power the navigate tool yet — callers must
+   * check for these before using them, never assume every adapter has them.
+   */
+  buildChatRequest?(p: ProviderChatCallParams, apiKey: string): ProviderRequest;
+  /** Unlike parseResponse, does NOT throw on empty text — a pure tool_use turn has none. */
+  parseChatResponse?(status: number, bodyText: string): ProviderChatResult;
+}
+
+// ── tool-calling (chat slot only) ───────────────────────────────────────────
+
+export interface ToolSpec {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+
+export type ChatContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string | ChatContentBlock[];
+}
+
+export interface ProviderChatCallParams {
+  messages: ChatMessage[];
+  model: string;
+  maxTokens: number;
+  tools?: ToolSpec[];
+}
+
+export interface ProviderChatResult {
+  /** Joined text blocks, '' if none (a pure tool_use turn has no text). */
+  text: string;
+  toolCalls: Array<{ id: string; name: string; input: unknown }>;
+  stopReason: string | null;
 }
 
 // ── Anthropic ────────────────────────────────────────────────────────────────
@@ -103,8 +143,16 @@ interface AnthropicErrorBody {
   error?: { type?: unknown; message?: unknown };
 }
 
+interface AnthropicContentBlock {
+  type?: unknown;
+  text?: unknown;
+  id?: unknown;
+  name?: unknown;
+  input?: unknown;
+}
+
 interface AnthropicMessageBody {
-  content?: Array<{ type?: unknown; text?: unknown }>;
+  content?: AnthropicContentBlock[];
   stop_reason?: unknown;
 }
 
@@ -116,6 +164,32 @@ function parseBody<T>(bodyText: string): T | null {
   }
 }
 
+/** The envelope every /v1/messages request shares — only the body differs between buildRequest and buildChatRequest. */
+function anthropicMessagesRequest(body: Record<string, unknown>, apiKey: string): ProviderRequest {
+  return {
+    url: `${ANTHROPIC_HOST}/v1/messages`,
+    method: 'POST',
+    headers: anthropicHeaders(apiKey),
+    body: JSON.stringify(body),
+  };
+}
+
+/** Shared with parseChatResponse — throws on every real failure status, same mapping either way. */
+function throwOnErrorStatus(status: number, bodyText: string): void {
+  if (status >= 200 && status < 300) return;
+  const parsed = parseBody<AnthropicErrorBody>(bodyText);
+  const errType = typeof parsed?.error?.type === 'string' ? parsed.error.type : '';
+  const errMessage =
+    typeof parsed?.error?.message === 'string' && parsed.error.message
+      ? parsed.error.message.slice(0, 200)
+      : `provider returned HTTP ${status}`;
+  if (status === 401 || status === 403) throw new ProviderError('auth', 'invalid or unauthorized API key', status);
+  if (status === 429) throw new ProviderError('rate_limit', 'provider rate limit hit', status);
+  if (status === 529 || status >= 500 || errType === 'overloaded_error')
+    throw new ProviderError('overloaded', 'provider overloaded or unavailable', status);
+  throw new ProviderError('bad_request', errMessage, status);
+}
+
 export const anthropicAdapter: ProviderAdapter = {
   id: 'anthropic',
   label: 'Anthropic',
@@ -124,32 +198,14 @@ export const anthropicAdapter: ProviderAdapter = {
   knownModels: ['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5'],
 
   buildRequest(p: ProviderCallParams, apiKey: string): ProviderRequest {
-    return {
-      url: `${ANTHROPIC_HOST}/v1/messages`,
-      method: 'POST',
-      headers: anthropicHeaders(apiKey),
-      body: JSON.stringify({
-        model: p.model,
-        max_tokens: p.maxTokens,
-        messages: [{ role: 'user', content: p.prompt }],
-      }),
-    };
+    return anthropicMessagesRequest(
+      { model: p.model, max_tokens: p.maxTokens, messages: [{ role: 'user', content: p.prompt }] },
+      apiKey,
+    );
   },
 
   parseResponse(status: number, bodyText: string): string {
-    if (status < 200 || status >= 300) {
-      const parsed = parseBody<AnthropicErrorBody>(bodyText);
-      const errType = typeof parsed?.error?.type === 'string' ? parsed.error.type : '';
-      const errMessage =
-        typeof parsed?.error?.message === 'string' && parsed.error.message
-          ? parsed.error.message.slice(0, 200)
-          : `provider returned HTTP ${status}`;
-      if (status === 401 || status === 403) throw new ProviderError('auth', 'invalid or unauthorized API key', status);
-      if (status === 429) throw new ProviderError('rate_limit', 'provider rate limit hit', status);
-      if (status === 529 || status >= 500 || errType === 'overloaded_error')
-        throw new ProviderError('overloaded', 'provider overloaded or unavailable', status);
-      throw new ProviderError('bad_request', errMessage, status);
-    }
+    throwOnErrorStatus(status, bodyText);
     const parsed = parseBody<AnthropicMessageBody>(bodyText);
     if (!parsed || !Array.isArray(parsed.content))
       throw new ProviderError('malformed', 'provider returned an unreadable response', status);
@@ -166,16 +222,30 @@ export const anthropicAdapter: ProviderAdapter = {
   },
 
   buildKeyTestRequest(apiKey: string): ProviderRequest {
-    return {
-      url: `${ANTHROPIC_HOST}/v1/messages`,
-      method: 'POST',
-      headers: anthropicHeaders(apiKey),
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5',
-        max_tokens: 1,
-        messages: [{ role: 'user', content: 'ping' }],
-      }),
-    };
+    return anthropicMessagesRequest({ model: 'claude-haiku-4-5', max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }, apiKey);
+  },
+
+  buildChatRequest(p: ProviderChatCallParams, apiKey: string): ProviderRequest {
+    const body: Record<string, unknown> = { model: p.model, max_tokens: p.maxTokens, messages: p.messages };
+    if (p.tools && p.tools.length > 0) body.tools = p.tools;
+    return anthropicMessagesRequest(body, apiKey);
+  },
+
+  parseChatResponse(status: number, bodyText: string): ProviderChatResult {
+    throwOnErrorStatus(status, bodyText);
+    const parsed = parseBody<AnthropicMessageBody>(bodyText);
+    if (!parsed || !Array.isArray(parsed.content))
+      throw new ProviderError('malformed', 'provider returned an unreadable response', status);
+    if (parsed.stop_reason === 'refusal')
+      throw new ProviderError('refusal', 'the model declined to answer this request', status);
+    const text = parsed.content
+      .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text as string)
+      .join('');
+    const toolCalls = parsed.content
+      .filter((b) => b?.type === 'tool_use' && typeof b.id === 'string' && typeof b.name === 'string')
+      .map((b) => ({ id: b.id as string, name: b.name as string, input: b.input }));
+    return { text, toolCalls, stopReason: typeof parsed.stop_reason === 'string' ? parsed.stop_reason : null };
   },
 };
 

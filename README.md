@@ -7,7 +7,7 @@
 
 **Your coding agent lives in your terminal. This one lives in your browser.**
 
-nff-brain is a Chrome that allows an agent to live within your browser or VS Code (though use VS Code is mainly for dev testing, use it on Chrome).
+`nff-brain` is a Chrome extension that allows an agent to live within your browser or VS Code (though use VS Code is mainly for dev testing, use it on Chrome).
 
 <p>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
@@ -15,22 +15,14 @@ nff-brain is a Chrome that allows an agent to live within your browser or VS Cod
   <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white">
 </p>
 
-`nff-brain` replaces flat `CLAUDE.md` memory with a knowledge graph that lives on your
-machine as a plain JSON file, grown automatically through two Claude Code hooks.
+What it does : it places a brain context in your browser grown automatically when you use it, and allows you to automate web tasks :
 
-- **Recalled automatically** — a `SessionStart` hook injects the relevant subgraph into
-  every session's context. Pure-local, instant, fail-open.
-- **Distilled automatically** — a `SessionEnd` hook turns what the session learned into
-  new or refined nodes with one small `claude -p` call. Fail-open.
-- **Visual & editable** — a VS Code extension renders the brain as an interactive graph
-  (pannable canvas, memory document beside it) where you can edit, delete, link, and
-  reinforce nodes by hand.
-- **Local only.** The brain is a JSON file (`.nff-brain/brain.json`). Nothing is hosted,
-  nothing leaves your machine, and the VS Code UI is bundled and fully offline.
-- **No API key.** Distillation rides your existing `claude` CLI login — no separate
-  credential to manage.
-- **Cost-aware.** Distillation defaults to the cheapest model that handles the job
-  (`haiku`), overridable per call or globally.
+- **Local only.** The extension runs locally as a chrome process connected with a claude code or your API keys
+- **Web navigation** 
+- **Automate web workflows** 
+- **Connects with other MCP tools**
+
+
 
 ## Install
 

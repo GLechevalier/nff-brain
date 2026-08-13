@@ -1,5 +1,5 @@
 import type React from 'react';
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { ViewEdge, ViewNode } from '../src/protocol';
 import { buildSpine, hash, layoutBrain, resolveRoot, type SpineNode } from './brainSpacing';
 import { usePanZoom, type FitBox } from './usePanZoom';
@@ -91,13 +91,28 @@ interface BrainGraphProps {
   onHover: (id: string | null) => void;
   /** Positions the layout settled for nodes that arrived without one, for persisting. */
   onLayout?: (positions: Array<{ id: string; x: number; y: number }>) => void;
+  /** A node the reader dragged to a new spot, dropped — always overwrites, unlike onLayout. */
+  onMove?: (positions: Array<{ id: string; x: number; y: number }>) => void;
   /** Live zoom level, for the header readout. An imperative handle can't do this — it isn't reactive. */
   onScaleChange?: (scale: number) => void;
   emptyState?: React.ReactNode;
 }
 
 export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function BrainGraph(
-  { nodes, edges, selectedId, hoveredId, matchedIds, glow, onSelect, onHover, onLayout, onScaleChange, emptyState },
+  {
+    nodes,
+    edges,
+    selectedId,
+    hoveredId,
+    matchedIds,
+    glow,
+    onSelect,
+    onHover,
+    onLayout,
+    onMove,
+    onScaleChange,
+    emptyState,
+  },
   ref,
 ) {
   // The root is pinned during spacing so the graph keeps its anchor. Resolved
@@ -237,6 +252,67 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
   // rebuilding the map every render would allocate for nothing.
   const nodeMap = useMemo(() => Object.fromEntries(nodes.map((n) => [n.id, laidOut[n.id]])), [nodes, laidOut]);
 
+  // ── node drag ────────────────────────────────────────────────────────────
+  // A dragged node's live position, overriding nodeMap while the gesture is in
+  // flight. Cleared once `nodes`/`laidOut` catches up to the dropped spot, so
+  // the square doesn't spring back to its pre-drag position while the `move`
+  // message round-trips through the host.
+  const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
+  const dragStartRef = useRef<{ id: string; clientX: number; clientY: number; x0: number; y0: number } | null>(null);
+  const dragMovedRef = useRef(false);
+
+  useEffect(() => {
+    if (!drag) return;
+    const p = nodeMap[drag.id];
+    if (p && Math.abs(p.x - drag.x) < 0.5 && Math.abs(p.y - drag.y) < 0.5) setDrag(null);
+  }, [nodeMap, drag]);
+
+  // Edges/glow must track a node mid-drag too, or its connections visually
+  // detach from it while it's being moved.
+  const posFor = useCallback(
+    (id: string) => (drag?.id === id ? drag : nodeMap[id]),
+    [drag, nodeMap],
+  );
+
+  const startNodeDrag = useCallback(
+    (e: React.PointerEvent, id: string, x0: number, y0: number) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      e.stopPropagation(); // a node drag must never also start a canvas pan
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      dragMovedRef.current = false;
+      dragStartRef.current = { id, clientX: e.clientX, clientY: e.clientY, x0, y0 };
+    },
+    [],
+  );
+
+  const moveNodeDrag = useCallback(
+    (e: React.PointerEvent, id: string) => {
+      const s = dragStartRef.current;
+      if (!s || s.id !== id) return;
+      const dx = (e.clientX - s.clientX) / view.scale;
+      const dy = (e.clientY - s.clientY) / view.scale;
+      if (Math.abs(dx) + Math.abs(dy) > 3) dragMovedRef.current = true;
+      setDrag({ id, x: s.x0 + dx, y: s.y0 + dy });
+    },
+    [view.scale],
+  );
+
+  const endNodeDrag = useCallback(
+    (e: React.PointerEvent, id: string) => {
+      const s = dragStartRef.current;
+      if (!s || s.id !== id) return;
+      dragStartRef.current = null;
+      if (dragMovedRef.current) {
+        const dx = (e.clientX - s.clientX) / view.scale;
+        const dy = (e.clientY - s.clientY) / view.scale;
+        onMove?.([{ id, x: s.x0 + dx, y: s.y0 + dy }]);
+      } else {
+        setDrag(null);
+      }
+    },
+    [view.scale, onMove],
+  );
+
   if (nodes.length === 0 && emptyState) {
     return (
       <div
@@ -351,8 +427,8 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
           );
         })}
         {edges.map((edge, i) => {
-          const from = nodeMap[edge.from];
-          const to = nodeMap[edge.to];
+          const from = posFor(edge.from);
+          const to = posFor(edge.to);
           if (!from || !to) return null;
           const isActive =
             edge.from === selectedId || edge.to === selectedId ||
@@ -391,7 +467,7 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
         {glow &&
           nodes.map((node) => {
             const g = glow.get(node.id);
-            const p = nodeMap[node.id];
+            const p = posFor(node.id);
             if (!g || !p) return null;
             const pad = 6;
             return (
@@ -420,7 +496,8 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
             );
           })}
         {nodes.map((node) => {
-          const p = nodeMap[node.id];
+          const isDragging = drag?.id === node.id;
+          const p = isDragging ? drag : nodeMap[node.id];
           if (!p) return null;
           const isSelected = node.id === selectedId;
           const isHovered = node.id === hoveredId && !isSelected;
@@ -434,10 +511,18 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
             <g
               key={node.id}
               opacity={dimmed ? 0.2 : 1}
-              className={g ? 'nb-drift' : undefined}
-              style={{ cursor: 'pointer', ...(g ? driftVars(node.id, g) : null) }}
-              // Guard against a pan-drag that ends over a node mis-selecting it.
+              className={g && !isDragging ? 'nb-drift' : undefined}
+              style={{ cursor: isDragging ? 'grabbing' : 'grab', ...(g && !isDragging ? driftVars(node.id, g) : null) }}
+              onPointerDown={(e) => startNodeDrag(e, node.id, p.x, p.y)}
+              onPointerMove={(e) => moveNodeDrag(e, node.id)}
+              onPointerUp={(e) => endNodeDrag(e, node.id)}
+              // Guard against a pan-drag (or a node-drag) that ends over a node
+              // mis-selecting it.
               onClick={() => {
+                if (dragMovedRef.current) {
+                  dragMovedRef.current = false; // swallow the click a drag-drop triggers
+                  return;
+                }
                 if (movedRef.current) return;
                 setSpineSel(null); // picking a real node drops the group focus
                 onSelect(node.id);

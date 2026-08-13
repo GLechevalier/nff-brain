@@ -31,6 +31,7 @@ import {
   getMcpServers,
   getMcpTools,
   getNodes,
+  moveGraphNode,
   rejectAgentPlan,
   removeMcpServer,
   retract,
@@ -46,10 +47,13 @@ import { derivePhase } from './health.js';
 import { ensureRecorderScripts, onRecorderEvent, recorderPublicState, setRecorderEnabled } from './recorder.js';
 import {
   AGENT_POLL_ALARM,
+  agentActionAllowPublicState,
   agentAdapterPublicState,
   clearAgentPollAlarm,
   ensureAgentScripts,
   pollAgent,
+  runAdapterNavigate,
+  setAgentActionAllowed,
   setAgentAdapterEnabled,
 } from './agentRunner.js';
 import {
@@ -100,6 +104,7 @@ async function publicState(): Promise<PublicState> {
     removableNodeCount: removableNodeCount(activity),
     recorders: await recorderPublicState(),
     agentAdapters: await agentAdapterPublicState(),
+    agentActionAllow: await agentActionAllowPublicState(),
     providerConfigured: provider !== null,
     provider: provider?.provider ?? null,
     providerModels: provider?.models ?? null,
@@ -185,6 +190,13 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       return { type: 'graph', nodes: graphNodes, edges };
     }
 
+    case 'moveGraphNode': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      const { moved } = await moveGraphNode(pairing.port, pairing.token, msg.id, msg.x, msg.y);
+      return { type: 'layout', moved };
+    }
+
     case 'searchBrain': {
       const pairing = await getPairing();
       if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
@@ -203,6 +215,22 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     // round trip just to see what it just did.
     case 'setAgentAdapterEnabled': {
       const error = await setAgentAdapterEnabled(msg.id, msg.enabled);
+      if (error) return { type: 'error', message: error };
+      break;
+    }
+
+    // Manual-mode chat's action-intent permission prompt — independent of the
+    // adapter enable/disable above (see agentRunner.ts's runAdapterNavigate
+    // comment). Both fall through to the default state reply, which is where
+    // the fresh agentActionAllow list rides back to the panel.
+    case 'setAgentActionAllowed': {
+      const error = await setAgentActionAllowed(msg.adapterId, msg.allowed);
+      if (error) return { type: 'error', message: error };
+      break;
+    }
+
+    case 'runAdapterNavigate': {
+      const error = await runAdapterNavigate(msg.adapterId, msg.tabId);
       if (error) return { type: 'error', message: error };
       break;
     }

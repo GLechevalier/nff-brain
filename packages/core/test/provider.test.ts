@@ -121,6 +121,89 @@ describe('anthropic adapter — parseResponse', () => {
   });
 });
 
+describe('anthropic adapter — buildChatRequest', () => {
+  it('carries a full message array and omits tools when none are given', () => {
+    const messages = [{ role: 'user' as const, content: 'hi' }];
+    const req = anthropicAdapter.buildChatRequest!({ messages, model: 'claude-sonnet-5', maxTokens: 4096 }, 'sk-ant-test-key');
+    const body = JSON.parse(req.body) as Record<string, unknown>;
+    expect(body).toEqual({ model: 'claude-sonnet-5', max_tokens: 4096, messages });
+    expect(req.url).toBe('https://api.anthropic.com/v1/messages');
+    expect(req.body).not.toContain('sk-ant');
+  });
+
+  it('serializes the tools array when provided', () => {
+    const tools = [{ name: 'navigate', description: 'open a page', input_schema: { type: 'object' } }];
+    const req = anthropicAdapter.buildChatRequest!(
+      { messages: [{ role: 'user', content: 'hi' }], model: 'claude-sonnet-5', maxTokens: 4096, tools },
+      'k',
+    );
+    const body = JSON.parse(req.body) as Record<string, unknown>;
+    expect(body.tools).toEqual(tools);
+  });
+
+  it('passes tool_use/tool_result content blocks through untouched', () => {
+    const messages = [
+      { role: 'user' as const, content: 'open developer.chrome.com' },
+      {
+        role: 'assistant' as const,
+        content: [{ type: 'tool_use' as const, id: 't1', name: 'navigate', input: { url: 'https://developer.chrome.com' } }],
+      },
+      { role: 'user' as const, content: [{ type: 'tool_result' as const, tool_use_id: 't1', content: 'opened' }] },
+    ];
+    const req = anthropicAdapter.buildChatRequest!({ messages, model: 'claude-sonnet-5', maxTokens: 4096 }, 'k');
+    const body = JSON.parse(req.body) as Record<string, unknown>;
+    expect(body.messages).toEqual(messages);
+  });
+});
+
+describe('anthropic adapter — parseChatResponse', () => {
+  it('parses a plain text-only response the same as parseResponse (regression)', () => {
+    const body = JSON.stringify({ content: [{ type: 'text', text: 'hello' }], stop_reason: 'end_turn' });
+    expect(anthropicAdapter.parseChatResponse!(200, body)).toEqual({ text: 'hello', toolCalls: [], stopReason: 'end_turn' });
+  });
+
+  it('does NOT throw on empty text for a pure tool_use turn', () => {
+    const body = JSON.stringify({
+      content: [{ type: 'tool_use', id: 't1', name: 'navigate', input: { url: 'https://developer.chrome.com' } }],
+      stop_reason: 'tool_use',
+    });
+    expect(anthropicAdapter.parseChatResponse!(200, body)).toEqual({
+      text: '',
+      toolCalls: [{ id: 't1', name: 'navigate', input: { url: 'https://developer.chrome.com' } }],
+      stopReason: 'tool_use',
+    });
+  });
+
+  it('parses a mixed text + tool_use response', () => {
+    const body = JSON.stringify({
+      content: [
+        { type: 'text', text: 'sure, opening it' },
+        { type: 'tool_use', id: 't1', name: 'navigate', input: { url: 'https://developer.chrome.com' } },
+      ],
+      stop_reason: 'tool_use',
+    });
+    const result = anthropicAdapter.parseChatResponse!(200, body);
+    expect(result.text).toBe('sure, opening it');
+    expect(result.toolCalls).toEqual([{ id: 't1', name: 'navigate', input: { url: 'https://developer.chrome.com' } }]);
+  });
+
+  it('maps error statuses identically to parseResponse', () => {
+    const err = JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'boom' } });
+    try {
+      anthropicAdapter.parseChatResponse!(401, err);
+      throw new Error('unreachable');
+    } catch (e) {
+      expect((e as ProviderError).kind).toBe('auth');
+    }
+  });
+
+  it('still throws refusal and malformed the same way', () => {
+    const refusal = JSON.stringify({ content: [{ type: 'text', text: '' }], stop_reason: 'refusal' });
+    expect(() => anthropicAdapter.parseChatResponse!(200, refusal)).toThrow();
+    expect(() => anthropicAdapter.parseChatResponse!(200, 'not json')).toThrow();
+  });
+});
+
 describe('anthropic adapter — key test request', () => {
   it('is the cheapest authenticated round trip: haiku, max_tokens 1', () => {
     const req = anthropicAdapter.buildKeyTestRequest('k');

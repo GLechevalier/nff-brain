@@ -220,6 +220,17 @@ export function isGraphResponse(v: unknown): v is GraphResponse {
   );
 }
 
+/** A node the reader dragged and dropped in the Graph tab, sent to persist. */
+export interface LayoutResponse {
+  ok: true;
+  /** false only when the id no longer exists (deleted between render and drop). */
+  moved: boolean;
+}
+
+export function isLayoutResponse(v: unknown): v is LayoutResponse {
+  return isObj(v) && v.ok === true && typeof v.moved === 'boolean';
+}
+
 export function isClipsMapResponse(v: unknown): v is ClipsMapResponse {
   return (
     isObj(v) &&
@@ -508,6 +519,8 @@ export type PopupToSw =
   | { type: 'getNodes'; limit?: number }
   | { type: 'searchBrain'; q: string; limit?: number }
   | { type: 'getGraph' }
+  // A node the reader dragged and dropped on the Graph tab canvas.
+  | { type: 'moveGraphNode'; id: string; x: number; y: number }
   // Recorders. The popup runs chrome.permissions.request itself (a user
   // gesture is required there); this message only flips state + registration.
   | { type: 'setRecorderEnabled'; id: string; enabled: boolean }
@@ -517,6 +530,14 @@ export type PopupToSw =
   // (popup or panel — a user gesture is required there); this message only
   // flips state + registration, same split as recorders.
   | { type: 'setAgentAdapterEnabled'; id: string; enabled: boolean }
+  // Manual-mode chat's action-intent permission prompt (item 7 sibling, NOT
+  // the goal/plan pipeline below): "never ask again" for one adapter, and
+  // actually opening a tab to it once permission is granted (once or always).
+  | { type: 'setAgentActionAllowed'; adapterId: string; allowed: boolean }
+  // tabId is the DevTools-inspected tab (panel.ts's chrome.devtools.inspectedWindow.tabId)
+  // so "Yes"/"Never ask again" navigates that tab in place — a new tab would leave the
+  // F12 panel attached to the wrong (now-irrelevant) page.
+  | { type: 'runAdapterNavigate'; adapterId: string; tabId: number }
   | { type: 'agentSubmitGoal'; goal: string; maxActions: number; listTarget: WebAgentListTarget | null; autoApprove: boolean }
   | { type: 'agentApprovePlan'; runId: string }
   | { type: 'agentRejectPlan'; runId: string }
@@ -525,7 +546,9 @@ export type PopupToSw =
   // Manual-mode chat — the one route that costs a token per message,
   // deliberately opt-in (Manual is a mode the user picks, not the default
   // reply path for every prompt).
-  | { type: 'chatAsk'; message: string; history: ChatTurn[] }
+  // tabId: same DevTools-inspected-tab reasoning as runAdapterNavigate above —
+  // the navigate tool (standalone.ts) needs it to stay on the same tab too.
+  | { type: 'chatAsk'; message: string; history: ChatTurn[]; tabId: number }
   // MCP tab: read-only listing already existed (getMcpServers/getMcpTools);
   // these two are the new browser-mutable surface — enable/disable/remove an
   // ALREADY-registered server. Registering a NEW one stays CLI-only.
@@ -579,6 +602,8 @@ export interface PublicState {
   removableNodeCount: number;
   recorders: RecorderRow[];
   agentAdapters: AgentAdapterRow[];
+  /** Adapter ids Manual-mode chat may act on without asking — "never ask again". */
+  agentActionAllow: string[];
   // BYOK provider (standalone mode). ZERO key material crosses this channel —
   // not even a last-4 hint; same total-omission posture as the bearer token.
   providerConfigured: boolean;
@@ -597,6 +622,7 @@ export type SwToPopup =
   | { type: 'nodes'; data: NodesResponse }
   | { type: 'search'; data: SearchResponse }
   | { type: 'graph'; nodes: GraphNode[]; edges: GraphEdge[] }
+  | { type: 'layout'; moved: boolean }
   | { type: 'agentStatus'; run: WebAgentRun | null }
   | { type: 'chatAnswer'; answer: string; sources: ChatSource[] }
   | { type: 'mcpServers'; servers: McpServerSummary[] }
