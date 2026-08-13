@@ -2,7 +2,14 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    // Resolve @nff-brain/core to its TypeScript SOURCE, not its published dist.
+    // core's exports map gates src behind this custom condition (deliberately
+    // not "development", which Vite injects on its own — an external consumer
+    // must never resolve into src, which the tarball does not ship). Without it
+    // typecheck would require `npm run build -w @nff-brain/core` first, and a
+    // stale dist could silently type-check green.
+    "customConditions": ["nff-brain-source"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "tsup.config.ts"]
 }

@@ -291,8 +291,14 @@ async function resolvePermission(requestId: string, decision: 'yes' | 'no' | 'al
   paintTranscript();
 
   if (decision === 'no') return;
-  if (decision === 'always') await send({ type: 'setAgentActionAllowed', adapterId: entry.adapterId, allowed: true });
-  await send({ type: 'runAdapterNavigate', adapterId: entry.adapterId, tabId: chrome.devtools.inspectedWindow.tabId });
+  const tabId = chrome.devtools.inspectedWindow.tabId;
+  if (entry.target.kind === 'adapter') {
+    if (decision === 'always') await send({ type: 'setAgentActionAllowed', adapterId: entry.target.adapterId, allowed: true });
+    await send({ type: 'runAdapterNavigate', adapterId: entry.target.adapterId, tabId });
+  } else {
+    if (decision === 'always') await send({ type: 'setNavigateHostAllowed', host: entry.target.host, allowed: true });
+    await send({ type: 'runNavigateHost', url: entry.url, tabId });
+  }
 }
 
 // ── submitting the prompt — branches on mode ─────────────────────────────────
@@ -330,15 +336,24 @@ async function submitChat(message: string): Promise<void> {
  * Plan both still ask: Plan's entire premise is "show me before it runs".
  */
 async function submitActionIntent(intent: ActionIntent): Promise<void> {
+  const target: Extract<TranscriptEntry, { kind: 'permission' }>['target'] =
+    intent.kind === 'adapter' ? { kind: 'adapter', adapterId: intent.adapterId } : { kind: 'host', host: intent.host };
+
   const stateReply = await send({ type: 'getState' });
-  const alwaysAllowed = stateReply.type === 'state' && stateReply.state.agentActionAllow.includes(intent.adapterId);
+  const alwaysAllowed =
+    stateReply.type === 'state' &&
+    (target.kind === 'adapter'
+      ? stateReply.state.agentActionAllow.includes(target.adapterId)
+      : stateReply.state.navigateHostAllow.includes(target.host));
 
   if (alwaysAllowed || mode === 'auto') {
-    await send({ type: 'runAdapterNavigate', adapterId: intent.adapterId, tabId: chrome.devtools.inspectedWindow.tabId });
+    const tabId = chrome.devtools.inspectedWindow.tabId;
+    if (target.kind === 'adapter') await send({ type: 'runAdapterNavigate', adapterId: target.adapterId, tabId });
+    else await send({ type: 'runNavigateHost', url: intent.url, tabId });
     transcript.push({
       kind: 'permission',
       requestId: crypto.randomUUID(),
-      adapterId: intent.adapterId,
+      target,
       label: intent.label,
       url: intent.url,
       decision: alwaysAllowed ? 'always' : 'yes',
@@ -347,7 +362,7 @@ async function submitActionIntent(intent: ActionIntent): Promise<void> {
     return;
   }
 
-  transcript.push({ kind: 'permission', requestId: crypto.randomUUID(), adapterId: intent.adapterId, label: intent.label, url: intent.url });
+  transcript.push({ kind: 'permission', requestId: crypto.randomUUID(), target, label: intent.label, url: intent.url });
   paintTranscript();
 }
 

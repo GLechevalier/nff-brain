@@ -9,7 +9,9 @@
     // service worker only needs chrome.*, fetch, AbortSignal and
     // crypto.randomUUID — all present in DOM + ES2022.
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["chrome", "node"]
+    "types": ["chrome", "node"],
+    // See packages/cli/tsconfig.json — resolve core to src, never to dist.
+    "customConditions": ["nff-brain-source"]
   },
   "include": [
     "src/**/*.ts",

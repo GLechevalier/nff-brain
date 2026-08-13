@@ -33,8 +33,10 @@ jobs:
           node-version: 20
       - run: npm ci
       - run: npm run build
-      - name: Pack npm tarball
-        run: npm pack -w nff-brain
+      - name: Pack npm tarballs
+        # Pack core too: it is a published library with external consumers, so a
+        # broken `files`/`exports`/emit should fail here rather than at release.
+        run: npm pack -w nff-brain -w @nff-brain/core
       - name: Package VS Code extension
         run: npx --yes @vscode/vsce package --no-dependencies
         working-directory: packages/vscode
@@ -49,5 +51,6 @@ jobs:
           name: nff-brain-artifacts
           path: |
             nff-brain-*.tgz
+            nff-brain-core-*.tgz
             packages/vscode/*.vsix
             packages/chrome/*.zip

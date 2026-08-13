@@ -6,7 +6,9 @@
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["node"]
+    "types": ["node"],
+    // See packages/cli/tsconfig.json — resolve core to src, never to dist.
+    "customConditions": ["nff-brain-source"]
   },
   "include": ["src/**/*.ts", "webview/**/*.ts", "webview/**/*.tsx", "build.mjs"]
 }

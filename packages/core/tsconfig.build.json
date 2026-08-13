@@ -1,0 +1,23 @@
+// Emit config for the PUBLISHED @nff-brain/core tarball.
+//
+// packages/core/tsconfig.json is typecheck-only (noEmit, and it also pulls in
+// test/**), and tsconfig.base.json turns declarations off for the whole repo —
+// nothing here ever emitted anything before this package became publishable.
+// So both have to be overridden, and the file set narrowed to src/.
+//
+// tsc rather than a bundler: core's sources already use NodeNext-style
+// `.js`-suffixed relative imports, so tsc emits a clean 1:1 dist tree plus the
+// .d.ts files external consumers need. Bundling 15 subpath entries against each
+// other would only invent shared chunks for no gain.
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

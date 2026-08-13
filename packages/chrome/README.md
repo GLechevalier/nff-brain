@@ -51,7 +51,8 @@ published `key` to `manifest.json` so unpacked and store builds share one id.
 | `src/recorderRegistry.ts` / `recorderTypes.ts` / `recorderFormat.ts` | adapter metadata, wire validation, event formatting; all pure |
 | `src/agentGate.ts` | **the agent's own choke point** (item 7) — pure, zero imports, a separate question from `shouldCapture()`: is DOM automation allowed here right now |
 | `src/agentRegistry.ts` / `agentTypes.ts` | web-agent adapter metadata — mirrors the recorder registry, but a distinct opt-in |
-| `src/agentRunner.ts` | SW side of the web agent: adapter enable/disable, the alarm-redriven poll loop, tab driving, dispatch to the LinkedIn content script |
+| `src/agentRunner.ts` | SW side of the web agent: adapter enable/disable, the alarm-redriven poll loop, tab driving, dispatch to the LinkedIn content script; also the permission-prompt handlers for "navigate to X" (see `docs/navigate.md`) |
+| `src/actionIntent.ts` / `src/navigateTool.ts` | "navigate to X" — the action-intent detector and the same-tab navigate primitive; see `docs/navigate.md` |
 | `src/sw.ts` | listener registration only — read its header before editing |
 | `popup/` | static skeleton + `paint(state)`; plain DOM, no framework |
 | `devtools/` | the Brain panel (F12 → Brain), two tabs: **Brain** — one chat transcript with a Manual/Plan/Auto mode switch (Manual = LLM-synthesized chat over retrieved nodes; Plan/Auto = the item-7 web agent, with/without a review step) — and **MCP** — list/test/enable/disable/remove registered MCP servers, browser-mutable but never able to register a new one with a secret. Both tabs go through the worker, token never in the panel |

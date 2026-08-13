@@ -83,7 +83,18 @@ export type TranscriptEntry =
   // Manual-mode chat's action-intent permission prompt. Unresolved (no
   // `decision`) shows Yes/No/Never-ask buttons; resolved shows a status line
   // instead — same "mutate this entry in place" discipline as plan → run.
-  | { kind: 'permission'; requestId: string; adapterId: string; label: string; url: string; decision?: 'yes' | 'no' | 'always' };
+  // target distinguishes a registered adapter (real DOM automation may sit
+  // behind it) from a generic host guess (actionIntent.ts's fallback) — the
+  // rendering below is target-agnostic (URL/label only); only panel.ts's
+  // resolution logic needs to branch on it.
+  | {
+      kind: 'permission';
+      requestId: string;
+      target: { kind: 'adapter'; adapterId: string } | { kind: 'host'; host: string };
+      label: string;
+      url: string;
+      decision?: 'yes' | 'no' | 'always';
+    };
 
 export interface TranscriptHandlers {
   onApprovePlan: (runId: string) => void;

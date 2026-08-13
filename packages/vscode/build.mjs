@@ -10,6 +10,12 @@ const watch = process.argv.includes('--watch');
 // braces, and e2e.test.ts asserts the built artifacts stay clean.
 const SEMANTIC_RUNTIME = ['@huggingface/transformers'];
 
+// Resolve @nff-brain/core to its TypeScript sources rather than its published
+// dist/ — core's exports map gates src behind this condition. Both bundles must
+// set it: the webview imports browser-safe core subpaths, and inlining a stale
+// dist there is exactly the kind of drift webviewImports.test.ts exists to stop.
+const CORE_SOURCE = ['nff-brain-source'];
+
 // Extension host bundle (CJS, vscode external, core inlined).
 const extensionCtx = await esbuild.context({
   entryPoints: ['src/extension.ts'],
@@ -19,6 +25,7 @@ const extensionCtx = await esbuild.context({
   format: 'cjs',
   outfile: 'dist/extension.js',
   external: ['vscode', ...SEMANTIC_RUNTIME],
+  conditions: CORE_SOURCE,
   sourcemap: false,
   minify: !watch,
 });
@@ -33,6 +40,7 @@ const webviewCtx = await esbuild.context({
   format: 'iife',
   outfile: 'dist/webview.js',
   external: SEMANTIC_RUNTIME,
+  conditions: CORE_SOURCE,
   sourcemap: false,
   minify: !watch,
   define: { 'process.env.NODE_ENV': '"production"' },

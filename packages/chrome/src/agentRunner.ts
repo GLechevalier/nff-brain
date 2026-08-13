@@ -16,12 +16,15 @@ import {
   getAgentAdapters,
   getAgentTab,
   getAllowlist,
+  getNavigateHostAllow,
   getPairing,
   setAgentActionAllow,
   setAgentAdapters,
   setAgentTab,
   setAllowlist,
+  setNavigateHostAllow,
 } from './storage.js';
+import { executeNavigate } from './navigateTool.js';
 import type { AgentAdapter } from './agentTypes.js';
 import type { ContentToAgentReply, NextAction, SwToContent } from './protocol.js';
 
@@ -141,6 +144,29 @@ export async function runAdapterNavigate(adapterId: string, tabId: number): Prom
     await chrome.tabs.create({ url, active: true });
   }
   return null;
+}
+
+// ── the same permission prompt, generalized to any site (actionIntent.ts's
+// 'kind: host' match) — host-keyed rather than adapter-keyed, since these
+// sites have no registered adapter (no DOM automation, just a plain tab). ──
+
+export async function navigateHostAllowPublicState(): Promise<string[]> {
+  const state = await getNavigateHostAllow();
+  return Object.entries(state.byHost)
+    .filter(([, v]) => v.allowed)
+    .map(([host]) => host);
+}
+
+export async function setNavigateHostAllowed(host: string, allowed: boolean): Promise<void> {
+  const state = await getNavigateHostAllow();
+  state.byHost[host] = { allowed, changedAt: new Date().toISOString() };
+  await setNavigateHostAllow(state);
+}
+
+/** Same same-tab-first, new-tab-fallback behavior as runAdapterNavigate — reuses navigateTool's executeNavigate directly. */
+export async function runNavigateHost(url: string, tabId: number): Promise<string | null> {
+  const result = await executeNavigate({ url }, tabId);
+  return result.ok ? null : result.resultText;
 }
 
 // ── the poll loop ─────────────────────────────────────────────────────────────

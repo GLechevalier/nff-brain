@@ -51,10 +51,13 @@ import {
   agentAdapterPublicState,
   clearAgentPollAlarm,
   ensureAgentScripts,
+  navigateHostAllowPublicState,
   pollAgent,
   runAdapterNavigate,
+  runNavigateHost,
   setAgentActionAllowed,
   setAgentAdapterEnabled,
+  setNavigateHostAllowed,
 } from './agentRunner.js';
 import {
   getActivity,
@@ -105,6 +108,7 @@ async function publicState(): Promise<PublicState> {
     recorders: await recorderPublicState(),
     agentAdapters: await agentAdapterPublicState(),
     agentActionAllow: await agentActionAllowPublicState(),
+    navigateHostAllow: await navigateHostAllowPublicState(),
     providerConfigured: provider !== null,
     provider: provider?.provider ?? null,
     providerModels: provider?.models ?? null,
@@ -231,6 +235,16 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'runAdapterNavigate': {
       const error = await runAdapterNavigate(msg.adapterId, msg.tabId);
+      if (error) return { type: 'error', message: error };
+      break;
+    }
+
+    case 'setNavigateHostAllowed':
+      await setNavigateHostAllowed(msg.host, msg.allowed);
+      break;
+
+    case 'runNavigateHost': {
+      const error = await runNavigateHost(msg.url, msg.tabId);
       if (error) return { type: 'error', message: error };
       break;
     }

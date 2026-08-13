@@ -352,7 +352,7 @@ Semantic search (optional — see §11). None of these affect the hooks.
 
 ```sh
 npm ci
-npm run build     # CLI (tsup) + VS Code extension (esbuild)
+npm run build     # core (tsc) + CLI (tsup) + VS Code + Chrome (esbuild)
 npx vitest run    # unit + e2e (e2e runs the BUILT CLI against a mocked claude)
 ```
 
@@ -361,6 +361,31 @@ ingestGraphify, hooksConfig — all shared logic, dependency-light),
 `packages/cli` (the `nff-brain` bin; hand-rolled flag parser in `util.ts` —
 **new value-taking flags must be added to `VALUE_FLAGS`**), `packages/vscode`
 (extension + webview; `F5` launches the Extension Development Host).
+
+### `@nff-brain/core` is a published library
+
+`packages/core` is not only an internal workspace — it ships to npm as
+`@nff-brain/core`, because `nff-admin`, `nff-dashboard` and `nff-agent-worker`
+import its graph types and layout instead of keeping their own forks of them.
+That gives it two audiences and one rule:
+
+- **Externally** it resolves to `dist/` — plain ESM plus `.d.ts`, emitted by
+  `tsc -p packages/core/tsconfig.build.json`. `files` ships `dist` only.
+- **In this repo** it resolves to `src/` — every subpath in core's `exports` map
+  has an `nff-brain-source` condition, and the CLI's tsup config, both esbuild
+  `build.mjs` files, the three `tsconfig.json`s (`customConditions`) and
+  `vitest.config.ts` all set it. So in-repo builds keep inlining core's
+  TypeScript exactly as they did before it was publishable, and a stale or
+  missing `dist/` can never silently ship into the CLI, the vsix or the zip.
+
+⚠ The condition is deliberately **not** called `development`: Vite injects that
+one on its own in dev mode, which would make a downstream consumer try to
+resolve into a `src/` the tarball does not contain.
+
+⚠ Adding a core module that consumers need means adding a **new subpath** to
+core's `exports` with all three conditions. Browser consumers must import a
+subpath, never the barrel (`.`) — the barrel pulls `node:fs`. This is the same
+rule `packages/core/test/webviewImports.test.ts` enforces for the webview.
 
 The e2e suite fakes claude with `packages/cli/test/fixtures/claude-shim.mjs`,
 which branches on marker phrases in the prompt (`memory architect` = init,

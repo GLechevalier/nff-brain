@@ -538,6 +538,11 @@ export type PopupToSw =
   // so "Yes"/"Never ask again" navigates that tab in place — a new tab would leave the
   // F12 panel attached to the wrong (now-irrelevant) page.
   | { type: 'runAdapterNavigate'; adapterId: string; tabId: number }
+  // The same prompt, generalized to a site with no registered adapter —
+  // actionIntent.ts's 'kind: host' match. Host-keyed "never ask again", and
+  // a direct same-tab navigate with no adapter lookup involved.
+  | { type: 'setNavigateHostAllowed'; host: string; allowed: boolean }
+  | { type: 'runNavigateHost'; url: string; tabId: number }
   | { type: 'agentSubmitGoal'; goal: string; maxActions: number; listTarget: WebAgentListTarget | null; autoApprove: boolean }
   | { type: 'agentApprovePlan'; runId: string }
   | { type: 'agentRejectPlan'; runId: string }
@@ -604,6 +609,8 @@ export interface PublicState {
   agentAdapters: AgentAdapterRow[];
   /** Adapter ids Manual-mode chat may act on without asking — "never ask again". */
   agentActionAllow: string[];
+  /** Same "never ask again", but for generic navigate hosts with no registered adapter. */
+  navigateHostAllow: string[];
   // BYOK provider (standalone mode). ZERO key material crosses this channel —
   // not even a last-4 hint; same total-omission posture as the bearer token.
   providerConfigured: boolean;

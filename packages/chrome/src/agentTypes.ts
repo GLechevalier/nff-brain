@@ -34,6 +34,15 @@ export interface AgentActionAllowState {
 }
 
 /**
+ * Host-keyed twin of AgentActionAllowState, for navigate targets with no
+ * registered adapter (actionIntent.ts's generic "kind: 'host'" match — any
+ * site, not just the ones with real DOM-automation behind them).
+ */
+export interface NavigateHostAllowState {
+  byHost: Record<string, { allowed: boolean; changedAt: string }>;
+}
+
+/**
  * The tab the SW is currently driving for the active run. Storage, never a
  * module variable — the poll loop resumes across worker deaths via
  * chrome.alarms, and it needs to find the SAME tab it was using, not open a

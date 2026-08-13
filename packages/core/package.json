@@ -1,25 +1,106 @@
 {
   "name": "@nff-brain/core",
-  "private": true,
   "version": "0.1.0",
+  "description": "Knowledge-graph memory primitives — graph types, deterministic layout, lexical scoring.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GLechevalier/nff-brain.git",
+    "directory": "packages/core"
+  },
+  "keywords": [
+    "knowledge-graph",
+    "memory",
+    "graph-layout",
+    "agent"
+  ],
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build"
+  },
   "exports": {
-    ".": "./src/index.ts",
-    "./score": "./src/score.ts",
-    "./vector": "./src/vector.ts",
-    "./rank": "./src/rank.ts",
-    "./activity": "./src/activity.ts",
-    "./layout": "./src/layout.ts",
-    "./spine": "./src/spine.ts",
-    "./types": "./src/types.ts",
-    "./brainGraph": "./src/brainGraph.ts",
-    "./clip": "./src/clip.ts",
-    "./clipDistill": "./src/clipDistill.ts",
-    "./clipApply": "./src/clipApply.ts",
-    "./chatPrompt": "./src/chatPrompt.ts",
-    "./jsonExtract": "./src/jsonExtract.ts",
-    "./provider": "./src/provider.ts"
+    ".": {
+      "nff-brain-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./score": {
+      "nff-brain-source": "./src/score.ts",
+      "types": "./dist/score.d.ts",
+      "default": "./dist/score.js"
+    },
+    "./vector": {
+      "nff-brain-source": "./src/vector.ts",
+      "types": "./dist/vector.d.ts",
+      "default": "./dist/vector.js"
+    },
+    "./rank": {
+      "nff-brain-source": "./src/rank.ts",
+      "types": "./dist/rank.d.ts",
+      "default": "./dist/rank.js"
+    },
+    "./activity": {
+      "nff-brain-source": "./src/activity.ts",
+      "types": "./dist/activity.d.ts",
+      "default": "./dist/activity.js"
+    },
+    "./layout": {
+      "nff-brain-source": "./src/layout.ts",
+      "types": "./dist/layout.d.ts",
+      "default": "./dist/layout.js"
+    },
+    "./spine": {
+      "nff-brain-source": "./src/spine.ts",
+      "types": "./dist/spine.d.ts",
+      "default": "./dist/spine.js"
+    },
+    "./types": {
+      "nff-brain-source": "./src/types.ts",
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
+    },
+    "./brainGraph": {
+      "nff-brain-source": "./src/brainGraph.ts",
+      "types": "./dist/brainGraph.d.ts",
+      "default": "./dist/brainGraph.js"
+    },
+    "./clip": {
+      "nff-brain-source": "./src/clip.ts",
+      "types": "./dist/clip.d.ts",
+      "default": "./dist/clip.js"
+    },
+    "./clipDistill": {
+      "nff-brain-source": "./src/clipDistill.ts",
+      "types": "./dist/clipDistill.d.ts",
+      "default": "./dist/clipDistill.js"
+    },
+    "./clipApply": {
+      "nff-brain-source": "./src/clipApply.ts",
+      "types": "./dist/clipApply.d.ts",
+      "default": "./dist/clipApply.js"
+    },
+    "./chatPrompt": {
+      "nff-brain-source": "./src/chatPrompt.ts",
+      "types": "./dist/chatPrompt.d.ts",
+      "default": "./dist/chatPrompt.js"
+    },
+    "./jsonExtract": {
+      "nff-brain-source": "./src/jsonExtract.ts",
+      "types": "./dist/jsonExtract.d.ts",
+      "default": "./dist/jsonExtract.js"
+    },
+    "./provider": {
+      "nff-brain-source": "./src/provider.ts",
+      "types": "./dist/provider.d.ts",
+      "default": "./dist/provider.js"
+    }
   }
 }

@@ -14,7 +14,7 @@ import type { OneShot } from './claude.js';
 import { extractJson } from './jsonExtract.js';
 import { NFF_PROMPT_MARKERS } from './promptMarkers.js';
 import { trigramSim } from './score.js';
-import type { BrainFile, BrainNode } from './types.js';
+import { isSkillNode, type BrainFile, type BrainNode } from './types.js';
 
 interface RawMerge {
   merge?: unknown;
@@ -37,6 +37,14 @@ export function chooseSurvivor(
   // (or out of) one would be silently lost, so they never take part in merges.
   // Clip nodes must contain ONLY clip content: /v1/retract deletes by origin,
   // so folding agent knowledge into one would make retraction destroy it.
+  // Skill-tree nodes are one step of a procedure whose text is a prompt
+  // fragment; merging rewrites title and content (see mergeNodes below) and
+  // would silently corrupt the step. The seed check further down does NOT cover
+  // this: a skill node is origin 'seed', and a seed/agent pair takes the
+  // `if (aSeed) return [a, b]` branch, folding the agent node INTO the skill.
+  // Sibling alternatives are also exactly what the trigram shortlist flags,
+  // since they describe the same sub-problem in similar words.
+  if (isSkillNode(a) || isSkillNode(b)) return null;
   if (a.origin === 'graphify' || b.origin === 'graphify') return null;
   if (a.origin === 'clip' || b.origin === 'clip') return null;
   const aSeed = a.origin === 'seed';
@@ -207,9 +215,16 @@ export function foldLeastUsed(brain: BrainFile, fraction = 0.25, now = new Date(
   for (const victim of victims) {
     // graphify nodes may not absorb folded content either — it would vanish on
     // re-ingest. Clip nodes may not absorb either: retraction deletes them by
-    // origin, taking anything folded in with them.
+    // origin, taking anything folded in with them. Skill-tree steps may not
+    // absorb: mergeNodes appends the victim's text and clips at 1200, which
+    // would corrupt a step's prompt fragment (and silently truncate it).
     const keepers = brain.nodes.filter(
-      (n) => n.id !== victim.id && !victimIds.has(n.id) && n.origin !== 'graphify' && n.origin !== 'clip',
+      (n) =>
+        n.id !== victim.id &&
+        !victimIds.has(n.id) &&
+        n.origin !== 'graphify' &&
+        n.origin !== 'clip' &&
+        !isSkillNode(n),
     );
     if (keepers.length === 0) break;
 

@@ -15,4 +15,11 @@ export default defineConfig({
   external: ['@huggingface/transformers'],
   clean: true,
   banner: { js: '#!/usr/bin/env node' },
+  // Resolve @nff-brain/core through its `nff-brain-source` export condition, so
+  // the bundle keeps inlining core's TypeScript sources exactly as it did before
+  // core became publishable. Without this, tsup would pick up core's `default`
+  // condition (dist/) and a stale or missing build would silently ship.
+  esbuildOptions(options) {
+    options.conditions = ['nff-brain-source', ...(options.conditions ?? [])];
+  },
 });

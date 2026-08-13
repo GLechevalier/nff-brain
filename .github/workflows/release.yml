@@ -21,10 +21,23 @@ jobs:
       - run: npm run build
       - run: npx vitest run
 
-      - name: Check tag matches package version
+      - name: Check tag matches package versions
+        # Both published packages ship under one tag, so both must agree with it.
+        # @nff-brain/core drifting behind would publish a library that does not
+        # match the CLI it was cut from.
         run: |
-          V=$(node -p "require('./packages/cli/package.json').version")
-          [ "v$V" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != package v$V"; exit 1; }
+          CLI=$(node -p "require('./packages/cli/package.json').version")
+          CORE=$(node -p "require('./packages/core/package.json').version")
+          [ "v$CLI" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != nff-brain v$CLI"; exit 1; }
+          [ "v$CORE" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != @nff-brain/core v$CORE"; exit 1; }
+
+      # core first: consumers (nff-admin, nff-dashboard, nff-agent-worker) depend
+      # on it. The CLI does not — tsup inlines core's sources into its bundle —
+      # so this order matters for consumers, not for the CLI tarball.
+      - name: Publish core library to npm
+        run: npm publish -w @nff-brain/core --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish CLI to npm
         run: npm publish -w nff-brain --access public

@@ -38,6 +38,11 @@ const common = {
   // no ESM output. esbuild emits one self-contained IIFE with no runtime
   // imports, so module semantics would buy nothing.
   format: 'iife',
+  // Resolve @nff-brain/core to its TypeScript sources rather than its published
+  // dist/ — core's exports map gates src behind this condition. bundlePurity's
+  // core-subpath allowlist reasons about source imports, so the bundles must
+  // keep seeing source.
+  conditions: ['nff-brain-source'],
   sourcemap: false,
   minify: !watch,
 };
