@@ -92,6 +92,55 @@ async function resolveCurrentHost(): Promise<void> {
   }
 }
 
+// ── record-and-automate ──────────────────────────────────────────────────────
+
+function paintTrace(recording: boolean, eventCount: number, pending: { events: number; startUrl: string } | null): void {
+  const btn = $('trace-toggle') as HTMLButtonElement;
+  btn.textContent = recording ? 'Stop recording' : 'Record this tab';
+  btn.classList.toggle('primary', recording);
+  $('trace-count').textContent = recording ? `${eventCount} events` : '';
+  const pend = $('trace-pending');
+  if (pending && !recording) {
+    pend.textContent = `Last recording: ${pending.events} events — distilling into a workflow.`;
+    pend.classList.remove('hidden');
+  } else {
+    pend.classList.add('hidden');
+  }
+}
+
+async function refreshTrace(): Promise<void> {
+  const reply = await send({ type: 'getTraceStatus' });
+  if (reply.type === 'traceStatus') paintTrace(reply.recording, reply.eventCount, reply.pending);
+}
+
+async function toggleTrace(): Promise<void> {
+  showFieldError('trace-error', null);
+  const status = await send({ type: 'getTraceStatus' });
+  const recording = status.type === 'traceStatus' && status.recording;
+  if (recording) {
+    const reply = await send({ type: 'traceStop' });
+    if (reply.type === 'traceStatus') paintTrace(reply.recording, reply.eventCount, reply.pending);
+    return;
+  }
+  let tabId: number | undefined;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    tabId = tab?.id;
+  } catch {
+    tabId = undefined;
+  }
+  if (tabId === undefined) {
+    showFieldError('trace-error', 'Could not find the current tab.');
+    return;
+  }
+  const reply = await send({ type: 'traceStart', tabId });
+  if (reply.type === 'error') {
+    showFieldError('trace-error', reply.message);
+    return;
+  }
+  if (reply.type === 'traceStatus') paintTrace(reply.recording, reply.eventCount, reply.pending);
+}
+
 function wire(): void {
   $('retry').addEventListener('click', () => void dispatch({ type: 'probeNow' }));
 
@@ -138,9 +187,14 @@ function wire(): void {
     void dispatch({ type: 'clearActivity', alsoRemoveNodes }).then(hideClearConfirm);
   });
 
+  $('trace-toggle').addEventListener('click', () => void toggleTrace());
+
   // PUSH channel: any write by the service worker repaints us.
   chrome.storage.onChanged.addListener((_changes, area) => {
-    if (area === 'local') void dispatch({ type: 'getState' });
+    if (area === 'local') {
+      void dispatch({ type: 'getState' });
+      void refreshTrace();
+    }
   });
 }
 
@@ -149,6 +203,7 @@ async function boot(): Promise<void> {
   wire();
   await resolveCurrentHost();
   await dispatch({ type: 'getState' }); // paint instantly from storage
+  void refreshTrace();
   void dispatch({ type: 'probeNow' }); // then refresh in the background
 }
 

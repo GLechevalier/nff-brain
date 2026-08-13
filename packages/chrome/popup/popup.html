@@ -90,6 +90,20 @@
 
     <section class="panel">
       <div class="row">
+        <span class="label">Record a task</span>
+        <span id="trace-count" class="muted push"></span>
+      </div>
+      <p class="muted small">
+        Records what you do on the current tab into a repeatable workflow. Allow the
+        site first. Stop when done — the recording is turned into a workflow you can replay.
+      </p>
+      <button id="trace-toggle" class="btn wide">Record this tab</button>
+      <div id="trace-pending" class="small muted hidden"></div>
+      <div id="trace-error" class="small error hidden"></div>
+    </section>
+
+    <section class="panel">
+      <div class="row">
         <span class="label">Activity</span>
         <span id="activity-count" class="muted push"></span>
       </div>

@@ -13,10 +13,12 @@ import { ACT_MAX_ACTIONS_CEILING, ACT_MAX_ACTIONS_DEFAULT } from './schema.js';
 import type { ActRunState } from './schema.js';
 import { isRestrictedUrl, originOf } from './actGate.js';
 import { detach, ensureAttached, hasDebuggerPermission } from './cdp.js';
-import { buildActTools, buildSteeringPrompt, type ActContext } from './actTools.js';
+import { buildActTools, buildSteeringPrompt, buildWorkflowRunPrompt, type ActContext } from './actTools.js';
 import { appendTranscript, clearActRun, mutateActRun, startActRun } from './actStore.js';
 import { runChatWithTools } from './providerClient.js';
+import { readLocalBrain } from './brainStore.js';
 import { getActHostAllow, getActRun, setActHostAllow } from './storage.js';
+import type { WorkflowSpec } from '@nff-brain/core/workflow';
 
 const ACT_MAX_TURNS = 24;
 
@@ -45,9 +47,17 @@ function clampMax(raw: number | undefined): number {
  * the loop starts immediately; otherwise the run parks in 'awaiting_grant' and
  * the panel prompts before any action. Reads/navigation never need a grant.
  */
-export async function startActionRun(goal: string, tabId: number, maxActions?: number): Promise<StartResult> {
+/** Load a workflow spec from the local brain by its node id. */
+async function loadWorkflow(workflowId: string): Promise<WorkflowSpec | null> {
+  const brain = await readLocalBrain();
+  const node = brain.nodes.find((n) => n.id === workflowId && n.origin === 'workflow');
+  return node?.workflow ?? null;
+}
+
+export async function startActionRun(goal: string, tabId: number, maxActions?: number, workflowId?: string): Promise<StartResult> {
   if (!goal.trim()) return { ok: false, error: 'enter a goal first' };
   if (!(await hasDebuggerPermission())) return { ok: false, error: 'grant the debugger permission to let the agent act' };
+  if (workflowId && !(await loadWorkflow(workflowId))) return { ok: false, error: 'that workflow is no longer in your brain' };
 
   let url: string | undefined;
   try {
@@ -68,6 +78,7 @@ export async function startActionRun(goal: string, tabId: number, maxActions?: n
     id: newRunId(),
     phase: awaitingGrant ? 'awaiting_grant' : 'running',
     goal: goal.trim(),
+    workflowId,
     tabId,
     actionsTaken: 0,
     maxActions: clampMax(maxActions),
@@ -152,7 +163,14 @@ async function drive(runId: string, tabId: number): Promise<void> {
     return;
   }
 
-  const result = await runChatWithTools(buildSteeringPrompt(run.goal), buildActTools(ctx), {
+  // Replaying a workflow steers with its generalized steps; a free goal steers plainly.
+  let prompt = buildSteeringPrompt(run.goal);
+  if (run.workflowId) {
+    const spec = await loadWorkflow(run.workflowId);
+    if (spec) prompt = buildWorkflowRunPrompt(spec, run.goal);
+  }
+
+  const result = await runChatWithTools(prompt, buildActTools(ctx), {
     maxTurns: ACT_MAX_TURNS,
     onTurn: async () => {
       const cur = await getActRun();

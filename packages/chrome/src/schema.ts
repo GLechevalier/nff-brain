@@ -10,6 +10,7 @@
 import type { BrainFile } from '@nff-brain/core/types';
 import type { ClipRecord } from '@nff-brain/core/clip';
 import type { ModelSlot, ProviderId } from '@nff-brain/core/provider';
+import type { TraceEvent, TraceRecord } from '@nff-brain/core/trace';
 
 export const SCHEMA_VERSION = 1 as const;
 
@@ -43,6 +44,10 @@ export const KEYS = {
   // Web-agent action engine (CDP): the single active run + per-origin grants.
   actRun: 'nb.actRun',
   actHostAllow: 'nb.actHostAllow',
+  // Record-and-automate: the in-progress recording + the finished trace awaiting
+  // distillation (standalone/BYOK path; paired posts to /v1/trace instead).
+  traceActive: 'nb.traceActive',
+  tracePending: 'nb.tracePending',
 } as const;
 
 // ── pairing ──────────────────────────────────────────────────────────────────
@@ -251,6 +256,8 @@ export interface ActRunState {
   id: string; // act_<epochMs>_<6hex>
   phase: ActRunPhase;
   goal: string;
+  /** When set, this run is REPLAYING that workflow node (origin 'workflow'). */
+  workflowId?: string;
   tabId: number;
   actionsTaken: number;
   maxActions: number;
@@ -272,6 +279,28 @@ export interface ActHostAllow {
   /** origin (scheme://host[:port]) → 'always' | 'never'. */
   byOrigin: Record<string, 'always' | 'never'>;
 }
+
+// ── record-and-automate ──────────────────────────────────────────────────────
+
+/**
+ * The recording in progress (nb.traceActive). Accumulated one event per
+ * user interaction, capped so a runaway page cannot fill storage; hitting a cap
+ * auto-stops the recording. `bytes` is the running serialized size for the cap.
+ */
+export interface TraceActiveState {
+  recording: boolean;
+  id: string;
+  tabId: number;
+  startedAt: string;
+  startUrl: string;
+  title?: string;
+  /** TraceEvent[] from @nff-brain/core; kept as the wire shape. */
+  events: TraceEvent[];
+  bytes: number;
+}
+
+/** A finished recording awaiting distillation (standalone/BYOK path). */
+export type TracePending = TraceRecord;
 
 export interface StoredState {
   version: typeof SCHEMA_VERSION;

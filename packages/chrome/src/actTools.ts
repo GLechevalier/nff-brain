@@ -10,6 +10,7 @@
 import type { BrowserVerb, Modifiers, Target } from '@nff-brain/core/browserVerbs';
 import { validateBrowserVerb, verbClass } from '@nff-brain/core/browserVerbs';
 import { renderSnapshotText } from '@nff-brain/core/pageSnapshot';
+import type { WorkflowSpec } from '@nff-brain/core/workflow';
 import type { ToolSpec } from '@nff-brain/core/provider';
 import type { ToolExecutor } from './providerClient.js';
 import { decideAct, originOf } from './actGate.js';
@@ -38,6 +39,46 @@ export const ACT_STEERING = [
 
 export function buildSteeringPrompt(goal: string): string {
   return `${ACT_STEERING}\n\nGOAL: ${goal}`;
+}
+
+/**
+ * Steering for replaying a saved workflow: the generalized steps plus the
+ * user's concrete request, from which the agent binds the parameters. The steps
+ * are re-grounded against the LIVE page (targets re-found, not replayed) — the
+ * whole point of a generalizable workflow rather than a brittle macro.
+ */
+export function buildWorkflowRunPrompt(spec: WorkflowSpec, goal: string): string {
+  const params = spec.params.length
+    ? spec.params.map((p) => `- ${p.name}: ${p.description} (recorded example: ${p.example})`).join('\n')
+    : '(none)';
+  const stepLines: string[] = [];
+  let n = 1;
+  for (const s of spec.steps) {
+    stepLines.push(`${n}. ${s.intent}`);
+    if (s.loop) {
+      const times = s.loop.countParam ? `{${s.loop.countParam}} times` : `for each ${s.loop.over}`;
+      stepLines.push(`   repeat ${times}:`);
+      for (const b of s.loop.body) stepLines.push(`     - ${b.intent}`);
+    }
+    n++;
+  }
+  return [
+    ACT_STEERING,
+    '',
+    'You are REPLAYING a saved workflow. Follow its steps in order, but re-find every target on the LIVE page — never assume a position from the recording. Infer the parameter values from the USER REQUEST.',
+    '',
+    `WORKFLOW: ${spec.intent || 'recorded task'}`,
+    `Site: ${spec.site}`,
+    `Parameters:\n${params}`,
+    `Steps:\n${stepLines.join('\n')}`,
+    spec.successCriteria ? `Done when: ${spec.successCriteria}` : '',
+    '',
+    `USER REQUEST: ${goal}`,
+    '',
+    `If you are not already on ${spec.site}, navigate there first, then read_page and work through the steps. Stop and summarize when done or blocked.`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 // ── tool specs ───────────────────────────────────────────────────────────────

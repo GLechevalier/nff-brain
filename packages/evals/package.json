@@ -1,0 +1,23 @@
+{
+  "name": "@nff-brain/evals",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Real-account eval harness for the web agent — scenarios, oracles, runner, scorecard. Never published.",
+  "type": "module",
+  "scripts": {
+    "evals": "tsx src/runner.ts",
+    "setup:login": "tsx setup/login.ts",
+    "setup:google": "tsx setup/authGoogle.ts"
+  },
+  "dependencies": {
+    "@nff-brain/core": "*",
+    "@notionhq/client": "^2.2.15",
+    "@slack/web-api": "^7.3.4",
+    "dotenv": "^16.4.5",
+    "googleapis": "^140.0.1",
+    "playwright": "^1.45.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.16.0"
+  }
+}

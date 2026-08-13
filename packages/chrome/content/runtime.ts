@@ -25,6 +25,22 @@ export function emit(msg: Omit<RecorderEventMsg, 'type' | 'at'>): void {
   }
 }
 
+/**
+ * The task recorder's wire (record-and-automate): a raw, UN-deduped event for a
+ * recording in progress. Unlike emit(), order and repetition matter here — the
+ * distiller needs the full sequence — so there is no per-page dedupe. Still the
+ * same blind posture: no token, no fetch, no storage; the SW validates, stamps
+ * the real url from sender.tab.url, gates, and rings it. `raw` is untrusted by
+ * construction and clamped SW-side (normalizeTraceEvent).
+ */
+export function emitTrace(raw: Record<string, unknown>): void {
+  try {
+    chrome.runtime.sendMessage({ type: 'traceEvent', event: raw }, () => void chrome.runtime.lastError);
+  } catch {
+    /* extension reloaded under the page — nothing to do */
+  }
+}
+
 /** First non-empty line of a textarea-ish value, for comment titles. */
 export function firstLine(text: string, max = 120): string {
   return (

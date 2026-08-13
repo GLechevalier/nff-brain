@@ -22,6 +22,7 @@ import type { CaptureTarget, ServeClient } from '@nff-brain/core';
 import { readJsonBody, sendError, sendJson } from './http.js';
 import type { ServeState } from './state.js';
 import { AGENT_ROUTES } from './agentRoutes.js';
+import { AGENT_ADMIN_ROUTES } from './agentAdminRoutes.js';
 import { IMPORT_ROUTES } from './importRoutes.js';
 import { MCP_ROUTES } from './mcpRoutes.js';
 import { CHAT_ROUTES } from './chatRoutes.js';
@@ -511,6 +512,7 @@ export const ROUTES: Record<string, Route> = {
   '/v1/admin/clients': { method: 'GET', auth: 'admin', origin: 'absent', handler: adminClients },
   '/v1/admin/revoke': { method: 'POST', auth: 'admin', origin: 'absent', handler: adminRevoke },
   ...AGENT_ROUTES,
+  ...AGENT_ADMIN_ROUTES,
   ...IMPORT_ROUTES,
   ...MCP_ROUTES,
   ...CHAT_ROUTES,

@@ -1,13 +1,12 @@
 import {
   formatPairingCode,
-  isInstanceAlive,
   loadServeConfig,
   mintServerIdentity,
-  readInstance,
   saveServeConfig,
   serveConfigPath,
 } from '@nff-brain/core';
-import { fail, flagStr, parseArgs } from '../util.js';
+import { flagStr, parseArgs } from '../util.js';
+import { admin } from './adminHttp.js';
 
 // `nff-brain pair` drives the RUNNING server over its own admin routes rather
 // than editing serve.json underneath it — otherwise a code opened here would
@@ -16,44 +15,6 @@ import { fail, flagStr, parseArgs } from '../util.js';
 // The exception is --reset, which must work with the server down (that is when
 // you most want it). It rewrites the file directly; the server notices via the
 // mtime check in ServeState.config() within a second.
-
-interface AdminCall {
-  path: string;
-  method?: 'GET' | 'POST';
-  body?: unknown;
-}
-
-async function admin<T>({ path, method = 'POST', body }: AdminCall): Promise<T> {
-  const inst = readInstance();
-  if (!inst || !isInstanceAlive(inst)) {
-    fail('nff-brain serve is not running — start it first (`nff-brain serve`)');
-  }
-  const cfg = loadServeConfig();
-  if (!cfg) fail(`no ${serveConfigPath()} yet — start \`nff-brain serve\` once to create it`);
-
-  let res: Response;
-  try {
-    res = await fetch(`http://127.0.0.1:${inst.port}${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${cfg.adminToken}`,
-        // Every POST carries a JSON content-type, even a bodyless one: the
-        // server rejects other types outright to block HTML-form CSRF, and an
-        // exemption for empty bodies would be a hole for no benefit.
-        ...(method === 'POST' ? { 'content-type': 'application/json' } : {}),
-      },
-      body: method === 'POST' ? JSON.stringify(body ?? {}) : undefined,
-      signal: AbortSignal.timeout(5_000),
-    });
-  } catch {
-    fail(`could not reach the server on port ${inst.port} — is it still running?`);
-  }
-  const json = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
-  if (!res.ok || json.ok !== true) {
-    fail(`server refused: ${json.message ?? res.status}`);
-  }
-  return json as T;
-}
 
 export async function cmdPair(argv: string[]): Promise<void> {
   const args = parseArgs(argv);

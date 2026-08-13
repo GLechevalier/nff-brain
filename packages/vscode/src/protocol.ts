@@ -14,7 +14,7 @@ export interface ViewNode {
   x: number;
   y: number;
   size: number;
-  origin: 'seed' | 'agent' | 'graphify' | 'import' | 'clip';
+  origin: 'seed' | 'agent' | 'graphify' | 'import' | 'clip' | 'workflow';
   /** True once a layout pass settled x/y. Absent ⇒ this node still needs placing. */
   laidOut?: boolean;
   lastUpdated: string;

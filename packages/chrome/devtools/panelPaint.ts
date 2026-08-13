@@ -77,6 +77,39 @@ export function paintActRun(run: ActRunState | null): void {
   log.scrollTop = log.scrollHeight;
 }
 
+export interface WorkflowRow {
+  id: string;
+  title: string;
+  intent: string;
+  site: string;
+  params: string[];
+}
+
+export function renderWorkflows(items: WorkflowRow[], onRun: (w: WorkflowRow) => void): void {
+  const list = $('workflow-list');
+  list.innerHTML = '';
+  $('workflow-empty').classList.toggle('hidden', items.length > 0);
+  for (const w of items) {
+    const li = document.createElement('li');
+    li.className = 'row';
+    const info = document.createElement('div');
+    info.className = 'grow';
+    const title = document.createElement('div');
+    title.className = 'small strong';
+    title.textContent = w.title;
+    const meta = document.createElement('div');
+    meta.className = 'muted small';
+    meta.textContent = w.params.length ? `${w.site} · ${w.params.join(', ')}` : w.site;
+    info.append(title, meta);
+    const btn = document.createElement('button');
+    btn.className = 'btn small';
+    btn.textContent = 'Run';
+    btn.addEventListener('click', () => onRun(w));
+    li.append(info, btn);
+    list.appendChild(li);
+  }
+}
+
 export type ChatMode = 'manual' | 'plan' | 'auto';
 
 const MODE_HINT: Record<ChatMode, string> = {

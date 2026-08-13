@@ -6,6 +6,18 @@ export const BRAIN_DIR = '.nff-brain';
 export const BRAIN_FILE = 'brain.json';
 export const VECTORS_FILE = 'vectors.json';
 
+/**
+ * The global nff-brain data directory (default `~/.nff-brain`). NFF_BRAIN_HOME
+ * replaces the whole directory, not the OS home: harnesses that need an
+ * isolated global brain/serve/web-agent state can set it WITHOUT redirecting
+ * HOME/USERPROFILE — redirecting those would also sever the real `claude`
+ * CLI's own `~/.claude` auth for any subprocess the brain spawns.
+ */
+export function brainHomeDir(): string {
+  const override = process.env.NFF_BRAIN_HOME;
+  return override && override.trim() !== '' ? path.resolve(override) : path.join(os.homedir(), BRAIN_DIR);
+}
+
 // Walk up from cwd to find the workspace root: the first directory containing
 // .nff-brain/, .claude/, or .git/. Falls back to cwd itself.
 export function findWorkspaceRoot(cwd: string): string {
@@ -25,7 +37,7 @@ export function projectBrainPath(workspaceRoot: string): string {
 }
 
 export function globalBrainPath(): string {
-  return path.join(os.homedir(), BRAIN_DIR, BRAIN_FILE);
+  return path.join(brainHomeDir(), BRAIN_FILE);
 }
 
 export interface BrainPaths {
@@ -68,10 +80,10 @@ export function vectorsPath(brainPath: string): string {
  * back to lexical search when it is absent.
  */
 export function runtimeDir(): string {
-  return process.env.NFF_BRAIN_RUNTIME_DIR ?? path.join(os.homedir(), BRAIN_DIR, 'runtime');
+  return process.env.NFF_BRAIN_RUNTIME_DIR ?? path.join(brainHomeDir(), 'runtime');
 }
 
 /** Model weight cache (mirrors the worker's BRAIN_EMBED_CACHE_DIR). */
 export function embedCacheDir(): string {
-  return process.env.NFF_BRAIN_EMBED_CACHE_DIR ?? path.join(os.homedir(), BRAIN_DIR, 'models');
+  return process.env.NFF_BRAIN_EMBED_CACHE_DIR ?? path.join(brainHomeDir(), 'models');
 }

@@ -7,10 +7,9 @@
 // one update, acceptable at this write frequency (one action per 1-4 minutes).
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { BRAIN_DIR } from './paths.js';
+import { brainHomeDir } from './paths.js';
 import { writeFileAtomic } from './store.js';
 import {
   WEB_AGENT_HISTORY_MAX,
@@ -28,7 +27,7 @@ import {
 const TERMINAL_PHASES: readonly RunPhase[] = ['stopped', 'done', 'error'];
 
 export function webAgentStatePath(): string {
-  return path.join(os.homedir(), BRAIN_DIR, 'web-agent.json');
+  return path.join(brainHomeDir(), 'web-agent.json');
 }
 
 export function isTerminalPhase(phase: RunPhase): boolean {

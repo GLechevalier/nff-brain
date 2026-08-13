@@ -17,11 +17,11 @@
 
 What it does : it places a brain context in your browser grown automatically when you use it, and allows you to automate web tasks :
 
-- **Local only.** The extension runs locally as a chrome process connected with a claude code or your API keys
-- **Web navigation** 
-- **Automate web workflows** 
+- **Local only.** : The extension runs locally as a chrome process connected with a claude code or your API keys, only runs on your computer only
+- **Web navigation** : 
+- **General context integrated** : The more you use it, the more context you store inside it, and it self-improves your tool 
+- **Automate web tasks** : a recoder makes your brain grow smarter, and you can ask it to replay actions that you already did by the past.
 - **Connects with other MCP tools**
-
 
 
 ## Install

@@ -14,6 +14,8 @@ import type {
   ActHostAllow,
   ActivityRecord,
   ActRunState,
+  TraceActiveState,
+  TracePending,
   Allowlist,
   Capture,
   DrainState,
@@ -231,6 +233,32 @@ export function getActHostAllow(): Promise<ActHostAllow> {
 
 export async function setActHostAllow(state: ActHostAllow): Promise<void> {
   await chrome.storage.local.set({ [KEYS.actHostAllow]: state });
+}
+
+// ── record-and-automate ──────────────────────────────────────────────────────
+
+export function getTraceActive(): Promise<TraceActiveState | null> {
+  return raw<TraceActiveState | null>(
+    KEYS.traceActive,
+    null,
+    (v) => v === null || (isObj(v) && typeof v.recording === 'boolean' && Array.isArray(v.events)),
+  );
+}
+
+export async function setTraceActive(state: TraceActiveState | null): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.traceActive]: state });
+}
+
+export function getTracePending(): Promise<TracePending | null> {
+  return raw<TracePending | null>(
+    KEYS.tracePending,
+    null,
+    (v) => v === null || (isObj(v) && v.v === 1 && Array.isArray(v.events)),
+  );
+}
+
+export async function setTracePending(rec: TracePending | null): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.tracePending]: rec });
 }
 
 /**

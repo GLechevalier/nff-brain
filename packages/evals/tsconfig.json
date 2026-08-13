@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "customConditions": ["nff-brain-source"]
+  },
+  "include": ["src/**/*.ts", "setup/**/*.ts", "test/**/*.ts"]
+}

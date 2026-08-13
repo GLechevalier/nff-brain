@@ -16,6 +16,7 @@ import { cmdAdd, cmdEdit, cmdList, cmdRm, cmdShow } from './commands/nodes.js';
 import { cmdNovelty } from './commands/novelty.js';
 import { cmdModel } from './commands/model.js';
 import { cmdPair } from './commands/pair.js';
+import { cmdAgent } from './commands/agent.js';
 import { cmdRecall } from './commands/recall.js';
 import { cmdSearch } from './commands/search.js';
 import { cmdSemantic } from './commands/semantic.js';
@@ -149,6 +150,13 @@ browser (Chrome extension transport)
   mcp list                        registered MCP servers
   mcp remove <id>                 unregister one
   mcp test <id>                   confirm it answers tools/list, print its tools
+  agent goal "<text>" [--max-actions N] [--auto] [--client id]
+                                   submit a web-agent goal from the terminal; the run
+                                   executes in the paired browser (--auto skips the
+                                   plan-approval step, like the panel's Auto mode)
+  agent status [--run id] [--json] active run (or one run by id) + recent history
+  agent approve|reject|stop <runId>
+                                   act on a run awaiting approval / stop a running one
 
 Writes target <workspace>/.nff-brain/brain.json; add --global for ~/.nff-brain/brain.json.
 `;
@@ -182,6 +190,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   skill: cmdSkill,
   serve: cmdServe,
   pair: cmdPair,
+  agent: cmdAgent,
   clips: cmdClips,
   mcp: cmdMcp,
   doctor: () => cmdDoctor(),

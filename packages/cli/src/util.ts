@@ -19,6 +19,7 @@ const VALUE_FLAGS = new Set([
   'dir', 'max-per-repo',
   'since', 'project', 'min-confidence', 'concurrency', 'max-new',
   'port', 'target', 'allow-origin', 'revoke', 'name',
+  'client', 'max-actions', 'run',
   'iterations', 'fanout', 'min-sim', 'floor', 'cap', 'min-gap', 'ring-gap',
   'header',
   'out',

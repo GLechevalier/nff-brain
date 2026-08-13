@@ -111,6 +111,31 @@
       "nff-brain-source": "./src/pageSnapshot.ts",
       "types": "./dist/pageSnapshot.d.ts",
       "default": "./dist/pageSnapshot.js"
+    },
+    "./trace": {
+      "nff-brain-source": "./src/trace.ts",
+      "types": "./dist/trace.d.ts",
+      "default": "./dist/trace.js"
+    },
+    "./traceCompact": {
+      "nff-brain-source": "./src/traceCompact.ts",
+      "types": "./dist/traceCompact.d.ts",
+      "default": "./dist/traceCompact.js"
+    },
+    "./workflow": {
+      "nff-brain-source": "./src/workflow.ts",
+      "types": "./dist/workflow.d.ts",
+      "default": "./dist/workflow.js"
+    },
+    "./workflowDistill": {
+      "nff-brain-source": "./src/workflowDistill.ts",
+      "types": "./dist/workflowDistill.d.ts",
+      "default": "./dist/workflowDistill.js"
+    },
+    "./workflowApply": {
+      "nff-brain-source": "./src/workflowApply.ts",
+      "types": "./dist/workflowApply.d.ts",
+      "default": "./dist/workflowApply.js"
     }
   }
 }

@@ -26,6 +26,27 @@ function copyStatic() {
     if (!fs.existsSync(from)) continue;
     fs.cpSync(from, path.join(OUT, to), { recursive: true });
   }
+  writeTestManifest();
+}
+
+/**
+ * NFF_BRAIN_TEST_MANIFEST=1 — the eval harness's manifest variant. Promotes
+ * BOTH optional lists to install-time grants (host_permissions gets the
+ * optional_host_permissions array; optional_permissions fold into
+ * permissions), because an unpacked load auto-grants install-time permissions
+ * while Chrome's native optional-permission prompt cannot be driven by any
+ * automation. dist/ then differs from the production manifest in EXACTLY
+ * those two keys — pinned by manifest.test.ts. Never ship this variant: the
+ * store zip must always be built without the env var.
+ */
+function writeTestManifest() {
+  if (process.env.NFF_BRAIN_TEST_MANIFEST !== '1') return;
+  const p = path.join(OUT, 'manifest.json');
+  const m = JSON.parse(fs.readFileSync(p, 'utf8'));
+  m.host_permissions = m.optional_host_permissions ?? [];
+  m.permissions = [...m.permissions, ...(m.optional_permissions ?? [])];
+  fs.writeFileSync(p, JSON.stringify(m, null, 2) + '\n');
+  console.log('NFF_BRAIN_TEST_MANIFEST=1 — dist/manifest.json promotes optional permissions (DO NOT SHIP)');
 }
 
 const common = {
@@ -53,6 +74,9 @@ const CONTENT = [
   ['content/github.ts', 'rec-github.js'],
   ['content/linkedin.ts', 'rec-linkedin.js'],
   ['content/linkedinAgent.ts', 'rec-linkedin-agent.js'],
+  // Record-and-automate: the generic task recorder, injected only while a
+  // recording is active on a granted origin.
+  ['content/traceRecorder.ts', 'rec-trace.js'],
 ];
 
 const swCtx = await esbuild.context({ ...common, entryPoints: ['src/sw.ts'], outfile: `${OUT}/sw.js` });

@@ -119,6 +119,13 @@ describe('source purity', () => {
       // Web-agent action vocabulary + perception contract (CDP engine).
       'browserVerbs',
       'pageSnapshot',
+      // Record-and-automate: trace schema, compaction, and the workflow
+      // distiller/applier the standalone (BYOK) drain runs locally.
+      'trace',
+      'traceCompact',
+      'workflow',
+      'workflowDistill',
+      'workflowApply',
     ]);
     for (const { rel, text } of FILES) {
       for (const m of text.matchAll(/from ['"]@nff-brain\/core(?:\/([a-zA-Z]+))?['"]/g)) {
@@ -169,6 +176,8 @@ describe('the capture choke point', () => {
     // decides capture — gate.ts alone does that. actGate.ts is the web-agent
     // ENGINE's own separate choke point (yet another distinct question — may the
     // CDP engine attach to / act on this url — never a copy of shouldCapture).
+    // standaloneTraceDistill.ts reads a hostname only to label the recorded
+    // workflow's site — never a capture decision.
     const readers = FILES.filter((f) => /\.hostname\b/.test(code(f.text)));
     expect(readers.map((r) => r.rel).sort()).toEqual([
       'content/githubClassify.ts',
@@ -177,6 +186,7 @@ describe('the capture choke point', () => {
       'src/activity.ts',
       'src/agentGate.ts',
       'src/gate.ts',
+      'src/standaloneTraceDistill.ts',
     ]);
   });
 
@@ -222,15 +232,18 @@ describe('MV3 service-worker discipline', () => {
     'src/actRun.ts',
     'src/cursorScript.ts',
     'src/snapshotScript.ts',
+    // Record-and-automate (traceCapture.ts has the documented appendChain and is
+    // asserted separately below).
+    'src/standaloneTraceDistill.ts',
   ])('%s declares no mutable module-level state', (rel) => {
     expect(topLevelBindings(FILES.find((f) => f.rel === rel)!.text)).toEqual([]);
   });
 
-  it('permits exactly three documented module-level variables', () => {
-    // connection.ts: the in-flight probe promise. brainStore.ts and actStore.ts:
-    // their mutation serialization chains. All three are harmless to lose on
-    // worker death (death means nothing is in flight) and each must keep its
-    // rationale inline.
+  it('permits exactly four documented module-level variables', () => {
+    // connection.ts: the in-flight probe promise. brainStore.ts, actStore.ts,
+    // traceCapture.ts: their mutation/append serialization chains. All four are
+    // harmless to lose on worker death (death means nothing is in flight) and
+    // each must keep its rationale inline.
     const conn = FILES.find((f) => f.rel === 'src/connection.ts')!;
     expect(topLevelBindings(conn.text)).toEqual(['inFlightProbe']);
     expect(conn.text).toMatch(/harmless/i); // the rationale must stay next to it
@@ -240,6 +253,9 @@ describe('MV3 service-worker discipline', () => {
     const actStore = FILES.find((f) => f.rel === 'src/actStore.ts')!;
     expect(topLevelBindings(actStore.text)).toEqual(['mutateChain']);
     expect(actStore.text).toMatch(/harmless/i);
+    const trace = FILES.find((f) => f.rel === 'src/traceCapture.ts')!;
+    expect(topLevelBindings(trace.text)).toEqual(['appendChain']);
+    expect(trace.text).toMatch(/harmless/i);
   });
 
   it('registers every listener synchronously at the top level of sw.ts', () => {
@@ -287,12 +303,14 @@ describe('content-script isolation', () => {
     },
   );
 
-  it('content scripts send only recorderEvent messages', () => {
+  it('content scripts send only recorderEvent / traceEvent messages', () => {
     for (const f of contentFiles) {
       const c = code(f.text);
       if (/sendMessage/.test(c)) {
         expect(f.rel).toBe('content/runtime.ts'); // one wire, one place
-        expect(c).toContain("type: 'recorderEvent'");
+        // Two message types are permitted through the single wire: the passive
+        // recorder's clip event and the task recorder's trace event.
+        expect(c.includes("type: 'recorderEvent'") || c.includes("type: 'traceEvent'")).toBe(true);
       }
     }
   });
@@ -323,6 +341,7 @@ describe('built artifacts', () => {
       'rec-github.js',
       'rec-linkedin.js',
       'rec-linkedin-agent.js',
+      'rec-trace.js',
     ]) {
       expect(fs.existsSync(path.join(dist, f)), `dist/${f} missing`).toBe(true);
     }
@@ -330,7 +349,7 @@ describe('built artifacts', () => {
 
   it('contains no off-device URL and no framework runtime', () => {
     if (!fs.existsSync(dist)) return;
-    for (const name of ['sw.js', 'popup.js', 'devtools.js', 'panel.js', 'options.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js']) {
+    for (const name of ['sw.js', 'popup.js', 'devtools.js', 'panel.js', 'options.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js', 'rec-trace.js']) {
       const text = read(name);
       // This is what actually ships — it catches an egress URL arriving through
       // a dependency rather than through our own source.

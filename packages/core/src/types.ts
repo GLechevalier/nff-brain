@@ -1,6 +1,8 @@
 // Data model for the local brain — a JSON knowledge graph ported from the
 // nff-agent-worker brain (brain_nodes / brain_edges) minus embeddings.
 
+import type { WorkflowSpec } from './workflow.js';
+
 export const BRAIN_VERSION = 1 as const;
 
 export const CATEGORIES = [
@@ -108,14 +110,22 @@ export interface BrainNode {
   // import = mined from past Claude Code sessions (evictable and mergeable like agent)
   // clip = distilled from a browser capture (own cap MAX_CLIP_NODES, own recall
   //        budget, never merged/folded — must stay retractable from the extension)
-  origin: 'seed' | 'agent' | 'graphify' | 'import' | 'clip';
+  // workflow = a recorded, generalized browser task (own cap MAX_WORKFLOW_NODES,
+  //        never merged/folded — the `workflow` payload is the truth; must stay
+  //        retractable from the extension, same trust tier as clip)
+  origin: 'seed' | 'agent' | 'graphify' | 'import' | 'clip' | 'workflow';
   sourceSession?: string;
-  // http(s) page the clip was captured from (origin 'clip' only).
+  // http(s) page the clip was captured from (origin 'clip'), or the workflow's
+  // start url (origin 'workflow').
   sourceUrl?: string;
   lastUpdated: string; // ISO
   recallCount: number;
   lastRecalledAt?: string; // ISO
   graphifyRef?: GraphifyRef;
+  // The replayable workflow this node carries (origin 'workflow' only). Like
+  // graphifyRef, a structured machine payload alongside the human-readable
+  // content; edits to `content` never desync it.
+  workflow?: WorkflowSpec;
   // Place in a BRAIN-NODE.json skill tree. Absent on every ordinary node.
   skill?: SkillRef;
   // How sure we are this is durable knowledge. Set by the history importer

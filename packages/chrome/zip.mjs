@@ -55,6 +55,18 @@ if (!fs.existsSync(path.join(SRC, 'manifest.json'))) {
   console.error(`zip: ${SRC}/manifest.json is missing — the store requires it at the archive root`);
   process.exit(1);
 }
+{
+  // A dist built with NFF_BRAIN_TEST_MANIFEST=1 (the eval harness's variant,
+  // see build.mjs writeTestManifest) promotes optional permissions to
+  // install-time grants. Shipping that to the store would be a silent
+  // permission escalation — refuse and demand a clean rebuild.
+  const m = JSON.parse(fs.readFileSync(path.join(SRC, 'manifest.json'), 'utf8'));
+  if (m.host_permissions !== undefined) {
+    console.error('zip: dist/manifest.json declares host_permissions — this is the TEST manifest variant.');
+    console.error('     rebuild without NFF_BRAIN_TEST_MANIFEST before packaging: npm run build');
+    process.exit(1);
+  }
+}
 
 const names = walk(SRC);
 const local = [];

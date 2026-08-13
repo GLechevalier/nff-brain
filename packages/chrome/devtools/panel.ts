@@ -18,6 +18,7 @@ import {
   paintActRun,
   paintMode,
   renderGraph,
+  renderWorkflows,
   renderMcpList,
   renderTranscript,
   setGraphViewBox,
@@ -616,6 +617,41 @@ async function pollActStatus(): Promise<void> {
   if (live && currentTab === 'act') scheduleActPoll(1000);
 }
 
+async function loadWorkflows(): Promise<void> {
+  const reply = await send({ type: 'getWorkflows' });
+  if (reply.type !== 'workflows') return;
+  renderWorkflows(reply.items, (w) => {
+    // Seed the goal box with the workflow's intent so the user can specialize it
+    // (e.g. add "in Berlin, 10 people"), then run bound to that workflow.
+    const goalEl = $('act-goal') as HTMLTextAreaElement;
+    if (!goalEl.value.trim()) goalEl.value = w.intent;
+    void runWorkflow(w.id, goalEl.value.trim() || w.intent);
+  });
+}
+
+async function runWorkflow(workflowId: string, goal: string): Promise<void> {
+  showFieldError('act-error', null);
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ permissions: ['debugger'] });
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    showFieldError('act-error', 'The debugger permission is needed to replay a workflow.');
+    return;
+  }
+  const budget = Number(($('act-budget') as HTMLInputElement).value) || undefined;
+  const tabId = chrome.devtools.inspectedWindow.tabId;
+  const reply = await send({ type: 'actStart', goal, tabId, maxActions: budget, workflowId });
+  if (reply.type === 'error') {
+    showFieldError('act-error', reply.message);
+    return;
+  }
+  if (reply.type === 'actStatus') paintActRun(reply.run);
+  scheduleActPoll(600);
+}
+
 async function startActRun(): Promise<void> {
   showFieldError('act-error', null);
   const goal = ($('act-goal') as HTMLTextAreaElement).value.trim();
@@ -674,6 +710,7 @@ function wire(): void {
     currentTab = 'act';
     switchTab('act');
     void pollActStatus();
+    void loadWorkflows();
   });
   $('tab-mcp').addEventListener('click', () => {
     currentTab = 'mcp';

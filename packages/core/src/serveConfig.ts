@@ -8,10 +8,9 @@
 // its permissions re-derived) every time the server restarts.
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { BRAIN_DIR } from './paths.js';
+import { brainHomeDir } from './paths.js';
 import { writeFileAtomic } from './store.js';
 import { hashToken, newToken } from './serveAuth.js';
 
@@ -65,11 +64,11 @@ export interface ServeInstance {
 }
 
 export function serveConfigPath(): string {
-  return path.join(os.homedir(), BRAIN_DIR, 'serve.json');
+  return path.join(brainHomeDir(), 'serve.json');
 }
 
 export function serveInstancePath(): string {
-  return path.join(os.homedir(), BRAIN_DIR, 'serve-instance.json');
+  return path.join(brainHomeDir(), 'serve-instance.json');
 }
 
 // ── serve.json ───────────────────────────────────────────────────────────────

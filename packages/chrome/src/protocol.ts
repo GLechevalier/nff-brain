@@ -571,13 +571,20 @@ export type PopupToSw =
   // Web-agent action engine (CDP). The panel requests the optional `debugger`
   // permission itself (a user gesture is required in the calling page); these
   // messages only start/steer/stop the run and answer its origin-grant prompt.
-  | { type: 'actStart'; goal: string; tabId: number; maxActions?: number }
+  | { type: 'actStart'; goal: string; tabId: number; maxActions?: number; workflowId?: string }
+  | { type: 'getWorkflows' }
   | { type: 'actStop' }
   | { type: 'actEnd' }
   | { type: 'actGrant'; choice: 'once' | 'always' | 'never' }
   | { type: 'getActStatus' }
   // Revoke a persisted per-origin action grant (from the popup).
-  | { type: 'revokeActOrigin'; origin: string };
+  | { type: 'revokeActOrigin'; origin: string }
+  // Record-and-automate. The popup starts/stops a per-tab recording; the finished
+  // trace lands in the pending slot for distillation into a workflow.
+  | { type: 'traceStart'; tabId: number }
+  | { type: 'traceStop' }
+  | { type: 'traceCancel' }
+  | { type: 'getTraceStatus' };
 
 /** The panel speaks the same channel as the popup — including the item-7 Agent tab. */
 export type PanelToSw = PopupToSw;
@@ -646,6 +653,8 @@ export type SwToPopup =
   | { type: 'mcpServers'; servers: McpServerSummary[] }
   | { type: 'mcpTools'; tools: McpToolDef[] }
   | { type: 'providerTest'; result: ProviderTestResult }
-  | { type: 'actStatus'; run: ActRunState | null };
+  | { type: 'actStatus'; run: ActRunState | null }
+  | { type: 'traceStatus'; recording: boolean; eventCount: number; pending: { id: string; events: number; startUrl: string; title?: string } | null }
+  | { type: 'workflows'; items: Array<{ id: string; title: string; intent: string; site: string; params: string[] }> };
 
 export type SwToPanel = SwToPopup;

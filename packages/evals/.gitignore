@@ -1,0 +1,7 @@
+# Real-account credentials and per-machine state — NEVER committed.
+# test/secretsGuard.test.ts fails CI if git ever tracks anything below.
+.env.evals
+.auth/
+state/
+artifacts/
+.profiles/

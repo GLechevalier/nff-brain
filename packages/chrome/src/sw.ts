@@ -74,7 +74,10 @@ import {
 } from './storage.js';
 import { testProviderKey } from './providerClient.js';
 import { endActionRun, grantOrigin, startActionRun, stopActionRun } from './actRun.js';
-import { getActHostAllow, getActRun, setActHostAllow } from './storage.js';
+import { cancelTraceRecording, onTraceEvent, startTraceRecording, stopTraceRecording } from './traceCapture.js';
+import { distillPendingTrace } from './standaloneTraceDistill.js';
+import { readLocalBrain } from './brainStore.js';
+import { getActHostAllow, getActRun, getTraceActive, getTracePending, setActHostAllow } from './storage.js';
 import { mutateActRun } from './actStore.js';
 import { handleStandaloneMessage } from './standalone.js';
 import { DRAIN_ALARM, drainStandaloneClips, ensureDrainAlarm } from './standaloneDrain.js';
@@ -412,9 +415,23 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     // uses the provider key); paired mode has no provider so the run reports
     // "add an API key" — the paired generic loop is a later milestone.
     case 'actStart': {
-      const res = await startActionRun(msg.goal, msg.tabId, msg.maxActions);
+      const res = await startActionRun(msg.goal, msg.tabId, msg.maxActions, msg.workflowId);
       if (!res.ok) return { type: 'error', message: res.error ?? 'could not start the run' };
       return { type: 'actStatus', run: await getActRun() };
+    }
+
+    case 'getWorkflows': {
+      const brain = await readLocalBrain();
+      const items = brain.nodes
+        .filter((n) => n.origin === 'workflow' && n.workflow)
+        .map((n) => ({
+          id: n.id,
+          title: n.title,
+          intent: n.workflow!.intent,
+          site: n.workflow!.site,
+          params: n.workflow!.params.map((p) => p.name),
+        }));
+      return { type: 'workflows', items };
     }
 
     case 'actStop':
@@ -438,8 +455,41 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       await setActHostAllow(state);
       break;
     }
+
+    // Record-and-automate.
+    case 'traceStart': {
+      const res = await startTraceRecording(msg.tabId);
+      if (!res.ok) return { type: 'error', message: res.error ?? 'could not start recording' };
+      return traceStatus();
+    }
+
+    case 'traceStop': {
+      const rec = await stopTraceRecording();
+      // Standalone/BYOK: distill into a workflow node in the background. Paired
+      // mode has no provider key here, so it no-ops (paired posts to /v1/trace
+      // in a later milestone). Fire-and-forget — the popup polls tracePending.
+      if (rec && rec.events.length > 0) void distillPendingTrace();
+      return traceStatus();
+    }
+
+    case 'traceCancel':
+      await cancelTraceRecording();
+      return traceStatus();
+
+    case 'getTraceStatus':
+      return traceStatus();
   }
   return { type: 'state', state: await publicState() };
+}
+
+async function traceStatus(): Promise<SwToPopup> {
+  const [active, pending] = await Promise.all([getTraceActive(), getTracePending()]);
+  return {
+    type: 'traceStatus',
+    recording: !!active?.recording,
+    eventCount: active?.events.length ?? 0,
+    pending: pending ? { id: pending.id, events: pending.events.length, startUrl: pending.startUrl, title: pending.title } : null,
+  };
 }
 
 /**
@@ -469,6 +519,10 @@ async function onInstalled(): Promise<void> {
   // idempotently.
   await ensureRecorderScripts();
   await ensureAgentScripts();
+  // An extension update clears dynamically-registered scripts, so a recording in
+  // progress can no longer receive events — freeze what it captured rather than
+  // leave it dangling.
+  if ((await getTraceActive())?.recording) await stopTraceRecording();
   await ensureAlarm();
   await paintBadge(await currentPhase(), (await getCapture()).enabled);
 }
@@ -477,6 +531,9 @@ async function onStartup(): Promise<void> {
   // Deliberately does NOT write nb.capture — pause must survive a restart.
   await ensureAlarm();
   await probe();
+  // A recording cannot survive a browser restart (its content script is gone) —
+  // freeze the captured events into the pending slot instead of losing them.
+  if ((await getTraceActive())?.recording) await stopTraceRecording();
   // chrome.alarms survive a browser restart, so a mid-run nb.agentPoll alarm
   // should still fire on its own — this is just insurance in case it didn't.
   void pollAgent();
@@ -517,6 +574,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if ((msg as { type?: string })?.type === 'recorderEvent') {
     void onRecorderEvent(msg, sender);
     sendResponse({ type: 'state' }); // ack; content scripts ignore replies
+    return true;
+  }
+  // Task-recorder events (record-and-automate) — also from a content script,
+  // fire-and-forget, and their sender matters (the SW stamps the trusted url).
+  if ((msg as { type?: string })?.type === 'traceEvent') {
+    void onTraceEvent((msg as { event?: unknown }).event, sender);
+    sendResponse({ type: 'state' });
     return true;
   }
   // NOT `async (msg) => …`: Chrome ignores a returned Promise (Firefox does

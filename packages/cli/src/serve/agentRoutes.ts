@@ -49,7 +49,7 @@ function parseToolDef(v: unknown): McpToolDef | null {
  * request timeout, for a client that already holds the same trust level as
  * a direct /v1/mcp/call.
  */
-function parseListTarget(v: unknown): WebAgentListTarget | null {
+export function parseListTarget(v: unknown): WebAgentListTarget | null {
   if (!v || typeof v !== 'object') return null;
   const t = v as { server?: unknown; tool?: unknown; toolDef?: unknown };
   const toolDef = parseToolDef(t.toolDef);

@@ -83,6 +83,7 @@ export function brainSavings(nodes: readonly BrainNode[]): BrainSavings {
     graphify: 0,
     import: 0,
     clip: 0,
+    workflow: 0,
   };
   let total = 0;
   let injections = 0;

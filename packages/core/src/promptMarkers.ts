@@ -20,6 +20,7 @@ export const NFF_PROMPT_MARKERS = {
   archaeologist: 'You are the memory archaeologist',
   clipper: 'You are the memory clipper',
   agentPlanner: 'You are the web agent planner',
+  workflowDistiller: 'You are the workflow distiller',
   agentFilter: "You are the web agent's judgment call",
   agentListWrite: "You are the web agent's list-write field mapper",
   chat: 'You are the brain chat assistant',

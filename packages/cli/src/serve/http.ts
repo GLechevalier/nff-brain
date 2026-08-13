@@ -18,6 +18,9 @@ export type ErrorCode =
   | 'pairing_closed'
   | 'bad_code'
   | 'run_active'
+  | 'no_client'
+  | 'unknown_client'
+  | 'ambiguous_client'
   | 'mcp_error'
   | 'chat_error';
 

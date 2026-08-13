@@ -81,6 +81,11 @@ describe('browser-safe core modules', () => {
     // (future) replay/recorder pipeline; must stay node-free like the rest.
     'browserVerbs.ts',
     'pageSnapshot.ts',
+    'trace.ts',
+    'traceCompact.ts',
+    'workflow.ts',
+    'workflowDistill.ts',
+    'workflowApply.ts',
   ])(
     '%s has no node: imports',
     (name) => {

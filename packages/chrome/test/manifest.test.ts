@@ -135,3 +135,30 @@ describe('manifest.json', () => {
     }
   });
 });
+
+describe('test-manifest variant (NFF_BRAIN_TEST_MANIFEST=1)', () => {
+  // The eval harness loads dist/ unpacked with install-time grants, because
+  // Chrome's native optional-permission prompt cannot be automated. The
+  // variant may differ from the production manifest in EXACTLY two ways —
+  // host_permissions appears (= the optional_host_permissions array) and
+  // optional_permissions fold into permissions. Anything else drifting
+  // between the two manifests would mean the eval fleet no longer tests the
+  // extension we ship. zip.mjs refuses to package a dist that has
+  // host_permissions, so the variant cannot reach the store.
+  it('when dist/ holds the variant, it differs from manifest.json in exactly the promoted keys', () => {
+    const distManifestPath = path.join(root, 'dist', 'manifest.json');
+    if (!fs.existsSync(distManifestPath)) return; // unbuilt workspace — skip, like bundlePurity's dist suite
+    const dist = JSON.parse(fs.readFileSync(distManifestPath, 'utf8'));
+    if (dist.host_permissions === undefined) {
+      // Production build — dist must be byte-equivalent JSON to the source.
+      expect(dist).toEqual(manifest);
+      return;
+    }
+    const expected = {
+      ...manifest,
+      host_permissions: manifest.optional_host_permissions,
+      permissions: [...manifest.permissions, ...(manifest.optional_permissions ?? [])],
+    };
+    expect(dist).toEqual(expected);
+  });
+});

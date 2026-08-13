@@ -1,0 +1,4 @@
+{
+  "comment": "The eval-driven switchboard: a scenario runs only when EVERY tag in its `requires` is listed here. Flip a tag on in the same PR that lands the capability — blocked→pass transitions in the scorecard are the progress metric. Tags: baseline (today's 3-verb LinkedIn agent), P0-harness, P1-engine, P2-loop, P3-adapter:<site>, P4-confirm, P4-downloads, P5-crosssite.",
+  "live": ["baseline", "P0-harness"]
+}

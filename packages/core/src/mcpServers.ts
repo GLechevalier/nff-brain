@@ -6,15 +6,14 @@
 // HTTP routes, and those routes never echo `headers` back.
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { BRAIN_DIR } from './paths.js';
+import { brainHomeDir } from './paths.js';
 import { writeFileAtomic } from './store.js';
 import type { McpServerConfig } from './mcpClient.js';
 
 export function mcpServersPath(): string {
-  return path.join(os.homedir(), BRAIN_DIR, 'mcp-servers.json');
+  return path.join(brainHomeDir(), 'mcp-servers.json');
 }
 
 function isServerConfig(v: unknown): v is McpServerConfig {
