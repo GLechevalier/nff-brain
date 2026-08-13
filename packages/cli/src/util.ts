@@ -21,6 +21,7 @@ const VALUE_FLAGS = new Set([
   'port', 'target', 'allow-origin', 'revoke', 'name',
   'iterations', 'fanout', 'min-sim', 'floor', 'cap', 'min-gap', 'ring-gap',
   'header',
+  'out',
 ]);
 
 export function parseArgs(argv: string[]): Args {

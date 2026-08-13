@@ -45,6 +45,11 @@ export function serializeNodeMd(
             ? 'clipped from the web'
             : 'learned',
     ...(typeof node.confidence === 'number' ? [`confidence ${node.confidence.toFixed(2)}`] : []),
+    // Skill membership, so an editor can see which tree a step belongs to. The
+    // token holds no "category:" substring, so META_CATEGORY cannot match it.
+    ...(node.skill?.tree
+      ? [`skill ${node.skill.tree}${node.skill.path.length ? ` › ${node.skill.path.join(' › ')}` : ''}`]
+      : []),
     ...(node.sourceUrl ? [`source ${node.sourceUrl}`] : []),
     `recalled ${node.recallCount ?? 0}×`,
     `updated ${node.lastUpdated}`,

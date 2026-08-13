@@ -40,6 +40,9 @@ export const KEYS = {
   clipSeen: 'nb.clipSeen',
   drain: 'nb.drain',
   migrationBackup: 'nb.migrationBackup',
+  // Web-agent action engine (CDP): the single active run + per-origin grants.
+  actRun: 'nb.actRun',
+  actHostAllow: 'nb.actHostAllow',
 } as const;
 
 // ── pairing ──────────────────────────────────────────────────────────────────
@@ -218,6 +221,56 @@ export const DEFAULT_DRAIN: DrainState = { nextDrainAtMs: 0, consecutiveFailures
 export interface MigrationBackup {
   brain: BrainFile;
   migratedAt: string;
+}
+
+// ── web-agent action engine (CDP) ────────────────────────────────────────────
+
+export type ActRunPhase = 'running' | 'awaiting_grant' | 'stopping' | 'stopped' | 'done' | 'error';
+
+export interface ActTranscriptEntry {
+  at: string;
+  kind: 'system' | 'thought' | 'action' | 'result';
+  text: string;
+  ok?: boolean;
+}
+
+/** A per-origin input consent the panel is waiting for the user to answer. */
+export interface ActPendingGrant {
+  origin: string;
+  /** The verb class that triggered the prompt — see @nff-brain/core browserVerbs. */
+  verbClass: string;
+}
+
+/**
+ * The single active action run. One globally, same structural fact as the
+ * paired web-agent run — the browser has no workspace concept. Persisted so the
+ * panel (a separate realm) can render it and so Stop survives a re-render; full
+ * mid-run resume across worker death is a later milestone.
+ */
+export interface ActRunState {
+  id: string; // act_<epochMs>_<6hex>
+  phase: ActRunPhase;
+  goal: string;
+  tabId: number;
+  actionsTaken: number;
+  maxActions: number;
+  /** Origins granted "once" earlier in THIS run (never persisted beyond it). */
+  grantedOrigins: string[];
+  pendingGrant: ActPendingGrant | null;
+  transcript: ActTranscriptEntry[]; // capped at ACT_TRANSCRIPT_MAX
+  startedAt: string;
+  updatedAt: string;
+  error?: string;
+}
+
+export const ACT_TRANSCRIPT_MAX = 200;
+export const ACT_MAX_ACTIONS_DEFAULT = 40;
+export const ACT_MAX_ACTIONS_CEILING = 100;
+
+/** Persisted per-origin input grants (nb.actHostAllow). "once" lives on the run, not here. */
+export interface ActHostAllow {
+  /** origin (scheme://host[:port]) → 'always' | 'never'. */
+  byOrigin: Record<string, 'always' | 'never'>;
 }
 
 export interface StoredState {

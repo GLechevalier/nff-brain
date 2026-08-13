@@ -166,6 +166,14 @@ textarea.input { resize: vertical; }
 }
 .entry { border-radius: 6px; padding: 8px 10px; }
 
+/* Act tab transcript lines — compact, one per action/result/system note. */
+.act-line { font-size: 12px; line-height: 1.4; padding: 3px 8px; border-radius: 4px; border-left: 2px solid transparent; word-break: break-word; }
+.act-system { color: #9ad; border-left-color: #2b5; }
+.act-action { color: #cdd; }
+.act-result { color: #888; }
+.act-thought { color: #ddd; background: #242424; padding: 8px 10px; }
+.act-line.bad { color: #fca5a5; border-left-color: #b44; }
+
 .entry-user {
   background: #1c2f2c;
   border: 1px solid #22443c;

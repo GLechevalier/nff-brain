@@ -37,6 +37,17 @@ describe('manifest.json', () => {
     );
   });
 
+  it('requests the debugger permission ONLY as optional, granted at run time', () => {
+    // The CDP action engine (web agent) drives real trusted input via
+    // chrome.debugger. It is OPTIONAL, not required: the install dialog stays
+    // warning-free, and Chrome shows its own "…is debugging this browser"
+    // infobar (a feature — the user can always see and cancel the agent) only
+    // once the panel requests the grant on a user gesture. Adding a second
+    // optional permission here is a deliberate act with a store-justification
+    // edit attached (store/permission-justifications.md).
+    expect(manifest.optional_permissions).toEqual(['debugger']);
+  });
+
   it('declares NO host_permissions', () => {
     // Load-bearing: the extension reaches 127.0.0.1 as an ordinary CORS request
     // that our own server answers. `host_permissions` would be the bypass, and

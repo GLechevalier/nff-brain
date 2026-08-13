@@ -18,6 +18,7 @@
 
 import { isSendInviteLabel } from './linkedinClassify.js';
 import { isConnectLabel, nameFromConnectLabel, parseCardText } from './linkedinAgentClassify.js';
+import { hideAgentCursor, showAgentClick } from './virtualCursor.js';
 import type { ContentToAgentReply, SwToContent } from '../src/protocol.js';
 
 const SEND_MODAL_TIMEOUT_MS = 4000;
@@ -98,9 +99,14 @@ async function clickConnect(cardIndex: number): Promise<ContentToAgentReply> {
   const { name, headline, company } = parseCardText(nameFromConnectLabel(label, card.nameText), card.subtitleText);
   if (!name) return { ok: false, error: 'could not read a name for that card — refusing to guess' };
 
+  await showAgentClick(card.connectButton);
   card.connectButton.click();
   const sendButton = await waitForSendButton();
-  sendButton?.click();
+  if (sendButton) {
+    await showAgentClick(sendButton);
+    sendButton.click();
+  }
+  hideAgentCursor();
 
   return {
     ok: true,

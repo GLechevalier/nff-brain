@@ -73,6 +73,9 @@ import {
   setProviderSettings,
 } from './storage.js';
 import { testProviderKey } from './providerClient.js';
+import { endActionRun, grantOrigin, startActionRun, stopActionRun } from './actRun.js';
+import { getActHostAllow, getActRun, setActHostAllow } from './storage.js';
+import { mutateActRun } from './actStore.js';
 import { handleStandaloneMessage } from './standalone.js';
 import { DRAIN_ALARM, drainStandaloneClips, ensureDrainAlarm } from './standaloneDrain.js';
 import { PROVIDERS } from '@nff-brain/core/provider';
@@ -404,8 +407,55 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       await clearActivity();
       break;
     }
+
+    // Web-agent action engine (CDP). Works in BYOK/standalone mode (the loop
+    // uses the provider key); paired mode has no provider so the run reports
+    // "add an API key" — the paired generic loop is a later milestone.
+    case 'actStart': {
+      const res = await startActionRun(msg.goal, msg.tabId, msg.maxActions);
+      if (!res.ok) return { type: 'error', message: res.error ?? 'could not start the run' };
+      return { type: 'actStatus', run: await getActRun() };
+    }
+
+    case 'actStop':
+      await stopActionRun();
+      return { type: 'actStatus', run: await getActRun() };
+
+    case 'actEnd':
+      await endActionRun();
+      return { type: 'actStatus', run: null };
+
+    case 'actGrant':
+      await grantOrigin(msg.choice);
+      return { type: 'actStatus', run: await getActRun() };
+
+    case 'getActStatus':
+      return { type: 'actStatus', run: await getActRun() };
+
+    case 'revokeActOrigin': {
+      const state = await getActHostAllow();
+      delete state.byOrigin[msg.origin];
+      await setActHostAllow(state);
+      break;
+    }
   }
   return { type: 'state', state: await publicState() };
+}
+
+/**
+ * The user clicking the debugger infobar's "Cancel" detaches us — treat it (and
+ * a target-gone detach) as a Stop, so the run doesn't sit "running" over a tab
+ * it can no longer drive. Guarded because chrome.debugger only exists once the
+ * OPTIONAL permission is granted; without the guard this throws at worker start.
+ */
+async function onDebuggerDetach(source: chrome.debugger.Debuggee, reason: string): Promise<void> {
+  const run = await getActRun();
+  if (run && source.tabId === run.tabId && (run.phase === 'running' || run.phase === 'awaiting_grant' || run.phase === 'stopping')) {
+    await mutateActRun((r) => {
+      r.phase = 'stopped';
+      r.transcript.push({ at: new Date().toISOString(), kind: 'system', text: `Debugger detached (${reason}). Run stopped.` });
+    });
+  }
 }
 
 async function onInstalled(): Promise<void> {
@@ -456,6 +506,10 @@ chrome.runtime.onStartup.addListener(() => void onStartup());
 chrome.alarms.onAlarm.addListener((alarm) => void onAlarm(alarm));
 chrome.contextMenus.onClicked.addListener((info, tab) => void onMenuClicked(info, tab));
 chrome.permissions.onAdded.addListener(() => void probe({ force: true }));
+// Guarded: chrome.debugger is present only while the optional `debugger`
+// permission is granted. Registered here (top level) so an infobar Cancel is
+// heard whenever the permission was already granted at worker start.
+if (chrome.debugger) chrome.debugger.onDetach.addListener((source, reason) => void onDebuggerDetach(source, reason));
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Recorder events come from content scripts, are fire-and-forget, and must

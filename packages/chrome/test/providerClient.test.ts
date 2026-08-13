@@ -102,4 +102,47 @@ describe('runChatWithTools', () => {
     expect(result?.toolEvents).toEqual([{ name: 'not_registered', ok: false, summary: 'unknown tool' }]);
     expect(result?.answer).toBe('done');
   });
+
+  it('honors a raised maxTurns for the web-agent loop', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(toolUseResponse('t1', 'navigate', { url: 'https://x.com' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const executor: ToolExecutor = {
+      spec: { name: 'navigate', description: 'x', input_schema: {} },
+      run: vi.fn().mockResolvedValue({ ok: true, resultText: 'ok' }),
+    };
+
+    await runChatWithTools('go', [executor], { maxTurns: 5 });
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it('stops early when onTurn returns false (Stop / budget)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(toolUseResponse('t1', 'navigate', { url: 'https://x.com' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const executor: ToolExecutor = {
+      spec: { name: 'navigate', description: 'x', input_schema: {} },
+      run: vi.fn().mockResolvedValue({ ok: true, resultText: 'ok' }),
+    };
+
+    const onTurn = vi.fn().mockReturnValue(false); // stop after the first turn
+    const result = await runChatWithTools('go', [executor], { maxTurns: 10, onTurn });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onTurn).toHaveBeenCalledTimes(1);
+    expect(result).not.toBeNull();
+  });
+
+  it('resumes from priorMessages instead of the initial prompt', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(textResponse('resumed'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await runChatWithTools('IGNORED', [], {
+      priorMessages: [
+        { role: 'user', content: 'earlier goal' },
+        { role: 'assistant', content: 'working' },
+        { role: 'user', content: 'continue' },
+      ],
+    });
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body);
+    expect(body.messages).toHaveLength(3);
+    expect(body.messages[0].content).toBe('earlier goal');
+  });
 });

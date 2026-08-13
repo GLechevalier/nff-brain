@@ -15,6 +15,7 @@ import {
   paintHeader,
   paintMcpServerOptions,
   paintMcpToolOptions,
+  paintActRun,
   paintMode,
   renderGraph,
   renderMcpList,
@@ -597,12 +598,82 @@ function wireGraphCanvas(): void {
   });
 }
 
+// ── web-agent action run (CDP) ────────────────────────────────────────────────
+
+let actPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleActPoll(ms: number): void {
+  if (actPollTimer) clearTimeout(actPollTimer);
+  actPollTimer = setTimeout(() => void pollActStatus(), ms);
+}
+
+async function pollActStatus(): Promise<void> {
+  const reply = await send({ type: 'getActStatus' });
+  if (reply.type !== 'actStatus') return;
+  paintActRun(reply.run);
+  // Keep polling while a run is live so the transcript streams; idle otherwise.
+  const live = reply.run && (reply.run.phase === 'running' || reply.run.phase === 'stopping' || reply.run.phase === 'awaiting_grant');
+  if (live && currentTab === 'act') scheduleActPoll(1000);
+}
+
+async function startActRun(): Promise<void> {
+  showFieldError('act-error', null);
+  const goal = ($('act-goal') as HTMLTextAreaElement).value.trim();
+  if (!goal) {
+    showFieldError('act-error', 'Describe a task first.');
+    return;
+  }
+  // chrome.permissions.request needs a user gesture — this click is it (same
+  // split as toggleAdapter). A denied grant leaves the agent unable to act.
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ permissions: ['debugger'] });
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    showFieldError('act-error', 'The debugger permission is needed to drive the page. The agent stays off.');
+    return;
+  }
+  const budget = Number(($('act-budget') as HTMLInputElement).value) || undefined;
+  const tabId = chrome.devtools.inspectedWindow.tabId;
+  const reply = await send({ type: 'actStart', goal, tabId, maxActions: budget });
+  if (reply.type === 'error') {
+    showFieldError('act-error', reply.message);
+    return;
+  }
+  if (reply.type === 'actStatus') paintActRun(reply.run);
+  scheduleActPoll(600);
+}
+
+async function actGrant(choice: 'once' | 'always' | 'never'): Promise<void> {
+  const reply = await send({ type: 'actGrant', choice });
+  if (reply.type === 'actStatus') paintActRun(reply.run);
+  scheduleActPoll(600);
+}
+
+async function stopActRun(): Promise<void> {
+  const reply = await send({ type: 'actStop' });
+  if (reply.type === 'actStatus') paintActRun(reply.run);
+  scheduleActPoll(600);
+}
+
+async function clearActRun(): Promise<void> {
+  const reply = await send({ type: 'actEnd' });
+  if (reply.type === 'actStatus') paintActRun(reply.run);
+}
+
 // ── wiring + boot ─────────────────────────────────────────────────────────────
 
 function wire(): void {
   $('tab-brain').addEventListener('click', () => {
     currentTab = 'brain';
     switchTab('brain');
+  });
+  $('tab-act').addEventListener('click', () => {
+    currentTab = 'act';
+    switchTab('act');
+    void pollActStatus();
   });
   $('tab-mcp').addEventListener('click', () => {
     currentTab = 'mcp';
@@ -631,6 +702,13 @@ function wire(): void {
       void submitPrompt();
     }
   });
+
+  $('act-start').addEventListener('click', () => void startActRun());
+  $('act-stop').addEventListener('click', () => void stopActRun());
+  $('act-clear').addEventListener('click', () => void clearActRun());
+  $('act-grant-once').addEventListener('click', () => void actGrant('once'));
+  $('act-grant-always').addEventListener('click', () => void actGrant('always'));
+  $('act-grant-never').addEventListener('click', () => void actGrant('never'));
 }
 
 async function boot(): Promise<void> {

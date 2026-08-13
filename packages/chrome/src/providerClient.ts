@@ -117,24 +117,48 @@ export interface ChatWithToolsResult {
 /** Small hard cap on provider round trips per chat turn — same safety-valve spirit as agentRunner's MAX_POLL_CHAIN. */
 export const MAX_CHAT_TOOL_TURNS = 3;
 
+export interface RunChatOpts {
+  /** Round-trip cap. Defaults to MAX_CHAT_TOOL_TURNS so the chat path is unchanged. */
+  maxTurns?: number;
+  /** Prior conversation to resume from instead of a single user prompt (the act run's persisted messages). */
+  priorMessages?: ChatMessage[];
+  /**
+   * Called after each assistant turn's tools all ran, with the running message
+   * list and this turn's tool events. Return false to stop the loop early (a
+   * Stop request, a budget hit). The web-agent run uses this to persist progress
+   * and honor cancellation between turns.
+   */
+  onTurn?: (state: { messages: ChatMessage[]; toolEvents: ChatWithToolsResult['toolEvents']; turn: number }) => Promise<boolean> | boolean;
+}
+
 /**
- * Sends the prompt to the 'chat' slot with the given tools; if the model
- * calls one, executes it locally and feeds the result back for up to
- * MAX_CHAT_TOOL_TURNS round trips. Null means "no provider configured" (same
- * contract as makeProviderOneShot) — standalone.ts's existing "add an API
- * key" branch needs no new shape to handle it.
+ * Sends the prompt to the 'chat' slot with the given tools; if the model calls
+ * one, executes it locally and feeds the result back for up to `maxTurns` round
+ * trips. Null means "no provider configured" (same contract as
+ * makeProviderOneShot) — standalone.ts's existing "add an API key" branch needs
+ * no new shape to handle it.
+ *
+ * The default (no opts) is byte-identical to the original two-arg chat call:
+ * one user prompt, MAX_CHAT_TOOL_TURNS, no onTurn hook.
  */
-export async function runChatWithTools(initialPrompt: string, tools: ToolExecutor[]): Promise<ChatWithToolsResult | null> {
+export async function runChatWithTools(
+  initialPrompt: string,
+  tools: ToolExecutor[],
+  opts: RunChatOpts = {},
+): Promise<ChatWithToolsResult | null> {
   const chatOneShot = await makeProviderChatOneShot('chat');
   if (!chatOneShot) return null;
 
+  const maxTurns = opts.maxTurns ?? MAX_CHAT_TOOL_TURNS;
   const specs = tools.map((t) => t.spec);
   const byName = new Map(tools.map((t) => [t.spec.name, t]));
-  const messages: ChatMessage[] = [{ role: 'user', content: initialPrompt }];
+  const messages: ChatMessage[] = opts.priorMessages
+    ? [...opts.priorMessages]
+    : [{ role: 'user', content: initialPrompt }];
   const toolEvents: ChatWithToolsResult['toolEvents'] = [];
   let lastText = '';
 
-  for (let turn = 0; turn < MAX_CHAT_TOOL_TURNS; turn++) {
+  for (let turn = 0; turn < maxTurns; turn++) {
     const result = await chatOneShot(messages, specs);
     lastText = result.text;
     if (result.toolCalls.length === 0) return { answer: result.text, toolEvents };
@@ -145,6 +169,7 @@ export async function runChatWithTools(initialPrompt: string, tools: ToolExecuto
     messages.push({ role: 'assistant', content: assistantContent });
 
     const resultBlocks: ChatContentBlock[] = [];
+    const turnEvents: ChatWithToolsResult['toolEvents'] = [];
     for (const call of result.toolCalls) {
       const executor = byName.get(call.name);
       let ok = false;
@@ -158,10 +183,17 @@ export async function runChatWithTools(initialPrompt: string, tools: ToolExecuto
           resultText = err instanceof Error ? err.message : 'tool execution failed';
         }
       }
-      toolEvents.push({ name: call.name, ok, summary: resultText });
+      const ev = { name: call.name, ok, summary: resultText };
+      toolEvents.push(ev);
+      turnEvents.push(ev);
       resultBlocks.push({ type: 'tool_result', tool_use_id: call.id, content: resultText, is_error: !ok });
     }
     messages.push({ role: 'user', content: resultBlocks });
+
+    if (opts.onTurn) {
+      const keepGoing = await opts.onTurn({ messages, toolEvents: turnEvents, turn });
+      if (!keepGoing) return { answer: lastText, toolEvents };
+    }
   }
 
   // Cap hit while a tool_use was still pending — return the last text seen

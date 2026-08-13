@@ -19,6 +19,7 @@ import { cmdPair } from './commands/pair.js';
 import { cmdRecall } from './commands/recall.js';
 import { cmdSearch } from './commands/search.js';
 import { cmdSemantic } from './commands/semantic.js';
+import { cmdSkill } from './commands/skill.js';
 import { cmdServe } from './commands/serve.js';
 import { cmdUpgrade } from './commands/upgrade.js';
 import { cliVersion } from './util.js';
@@ -113,6 +114,22 @@ codebase map (graphify bridge)
                                    import a graphify graph as ≤10 intent nodes per repo
   expand <id>                      list a codebase-map node's underlying code entities
 
+skills (BRAIN-NODE.json)
+  skill add <file.json> [--global] [--force] [--dry-run]
+                                   expand a skill TREE into the brain — one node per step,
+                                   so a single branch can be corrected without rewriting
+                                   the skill. Steps marked "alt" are interchangeable ways
+                                   to solve the same sub-problem, and recall renders them
+                                   best-first by how often each actually worked.
+                                   Re-running upserts: ids derive from (tree, key), and
+                                   learned state survives
+  skill list                       every tree, with size, depth, alt count and recalls
+  skill show <tree> [--json]       print it the way recall renders it into a session
+  skill export <tree> [--out FILE] collapse back to BRAIN-NODE.json, byte-stable
+  skill relink <tree> [--global]   re-emit parent links from skill.path — the repair for
+                                   an editor save that dropped a link line
+  skill fmt <file.json> [--check]  canonicalize key order; --check exits 1 if it is not
+
 browser (Chrome extension transport)
   serve [--port 7373] [--target global|project] [--allow-origin o] [--quiet]
                                    loopback HTTP server the Chrome extension pairs with;
@@ -162,6 +179,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   index: cmdIndex,
   'ingest-graphify': cmdIngestGraphify,
   expand: cmdExpand,
+  skill: cmdSkill,
   serve: cmdServe,
   pair: cmdPair,
   clips: cmdClips,

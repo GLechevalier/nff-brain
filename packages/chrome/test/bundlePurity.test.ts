@@ -116,6 +116,9 @@ describe('source purity', () => {
       'chatPrompt',
       'jsonExtract',
       'provider',
+      // Web-agent action vocabulary + perception contract (CDP engine).
+      'browserVerbs',
+      'pageSnapshot',
     ]);
     for (const { rel, text } of FILES) {
       for (const m of text.matchAll(/from ['"]@nff-brain\/core(?:\/([a-zA-Z]+))?['"]/g)) {
@@ -163,11 +166,14 @@ describe('the capture choke point', () => {
     // re-gates on sender.tab.url regardless); agentGate.ts is item 7's OWN
     // separate choke point (a different question — is DOM automation allowed
     // here — never a second copy of shouldCapture's decision). None of them
-    // decides capture — gate.ts alone does that.
+    // decides capture — gate.ts alone does that. actGate.ts is the web-agent
+    // ENGINE's own separate choke point (yet another distinct question — may the
+    // CDP engine attach to / act on this url — never a copy of shouldCapture).
     const readers = FILES.filter((f) => /\.hostname\b/.test(code(f.text)));
     expect(readers.map((r) => r.rel).sort()).toEqual([
       'content/githubClassify.ts',
       'popup/main.ts',
+      'src/actGate.ts',
       'src/activity.ts',
       'src/agentGate.ts',
       'src/gate.ts',
@@ -206,20 +212,34 @@ describe('MV3 service-worker discipline', () => {
     'src/standaloneDrain.ts',
     'src/standalone.ts',
     'src/migrate.ts',
+    // Web-agent action engine (CDP). Snapshot ids use crypto.randomUUID, not a
+    // counter, precisely so this list stays satisfiable — see actEngine.ts.
+    'src/cdp.ts',
+    'src/actEngine.ts',
+    'src/actGate.ts',
+    'src/actPlan.ts',
+    'src/actTools.ts',
+    'src/actRun.ts',
+    'src/cursorScript.ts',
+    'src/snapshotScript.ts',
   ])('%s declares no mutable module-level state', (rel) => {
     expect(topLevelBindings(FILES.find((f) => f.rel === rel)!.text)).toEqual([]);
   });
 
-  it('permits exactly two documented module-level variables', () => {
-    // connection.ts: the in-flight probe promise. brainStore.ts: the mutation
-    // serialization chain. Both are harmless to lose on worker death (death
-    // means nothing is in flight) and each must keep its rationale inline.
+  it('permits exactly three documented module-level variables', () => {
+    // connection.ts: the in-flight probe promise. brainStore.ts and actStore.ts:
+    // their mutation serialization chains. All three are harmless to lose on
+    // worker death (death means nothing is in flight) and each must keep its
+    // rationale inline.
     const conn = FILES.find((f) => f.rel === 'src/connection.ts')!;
     expect(topLevelBindings(conn.text)).toEqual(['inFlightProbe']);
     expect(conn.text).toMatch(/harmless/i); // the rationale must stay next to it
     const store = FILES.find((f) => f.rel === 'src/brainStore.ts')!;
     expect(topLevelBindings(store.text)).toEqual(['mutateChain']);
     expect(store.text).toMatch(/harmless/i);
+    const actStore = FILES.find((f) => f.rel === 'src/actStore.ts')!;
+    expect(topLevelBindings(actStore.text)).toEqual(['mutateChain']);
+    expect(actStore.text).toMatch(/harmless/i);
   });
 
   it('registers every listener synchronously at the top level of sw.ts', () => {

@@ -101,6 +101,16 @@
       "nff-brain-source": "./src/provider.ts",
       "types": "./dist/provider.d.ts",
       "default": "./dist/provider.js"
+    },
+    "./browserVerbs": {
+      "nff-brain-source": "./src/browserVerbs.ts",
+      "types": "./dist/browserVerbs.d.ts",
+      "default": "./dist/browserVerbs.js"
+    },
+    "./pageSnapshot": {
+      "nff-brain-source": "./src/pageSnapshot.ts",
+      "types": "./dist/pageSnapshot.d.ts",
+      "default": "./dist/pageSnapshot.js"
     }
   }
 }

@@ -6,6 +6,7 @@
   "minimum_chrome_version": "116",
   "incognito": "not_allowed",
   "permissions": ["storage", "alarms", "activeTab", "contextMenus", "scripting"],
+  "optional_permissions": ["debugger"],
   "optional_host_permissions": ["http://127.0.0.1/*", "https://github.com/*", "https://www.linkedin.com/*"],
   "background": {
     "service_worker": "sw.js"

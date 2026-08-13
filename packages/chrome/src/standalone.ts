@@ -8,7 +8,7 @@
 // DevTools panel renders both modes with zero changes.
 
 import { removeNode } from '@nff-brain/core/brainGraph';
-import { buildChatPrompt, cleanChatAnswer } from '@nff-brain/core/chatPrompt';
+import { buildChatPrompt, cleanChatAnswer, expandSkillHits } from '@nff-brain/core/chatPrompt';
 import { ProviderError } from '@nff-brain/core/provider';
 import { fuseRanked } from '@nff-brain/core/rank';
 import type { BrainFile } from '@nff-brain/core/types';
@@ -102,7 +102,16 @@ async function localChat(
 ): Promise<SwToPopup> {
   const brain = await readLocalBrain();
   const ranked = fuseRanked(message, brain.nodes, null, { limit: CHAT_RETRIEVAL_LIMIT });
-  const nodes = ranked.map((r) => ({ id: r.node.id, title: r.node.title, content: r.node.content ?? '' }));
+  // A skill hit collapses to its whole tree in ONE slot — see expandSkillHits.
+  // Without this a 10-node skill would take every retrieval slot and could
+  // surface a mid-tree step with no root to hang it off.
+  const { skills, plain } = expandSkillHits(brain.nodes, ranked.map((r) => r.node));
+  const nodes = [...skills, ...plain].map((n) => ({
+    id: n.id,
+    title: n.title,
+    content: n.content ?? '',
+    ...(n.skill ? { skill: n.skill } : {}),
+  }));
   try {
     const prompt = `${buildChatPrompt({ message, history, nodes })}\n\n${NAVIGATE_STEERING}`;
     const result = await runChatWithTools(prompt, [

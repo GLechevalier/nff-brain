@@ -11,7 +11,9 @@
 
 import { DEFAULT_DRAIN, DEFAULTS, KEYS } from './schema.js';
 import type {
+  ActHostAllow,
   ActivityRecord,
+  ActRunState,
   Allowlist,
   Capture,
   DrainState,
@@ -207,6 +209,28 @@ export function getMigrationBackup(): Promise<MigrationBackup | null> {
 
 export async function setMigrationBackup(backup: MigrationBackup | null): Promise<void> {
   await chrome.storage.local.set({ [KEYS.migrationBackup]: backup });
+}
+
+// ── web-agent action engine (CDP) ────────────────────────────────────────────
+
+export function getActRun(): Promise<ActRunState | null> {
+  return raw<ActRunState | null>(
+    KEYS.actRun,
+    null,
+    (v) => v === null || (isObj(v) && typeof v.id === 'string' && typeof v.phase === 'string'),
+  );
+}
+
+export async function setActRun(run: ActRunState | null): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.actRun]: run });
+}
+
+export function getActHostAllow(): Promise<ActHostAllow> {
+  return raw<ActHostAllow>(KEYS.actHostAllow, { byOrigin: {} }, (v) => isObj(v) && isObj(v.byOrigin));
+}
+
+export async function setActHostAllow(state: ActHostAllow): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.actHostAllow]: state });
 }
 
 /**

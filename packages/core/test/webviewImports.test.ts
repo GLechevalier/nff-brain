@@ -77,6 +77,10 @@ describe('browser-safe core modules', () => {
     'jsonExtract.ts',
     'promptMarkers.ts',
     'provider.ts',
+    // Web-agent action/perception contract — imported by the SW engine and the
+    // (future) replay/recorder pipeline; must stay node-free like the rest.
+    'browserVerbs.ts',
+    'pageSnapshot.ts',
   ])(
     '%s has no node: imports',
     (name) => {

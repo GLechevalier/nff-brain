@@ -263,6 +263,18 @@ Store" is bullet one of the MVP.
 *New — the only item that writes on the user's behalf, and the only one that
 knowingly crosses item 4's "observe-only, never automate" bright line.*
 
+> **Superseded in part 2026-08-13 by item 8 (full action vocabulary).** Item 7's
+> "narrow, fixed action vocabulary … never arbitrary DOM eval" was deliberately
+> three LinkedIn-only verbs. The user has since asked for a *full* browser
+> vocabulary (click/type/scroll/drag/tabs/dialogs/…). Item 8 delivers that as a
+> **wide but still fixed** vocabulary: every verb is enumerated and validated in
+> `packages/core/browserVerbs.ts`, executed via `chrome.debugger`/CDP by
+> `packages/chrome/src/actEngine.ts` and surfaced to the LLM through the
+> DevTools **Act tab** — still no free-form `eval` tool (the only injected script
+> is our own bundled snapshot/cursor program). Item 7's paired LinkedIn
+> plan-walker below is unchanged and keeps working; item 8's agent is BYOK-first.
+> See `plans/2-make-it-so-encapsulated-russell.md` (Part A) for the full design.
+
 | | |
 |---|---|
 | **Scope** | F12 → Brain tab: one chat transcript with a **Manual / Plan / Auto** mode switch. In Plan or Auto mode, a natural-language goal produces a plan (Plan mode: the user must approve it; Auto mode: approved automatically the instant it's ready), then the local server drives a LinkedIn content script through a narrow, fixed action vocabulary (`navigate`, `readResultCards`, `clickConnect` — never arbitrary DOM eval) up to a configurable cap, with server-authoritative randomized pacing and an always-visible Stop. Every real action lands in the existing clip pipeline via `deliverRecorderClip()`, and every matched person is written to a **user-registered, plug-and-play HTTP MCP server** (managed from a separate **MCP tab** — list/test/enable/disable/remove; registering a *new* one stays CLI-only, `nff-brain mcp add/list/remove/test`, `/v1/mcp/*`) — not a hardcoded CRM integration. |
