@@ -1,10 +1,29 @@
-// Pure DOM renderers for the Brain panel — no chrome.*, same separation as
-// popup/paint.ts. Every piece of node text goes through textContent, never
-// innerHTML: brain content is data, not markup.
+// Pure DOM renderers for the consolidated side panel — no chrome.*, same
+// separation as popup/paint.ts. This one module folds together what used to be
+// three separate paint layers: devtools/panelPaint.ts (Brain/MCP/Graph), the
+// old sidepanel/actView.ts (Agent), and options/main.ts's paint helpers
+// (Settings). Every piece of node text goes through textContent, never
+// innerHTML: brain/page content is data, not markup.
 
-import type { ActionRecord, ChatSource, GraphEdge, GraphNode, McpServerSummary, McpToolDef, NodesResponse, PlanStep, PublicState, WebAgentRun } from '../src/protocol.js';
+import { PROVIDERS, PROVIDER_CHOICES } from '@nff-brain/core/provider';
+import type { ProviderId } from '@nff-brain/core/provider';
+import type {
+  ActionRecord,
+  ChatSource,
+  GraphEdge,
+  GraphNode,
+  McpServerSummary,
+  McpToolDef,
+  NodesResponse,
+  PlanStep,
+  PublicState,
+  WebAgentRun,
+} from '../src/protocol.js';
+import type { ActRunState } from '../src/schema.js';
 
 const $ = (id: string): HTMLElement => document.getElementById(id)!;
+
+// ── status header ─────────────────────────────────────────────────────────────
 
 export function paintHeader(nodes: NodesResponse | null, connected: boolean): void {
   const dot = $('dot');
@@ -18,21 +37,106 @@ export function paintHeader(nodes: NodesResponse | null, connected: boolean): vo
   $('updated').textContent = nodes.updatedAt ? `updated ${nodes.updatedAt.slice(0, 16).replace('T', ' ')}` : '';
 }
 
-export type PanelTab = 'brain' | 'mcp' | 'graph';
+// ── the five subtabs ────────────────────────────────────────────────────────
 
-export function switchTab(tab: PanelTab): void {
-  $('tab-brain').classList.toggle('active', tab === 'brain');
-  $('tab-mcp').classList.toggle('active', tab === 'mcp');
-  $('tab-graph').classList.toggle('active', tab === 'graph');
-  $('brain-view').classList.toggle('hidden', tab !== 'brain');
-  $('mcp-view').classList.toggle('hidden', tab !== 'mcp');
-  $('graph-view').classList.toggle('hidden', tab !== 'graph');
+export type SidePanelTab = 'agent' | 'mcp' | 'brain' | 'graph' | 'settings';
+
+const TABS: readonly SidePanelTab[] = ['agent', 'mcp', 'brain', 'graph', 'settings'];
+
+export function switchTab(tab: SidePanelTab): void {
+  for (const t of TABS) {
+    $(`sp-tab-${t}`).classList.toggle('active', t === tab);
+    $(`${t}-view`).classList.toggle('hidden', t !== tab);
+  }
 }
 
-// The web agent moved to its own side panel (sidepanel/) — it drives the
-// window's active tab, which a DevTools tab could not do (Chrome allows one
-// debugger per tab and open DevTools holds that slot). paintActRun /
-// renderWorkflows now live in sidepanel/actView.ts.
+// ── Agent tab (CDP web agent) — was sidepanel/actView.ts ─────────────────────
+
+const ACT_PHASE_LABEL: Record<string, string> = {
+  running: 'Running',
+  awaiting_grant: 'Waiting for your permission',
+  stopping: 'Stopping…',
+  stopped: 'Stopped',
+  done: 'Done',
+  error: 'Error',
+};
+
+export function paintActRun(run: ActRunState | null): void {
+  const idle = run === null;
+  const phase = run?.phase ?? null;
+  const running = phase === 'running' || phase === 'stopping' || phase === 'awaiting_grant';
+
+  ($('act-goal') as HTMLTextAreaElement).disabled = running;
+  ($('act-budget') as HTMLInputElement).disabled = running;
+  $('act-start').classList.toggle('hidden', running);
+  $('act-stop').classList.toggle('hidden', !running);
+  $('act-grant').classList.toggle('hidden', phase !== 'awaiting_grant');
+  $('act-clear').classList.toggle('hidden', idle || running);
+
+  const status = $('act-status');
+  status.textContent = idle
+    ? ''
+    : `${ACT_PHASE_LABEL[phase ?? ''] ?? phase} · ${run!.actionsTaken}/${run!.maxActions} actions` +
+      (run!.error ? ` · ${run!.error}` : '');
+  status.classList.toggle('error', phase === 'error');
+
+  if (phase === 'awaiting_grant' && run?.pendingGrant) {
+    $('act-grant-origin').textContent = run.pendingGrant.origin || 'this site';
+  }
+
+  const log = $('act-log');
+  log.innerHTML = '';
+  for (const e of run?.transcript ?? []) {
+    const row = document.createElement('div');
+    row.className = `act-line act-${e.kind}${e.ok === false ? ' bad' : ''}`;
+    row.textContent = e.text;
+    log.appendChild(row);
+  }
+  log.scrollTop = log.scrollHeight;
+}
+
+export interface WorkflowRow {
+  id: string;
+  title: string;
+  intent: string;
+  site: string;
+  params: string[];
+}
+
+export function renderWorkflows(items: WorkflowRow[], onRun: (w: WorkflowRow) => void): void {
+  const list = $('workflow-list');
+  list.innerHTML = '';
+  $('workflow-empty').classList.toggle('hidden', items.length > 0);
+  for (const w of items) {
+    const li = document.createElement('li');
+    li.className = 'row';
+    const info = document.createElement('div');
+    info.className = 'grow';
+    const title = document.createElement('div');
+    title.className = 'small strong';
+    title.textContent = w.title;
+    const meta = document.createElement('div');
+    meta.className = 'muted small';
+    meta.textContent = w.params.length ? `${w.site} · ${w.params.join(', ')}` : w.site;
+    info.append(title, meta);
+    const btn = document.createElement('button');
+    btn.className = 'btn small';
+    btn.textContent = 'Run';
+    btn.addEventListener('click', () => onRun(w));
+    li.append(info, btn);
+    list.appendChild(li);
+  }
+}
+
+/** The Agent tab's own error line — kept distinct from showFieldError, which
+ *  takes an element id; this one always targets #act-error. */
+export function showActError(msg: string | null): void {
+  const el = $('act-error');
+  el.textContent = msg ?? '';
+  el.classList.toggle('hidden', !msg);
+}
+
+// ── Brain tab: mode switch ───────────────────────────────────────────────────
 
 export type ChatMode = 'manual' | 'plan' | 'auto';
 
@@ -52,7 +156,7 @@ export function paintMode(mode: ChatMode): void {
     mode === 'manual' ? 'Ask your brain — e.g. what did I learn about OAuth callbacks' : 'Describe a goal…';
 }
 
-// ── LinkedIn agent adapter toggle (always visible, not mode-gated) ──────────
+// ── LinkedIn agent adapter toggle (Brain tab) ───────────────────────────────
 
 export function paintAdapter(state: PublicState): void {
   const linkedin = state.agentAdapters.find((a) => a.id === 'linkedin');
@@ -67,7 +171,7 @@ export function paintAdapter(state: PublicState): void {
     : `Ask Chrome for ${linkedin.hosts.join(', ')}`;
 }
 
-// ── the transcript — one unified log, entries typed and rendered differently ─
+// ── the Brain transcript — one unified log, entries typed and rendered apart ──
 
 const AGENT_PHASE_TEXT: Record<WebAgentRun['phase'], string> = {
   planning: 'Planning…',
@@ -88,10 +192,6 @@ export type TranscriptEntry =
   // Manual-mode chat's action-intent permission prompt. Unresolved (no
   // `decision`) shows Yes/No/Never-ask buttons; resolved shows a status line
   // instead — same "mutate this entry in place" discipline as plan → run.
-  // target distinguishes a registered adapter (real DOM automation may sit
-  // behind it) from a generic host guess (actionIntent.ts's fallback) — the
-  // rendering below is target-agnostic (URL/label only); only panel.ts's
-  // resolution logic needs to branch on it.
   | {
       kind: 'permission';
       requestId: string;
@@ -313,7 +413,7 @@ function entryEl(entry: TranscriptEntry, handlers: TranscriptHandlers): HTMLElem
   }
 }
 
-/** Full rebuild, same "replaceChildren" discipline as every other list in this panel. */
+/** Full rebuild, same "replaceChildren" discipline as every other list here. */
 export function renderTranscript(entries: readonly TranscriptEntry[], handlers: TranscriptHandlers): void {
   const el = $('transcript');
   el.replaceChildren(...entries.map((e) => entryEl(e, handlers)));
@@ -562,4 +662,58 @@ export function showFieldError(id: string, message: string | null): void {
   const el = $(id);
   el.textContent = message ?? '';
   el.classList.toggle('hidden', !message);
+}
+
+// ── Settings tab (BYOK provider) — was options/main.ts's paint helpers ───────
+
+export function fillProviderSelect(current: ProviderId | null): void {
+  const select = $('provider') as HTMLSelectElement;
+  select.replaceChildren(
+    ...PROVIDER_CHOICES.map((c) => {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.available ? c.label : `${c.label} (coming soon)`;
+      opt.disabled = !c.available;
+      return opt;
+    }),
+  );
+  select.value = current ?? 'anthropic';
+}
+
+export function fillModelDatalists(provider: ProviderId): void {
+  const adapter = PROVIDERS[provider];
+  const models = adapter?.knownModels ?? [];
+  for (const listId of ['models-background', 'models-chat']) {
+    $(listId).replaceChildren(
+      ...models.map((m) => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        return opt;
+      }),
+    );
+  }
+}
+
+/** Renamed from options/main.ts's `paint` to avoid colliding with the other
+ *  tab paints; the stored key is NEVER rendered back — PublicState carries
+ *  zero key material. */
+export function paintSettings(state: PublicState): void {
+  fillProviderSelect(state.provider);
+  fillModelDatalists(state.provider ?? 'anthropic');
+
+  const status = $('key-status');
+  if (state.providerConfigured) {
+    const saved = `Key saved${state.providerLastTest ? ` · last test: ${state.providerLastTest.message}` : ''}`;
+    status.textContent = saved;
+    status.classList.toggle('ok', state.providerLastTest?.ok !== false);
+  } else {
+    status.textContent = 'No key saved — captures stay queued on this device.';
+    status.classList.remove('ok');
+  }
+
+  const models = state.providerModels ?? PROVIDERS[state.provider ?? 'anthropic']?.defaultModels ?? null;
+  if (models) {
+    ($('model-background') as HTMLInputElement).value = models.background;
+    ($('model-chat') as HTMLInputElement).value = models.chat;
+  }
 }

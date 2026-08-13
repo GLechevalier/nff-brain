@@ -3,49 +3,197 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>nff-brain agent</title>
+    <title>nff-brain</title>
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
-    <header class="head">
+    <!--
+      STATIC SKELETON, same discipline as popup.html: render.ts only sets
+      textContent, toggles classes and replaces list children. Everything the
+      panel shows arrives via the service worker — this document never holds
+      the pairing token or the provider key, and never fetches.
+
+      One UI home, five subtabs: Agent (CDP web agent) · MCP (connections) ·
+      Brain (chat in one of three modes) · Graph (node canvas) · Settings (BYOK).
+    -->
+    <header class="bar">
+      <img class="mascot" src="icons/32.png" alt="" aria-hidden="true" />
       <span class="wordmark">nff-brain</span>
-      <span class="muted small">web agent</span>
+      <span id="dot" class="dot"></span>
+      <span id="workspace" class="muted ellipsis"></span>
+      <span id="counts" class="muted push small"></span>
+      <span id="updated" class="muted small"></span>
     </header>
 
-    <section class="panel">
-      <p class="muted small">
-        The agent drives <strong>this tab</strong> with a real, visible cursor — no new tab. Chrome shows a
-        "debugging this browser" bar while it runs; that is the agent. Uses your local server (or a BYOK key).
-        Keep DevTools closed on the tab you want it to act on.
-      </p>
-      <textarea id="act-goal" class="input grow" rows="3" placeholder="Describe a task on the current tab — e.g. press the Get Started button"></textarea>
-      <div class="row gap">
-        <label class="small" for="act-budget">Max actions</label>
-        <input id="act-budget" class="input narrow" type="number" min="1" max="100" value="40" />
-        <button id="act-start" class="btn primary">Run</button>
-        <button id="act-stop" class="btn small hidden">Stop</button>
-        <button id="act-clear" class="btn small hidden">Clear</button>
-      </div>
+    <div id="disconnected" class="banner hidden">
+      Brain not reachable — pair from the extension popup.
+    </div>
 
-      <div id="act-grant" class="grant hidden">
-        <p class="small">Let the agent act on <strong id="act-grant-origin"></strong>?</p>
+    <nav class="tabs">
+      <button id="sp-tab-agent" class="tab active">Agent</button>
+      <button id="sp-tab-mcp" class="tab">MCP</button>
+      <button id="sp-tab-brain" class="tab">Brain</button>
+      <button id="sp-tab-graph" class="tab">Graph</button>
+      <button id="sp-tab-settings" class="tab">Settings</button>
+    </nav>
+
+    <!-- ── Agent: the CDP web agent that drives THIS tab ──────────────────── -->
+    <section id="agent-view" class="view">
+      <div class="panel">
+        <p class="muted small">
+          The agent drives <strong>this tab</strong> with a real, visible cursor — no new tab. Chrome shows a
+          "debugging this browser" bar while it runs; that is the agent. Uses your local server (or a BYOK key).
+          Keep DevTools closed on the tab you want it to act on.
+        </p>
+        <textarea id="act-goal" class="input grow" rows="3" placeholder="Describe a task on the current tab — e.g. press the Get Started button"></textarea>
         <div class="row gap">
-          <button id="act-grant-once" class="btn small">Once</button>
-          <button id="act-grant-always" class="btn small">Always</button>
-          <button id="act-grant-never" class="btn small">Never</button>
+          <label class="small" for="act-budget">Max actions</label>
+          <input id="act-budget" class="input narrow" type="number" min="1" max="100" value="40" />
+          <button id="act-start" class="btn primary">Run</button>
+          <button id="act-stop" class="btn small hidden">Stop</button>
+          <button id="act-clear" class="btn small hidden">Clear</button>
         </div>
+
+        <div id="act-grant" class="grant hidden">
+          <p class="small">Let the agent act on <strong id="act-grant-origin"></strong>?</p>
+          <div class="row gap">
+            <button id="act-grant-once" class="btn small">Once</button>
+            <button id="act-grant-always" class="btn small">Always</button>
+            <button id="act-grant-never" class="btn small">Never</button>
+          </div>
+        </div>
+
+        <p id="act-status" class="small"></p>
+        <div id="act-log" class="transcript"></div>
+        <div id="act-error" class="small error hidden"></div>
       </div>
 
-      <p id="act-status" class="small"></p>
-      <div id="act-log" class="transcript"></div>
-      <div id="act-error" class="small error hidden"></div>
+      <div class="panel">
+        <div class="row"><span class="label">Saved workflows</span></div>
+        <p class="muted small">Recorded tasks you can replay. The agent re-finds each target on the live page.</p>
+        <ul id="workflow-list" class="list"></ul>
+        <p id="workflow-empty" class="muted small">No workflows yet — record a task from the popup.</p>
+      </div>
     </section>
 
-    <section class="panel">
-      <div class="row"><span class="label">Saved workflows</span></div>
-      <p class="muted small">Recorded tasks you can replay. The agent re-finds each target on the live page.</p>
-      <ul id="workflow-list" class="list"></ul>
-      <p id="workflow-empty" class="muted small">No workflows yet — record a task from the popup.</p>
+    <!-- ── MCP: registered-connection management ──────────────────────────── -->
+    <section id="mcp-view" class="view hidden">
+      <div class="row"><span class="label">Registered servers</span></div>
+      <ul id="mcp-list" class="list"></ul>
+      <p id="mcp-empty" class="muted small hidden">No servers registered yet.</p>
+      <div id="mcp-error" class="small error hidden"></div>
+
+      <div class="panel">
+        <p class="muted small">
+          Add a new one from your terminal — a browser page should never hold a secret header:
+        </p>
+        <code id="mcp-add-hint">nff-brain mcp add &lt;name&gt; &lt;url&gt; [--header "Key: value"]</code>
+      </div>
+    </section>
+
+    <!-- ── Brain: chat transcript with a Manual/Plan/Auto mode switch ─────── -->
+    <section id="brain-view" class="view hidden">
+      <div class="row">
+        <span class="small strong">LinkedIn agent</span>
+        <button id="adapter-toggle" class="btn small push">Enable</button>
+      </div>
+      <div id="adapter-error" class="small error hidden"></div>
+
+      <div class="row gap mode-switch" role="radiogroup" aria-label="Mode">
+        <button id="mode-manual" class="mode-btn active" data-mode="manual" type="button">Manual</button>
+        <button id="mode-plan" class="mode-btn" data-mode="plan" type="button">Plan</button>
+        <button id="mode-auto" class="mode-btn" data-mode="auto" type="button">Auto</button>
+      </div>
+      <p id="mode-hint" class="muted small"></p>
+
+      <div id="transcript" class="transcript"></div>
+
+      <!-- Only shown in Plan/Auto mode — Manual mode is a plain question, no cap or list target. -->
+      <div id="goal-options" class="row gap hidden">
+        <label class="small" for="max-actions">Max connects</label>
+        <input id="max-actions" class="input narrow" type="number" min="1" max="25" value="5" />
+        <select id="list-server" class="input"></select>
+        <select id="list-tool" class="input"></select>
+      </div>
+
+      <div class="row gap prompt-row">
+        <textarea id="prompt-input" class="input grow" rows="2" placeholder="Ask your brain, or describe a goal…"></textarea>
+        <button id="prompt-send" class="btn primary">Send</button>
+      </div>
+      <div id="prompt-error" class="small error hidden"></div>
+    </section>
+
+    <!--
+      Graph: a read-only view of node positions/colors nff-brain layout already
+      computed and stored — this page never computes a layout itself.
+      #graph-canvas holds one <svg> built entirely by render.ts.
+    -->
+    <section id="graph-view" class="view hidden wide">
+      <div id="graph-canvas" class="graph-canvas"></div>
+      <div id="graph-error" class="small error hidden"></div>
+      <p class="muted small">
+        Positions come from <code class="inline">nff-brain layout</code> — run it for a
+        clearer layout if nodes look clustered. Scroll to zoom, drag to pan.
+      </p>
+    </section>
+
+    <!-- ── Settings: bring-your-own AI key + model slots ──────────────────── -->
+    <section id="settings-view" class="view hidden">
+      <div class="panel">
+        <h2>Bring your own AI key</h2>
+        <p class="muted small">
+          Optional. Without a key (and without a paired local server) captures queue on this
+          device and nothing is sent anywhere. With a key, captured snippets and brain excerpts
+          go directly to the provider below under your own account — nowhere else.
+        </p>
+
+        <div class="row gap">
+          <label class="small" for="provider">Provider</label>
+          <select id="provider" class="input"></select>
+        </div>
+
+        <div class="row gap">
+          <label class="small" for="api-key">API key</label>
+          <input id="api-key" class="input grow" type="password" autocomplete="off" spellcheck="false"
+                 placeholder="paste your key" />
+          <button id="key-save" class="btn primary">Save</button>
+          <button id="key-clear" class="btn">Clear</button>
+        </div>
+        <div id="key-status" class="small muted"></div>
+        <div id="key-error" class="small error hidden"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Models</h2>
+        <p class="muted small">
+          Two slots: a cheap background model distills your captures into brain notes; the chat
+          model answers questions in the Brain tab. Pick from the list or type any model id.
+        </p>
+        <div class="row gap">
+          <label class="small" for="model-background">Background</label>
+          <input id="model-background" class="input grow" list="models-background" autocomplete="off" spellcheck="false" />
+          <datalist id="models-background"></datalist>
+        </div>
+        <div class="row gap">
+          <label class="small" for="model-chat">Chat</label>
+          <input id="model-chat" class="input grow" list="models-chat" autocomplete="off" spellcheck="false" />
+          <datalist id="models-chat"></datalist>
+        </div>
+        <div class="row gap">
+          <button id="models-save" class="btn">Save models</button>
+          <button id="test" class="btn">Test connection</button>
+        </div>
+        <div id="test-result" class="small hidden"></div>
+        <div id="models-error" class="small error hidden"></div>
+      </div>
+
+      <div class="panel">
+        <p class="muted small">
+          Prefer everything local? Run <code class="inline">nff-brain serve</code> in a project and pair from
+          the extension popup instead — a paired server always takes over, and any notes built
+          here migrate into it automatically.
+        </p>
+      </div>
     </section>
 
     <script src="sidepanel.js"></script>

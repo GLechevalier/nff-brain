@@ -97,21 +97,23 @@ async function resolveCurrentHost(): Promise<void> {
 /**
  * Open the agent side panel for the current window. chrome.sidePanel.open
  * requires a user gesture — this popup click is one. Closing the popup right
- * after is expected (the side panel stays open beside the tab).
+ * after is expected (the side panel stays open beside the tab). An optional
+ * one-shot tab hint (nb.sidepanelTab) tells the panel which subtab to open on;
+ * the panel reads and clears it on boot.
  */
-async function openAgentPanel(): Promise<void> {
-  showFieldError('agent-error', null);
+async function openAgentPanel(errorField: string): Promise<void> {
+  showFieldError(errorField, null);
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const windowId = tab?.windowId;
     if (windowId === undefined) {
-      showFieldError('agent-error', 'Could not find the current window.');
+      showFieldError(errorField, 'Could not find the current window.');
       return;
     }
     await chrome.sidePanel.open({ windowId });
     window.close();
   } catch (err) {
-    showFieldError('agent-error', err instanceof Error ? err.message : 'could not open the side panel');
+    showFieldError(errorField, err instanceof Error ? err.message : 'could not open the side panel');
   }
 }
 
@@ -167,11 +169,20 @@ async function toggleTrace(): Promise<void> {
 function wire(): void {
   $('retry').addEventListener('click', () => void dispatch({ type: 'probeNow' }));
 
-  // BYOK key + model settings live on the options page — a popup closes on
-  // focus loss, which is hostile to pasting a key from a password manager.
+  // BYOK key + model settings now live in the side panel's Settings subtab (the
+  // standalone options page is retired). Hand the panel a one-shot tab hint,
+  // then open it exactly like the Agent button does — a side panel stays open on
+  // focus loss, unlike the popup, so it is friendly to pasting a key.
   $('open-settings').addEventListener('click', (e) => {
     e.preventDefault();
-    void chrome.runtime.openOptionsPage();
+    void (async () => {
+      try {
+        await chrome.storage.local.set({ 'nb.sidepanelTab': 'settings' });
+      } catch {
+        // a failed hint just means the panel opens on its default (Agent) tab
+      }
+      await openAgentPanel('agent-error');
+    })();
   });
 
   $('connect').addEventListener('click', () => {
@@ -210,7 +221,7 @@ function wire(): void {
     void dispatch({ type: 'clearActivity', alsoRemoveNodes }).then(hideClearConfirm);
   });
 
-  $('open-agent').addEventListener('click', () => void openAgentPanel());
+  $('open-agent').addEventListener('click', () => void openAgentPanel('agent-error'));
   $('trace-toggle').addEventListener('click', () => void toggleTrace());
 
   // PUSH channel: any write by the service worker repaints us.

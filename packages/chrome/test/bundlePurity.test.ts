@@ -16,7 +16,7 @@ const root = path.resolve(here, '..');
 
 function sources(): { file: string; rel: string; text: string }[] {
   const out: { file: string; rel: string; text: string }[] = [];
-  for (const dir of ['src', 'popup', 'devtools', 'content', 'options']) {
+  for (const dir of ['src', 'popup', 'sidepanel', 'content']) {
     const abs = path.join(root, dir);
     if (!fs.existsSync(abs)) continue;
     for (const name of fs.readdirSync(abs)) {
@@ -190,9 +190,16 @@ describe('the capture choke point', () => {
     ]);
   });
 
-  it('reads chrome.storage from exactly one module', () => {
+  it('reads chrome.storage from exactly one module, plus the tab-hint handoff', () => {
+    // src/storage.ts is the ONE owner of all SW-side persisted state (token,
+    // capture flag, allowlist, activity buffer, brain, provider config). The two
+    // extra readers touch chrome.storage.local ONLY for `nb.sidepanelTab` — a
+    // one-shot, non-secret UI hint the popup writes and the side panel reads +
+    // clears on boot to choose which subtab opens. That is a UI navigation
+    // handoff, not application state, so it deliberately does not route through
+    // storage.ts (which is worker-only and holds the secret material).
     const users = FILES.filter((f) => /chrome\.storage\.local\./.test(code(f.text)));
-    expect(users.map((u) => u.rel).sort()).toEqual(['src/storage.ts']);
+    expect(users.map((u) => u.rel).sort()).toEqual(['popup/main.ts', 'sidepanel/main.ts', 'src/storage.ts']);
   });
 });
 
@@ -330,14 +337,6 @@ describe('built artifacts', () => {
       'popup.js',
       'popup.html',
       'popup.css',
-      'devtools.js',
-      'devtools.html',
-      'panel.js',
-      'panel.html',
-      'panel.css',
-      'options.js',
-      'options.html',
-      'options.css',
       'sidepanel.js',
       'sidepanel.html',
       'sidepanel.css',
@@ -352,7 +351,7 @@ describe('built artifacts', () => {
 
   it('contains no off-device URL and no framework runtime', () => {
     if (!fs.existsSync(dist)) return;
-    for (const name of ['sw.js', 'popup.js', 'devtools.js', 'panel.js', 'options.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js', 'rec-trace.js']) {
+    for (const name of ['sw.js', 'popup.js', 'sidepanel.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js', 'rec-trace.js']) {
       const text = read(name);
       // This is what actually ships — it catches an egress URL arriving through
       // a dependency rather than through our own source.

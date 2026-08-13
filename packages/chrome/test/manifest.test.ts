@@ -113,15 +113,6 @@ describe('manifest.json', () => {
     );
   });
 
-  it('registers the options page (BYOK key entry) as a full tab', () => {
-    // A popup closes on focus loss — hostile to key paste and password
-    // managers; store reviewers expect credential config on an options page.
-    expect(manifest.options_ui).toEqual({ page: 'options.html', open_in_tab: true });
-    for (const f of ['options/options.html', 'options/options.css', 'options/main.ts']) {
-      expect(fs.existsSync(path.join(root, f)), `missing ${f}`).toBe(true);
-    }
-  });
-
   it('refuses to run in incognito', () => {
     // A memory tool silently recording incognito browsing is a landmine, and
     // opting out removes an entire reviewer concern for free.
@@ -133,15 +124,6 @@ describe('manifest.json', () => {
     // Classic worker, not a module: esbuild emits one self-contained IIFE.
     expect(manifest.background.type).toBeUndefined();
     expect(manifest.action.default_popup).toBe('popup.html');
-  });
-
-  it('registers the Brain devtools panel — a page, not a permission', () => {
-    // devtools_page adds NO install-time warning and no new permission; the
-    // four-permission pin above is untouched by item 3.
-    expect(manifest.devtools_page).toBe('devtools.html');
-    for (const f of ['devtools/devtools.html', 'devtools/panel.html']) {
-      expect(fs.existsSync(path.join(root, f)), `missing ${f}`).toBe(true);
-    }
   });
 
   it('ships every icon size it declares', () => {

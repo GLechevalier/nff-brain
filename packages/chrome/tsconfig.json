@@ -16,7 +16,7 @@
   "include": [
     "src/**/*.ts",
     "popup/**/*.ts",
-    "devtools/**/*.ts",
+    "sidepanel/**/*.ts",
     "content/**/*.ts",
     "test/**/*.ts",
     "build.mjs",

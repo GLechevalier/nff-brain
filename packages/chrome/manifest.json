@@ -13,11 +13,6 @@
   "background": {
     "service_worker": "sw.js"
   },
-  "devtools_page": "devtools.html",
-  "options_ui": {
-    "page": "options.html",
-    "open_in_tab": true
-  },
   "action": {
     "default_title": "nff-brain",
     "default_popup": "popup.html",
