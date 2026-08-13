@@ -1,0 +1,52 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #e6e6e6;
+  background: #161616;
+  padding: 10px;
+}
+
+.head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.wordmark { font-weight: 700; color: #00ffcc; letter-spacing: 0.2px; }
+
+.panel { background: #1c1c1c; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+
+.row { display: flex; align-items: center; gap: 6px; }
+.row.gap { gap: 8px; margin-top: 8px; }
+.grow { flex: 1 1 auto; min-width: 0; }
+.muted { color: #8a8a8a; }
+.small { font-size: 12px; }
+.strong { font-weight: 600; }
+.label { font-weight: 600; }
+.error { color: #fca5a5; }
+.hidden { display: none !important; }
+
+.input {
+  background: #101010; color: #e6e6e6; border: 1px solid #333; border-radius: 6px;
+  padding: 6px 8px; font: inherit; width: 100%;
+}
+.input.narrow { width: 72px; flex: none; }
+textarea.input { resize: vertical; }
+
+.btn {
+  background: #262626; color: #e6e6e6; border: 1px solid #3a3a3a; border-radius: 6px;
+  padding: 6px 12px; font: inherit; cursor: pointer;
+}
+.btn:hover { background: #303030; }
+.btn.small { padding: 4px 10px; font-size: 12px; }
+.btn.primary { background: #00ffcc; color: #0a0a0a; border-color: #00ffcc; font-weight: 600; }
+.btn.primary:hover { background: #33ffd6; }
+
+.grant { margin-top: 10px; padding: 8px; border: 1px dashed #00ffcc55; border-radius: 6px; background: #00ffcc0f; }
+
+.transcript { margin-top: 10px; max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+.act-line { font-size: 12px; line-height: 1.4; padding: 3px 8px; border-radius: 4px; border-left: 2px solid transparent; word-break: break-word; white-space: pre-wrap; }
+.act-system { color: #9ad; border-left-color: #2b5; }
+.act-action { color: #cdd; }
+.act-result { color: #8a8a8a; }
+.act-thought { color: #ddd; background: #242424; padding: 8px 10px; }
+.act-line.bad { color: #fca5a5; border-left-color: #b44; }
+
+.list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.list .row { padding: 6px 8px; background: #101010; border: 1px solid #2a2a2a; border-radius: 6px; }

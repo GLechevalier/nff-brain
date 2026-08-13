@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>nff-brain agent</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="head">
+      <span class="wordmark">nff-brain</span>
+      <span class="muted small">web agent</span>
+    </header>
+
+    <section class="panel">
+      <p class="muted small">
+        The agent drives <strong>this tab</strong> with a real, visible cursor — no new tab. Chrome shows a
+        "debugging this browser" bar while it runs; that is the agent. Uses your local server (or a BYOK key).
+        Keep DevTools closed on the tab you want it to act on.
+      </p>
+      <textarea id="act-goal" class="input grow" rows="3" placeholder="Describe a task on the current tab — e.g. press the Get Started button"></textarea>
+      <div class="row gap">
+        <label class="small" for="act-budget">Max actions</label>
+        <input id="act-budget" class="input narrow" type="number" min="1" max="100" value="40" />
+        <button id="act-start" class="btn primary">Run</button>
+        <button id="act-stop" class="btn small hidden">Stop</button>
+        <button id="act-clear" class="btn small hidden">Clear</button>
+      </div>
+
+      <div id="act-grant" class="grant hidden">
+        <p class="small">Let the agent act on <strong id="act-grant-origin"></strong>?</p>
+        <div class="row gap">
+          <button id="act-grant-once" class="btn small">Once</button>
+          <button id="act-grant-always" class="btn small">Always</button>
+          <button id="act-grant-never" class="btn small">Never</button>
+        </div>
+      </div>
+
+      <p id="act-status" class="small"></p>
+      <div id="act-log" class="transcript"></div>
+      <div id="act-error" class="small error hidden"></div>
+    </section>
+
+    <section class="panel">
+      <div class="row"><span class="label">Saved workflows</span></div>
+      <p class="muted small">Recorded tasks you can replay. The agent re-finds each target on the live page.</p>
+      <ul id="workflow-list" class="list"></ul>
+      <p id="workflow-empty" class="muted small">No workflows yet — record a task from the popup.</p>
+    </section>
+
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

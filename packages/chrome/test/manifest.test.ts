@@ -20,7 +20,16 @@ describe('manifest.json', () => {
     expect(manifest.manifest_version).toBe(3);
   });
 
-  it('requests EXACTLY the five warning-free permissions plus debugger + tabs', () => {
+  it('hosts the web agent in a side panel', () => {
+    // The agent drives the window's ACTIVE tab. A side panel (unlike DevTools)
+    // does not consume that tab's debugger slot, so chrome.debugger.attach
+    // succeeds and the cursor moves in the very page the user is viewing.
+    // `sidePanel` is a warning-free permission.
+    expect(manifest.side_panel).toEqual({ default_path: 'sidepanel.html' });
+    expect(manifest.permissions).toContain('sidePanel');
+  });
+
+  it('requests EXACTLY the five warning-free permissions plus debugger + tabs + sidePanel', () => {
     // storage   — pairing token, capture flag, allowlist, activity buffer; all
     //             must survive service-worker death and browser restart.
     // alarms    — the health heartbeat; a setInterval dies with the worker.
@@ -38,10 +47,11 @@ describe('manifest.json', () => {
     //             actions per origin). Without `tabs`, chrome.tabs.get(tabId).url
     //             is undefined for a tab the extension has no host grant for.
     //             Strictly less exposure than the `debugger` it accompanies.
-    // These two are the install-time warnings the web-agent feature accepts;
-    // adding any OTHER warning-bearing permission is what this test stops.
+    // sidePanel — hosts the agent UI beside the active tab (warning-free).
+    // debugger + tabs are the install-time warnings the web-agent feature
+    // accepts; adding any OTHER warning-bearing permission is what this stops.
     expect(new Set(manifest.permissions)).toEqual(
-      new Set(['storage', 'alarms', 'activeTab', 'contextMenus', 'scripting', 'debugger', 'tabs']),
+      new Set(['storage', 'alarms', 'activeTab', 'contextMenus', 'scripting', 'debugger', 'tabs', 'sidePanel']),
     );
   });
 

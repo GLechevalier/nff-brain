@@ -13,7 +13,6 @@ import { ACT_MAX_ACTIONS_CEILING, ACT_MAX_ACTIONS_DEFAULT } from './schema.js';
 import type { ActRunState } from './schema.js';
 import { isRestrictedUrl, originOf } from './actGate.js';
 import { detach, ensureAttached, hasDebuggerPermission } from './cdp.js';
-import { openAgentTab } from './agentTab.js';
 import {
   buildActTools,
   buildPairedActPrompt,
@@ -151,39 +150,28 @@ export async function endActionRun(): Promise<void> {
   await clearActRun();
 }
 
-async function drive(runId: string, inspectedTabId: number): Promise<void> {
+async function drive(runId: string, tabId: number): Promise<void> {
   const run = await getActRun();
   if (!run || run.id !== runId || run.phase !== 'running') return;
 
-  // The agent CANNOT drive the DevTools-inspected tab — open DevTools already
-  // owns that tab's single debugger slot, so chrome.debugger.attach there fails.
-  // Open a dedicated tab for the agent (same as the LinkedIn agent's own tab)
-  // and drive THAT; the user watches it while the panel shows the transcript.
   const workflow = run.workflowId ? await loadWorkflow(run.workflowId) : null;
-  let targetUrl = workflow?.site ? `https://${workflow.site}` : '';
-  if (!targetUrl) {
-    try {
-      targetUrl = (await chrome.tabs.get(inspectedTabId)).url ?? '';
-    } catch {
-      /* inspected tab gone — open a blank agent tab */
-    }
-  }
 
-  let tabId: number;
+  // Attach directly to the tab the side panel targeted — the window's ACTIVE
+  // tab. Unlike the DevTools-inspected tab (where open DevTools already holds
+  // the single debugger slot, so attach fails), the active tab beside a side
+  // panel keeps its slot free, so the cursor moves in the very page the user is
+  // looking at. A workflow replay just navigates there itself.
   try {
-    tabId = await openAgentTab(targetUrl);
     await ensureAttached(tabId);
   } catch (err) {
     await mutateActRun((r) => {
       r.phase = 'error';
-      r.error = err instanceof Error ? err.message : 'could not open or attach the agent tab';
+      r.error = err instanceof Error
+        ? `could not attach to this tab (${err.message}) — if DevTools is open on it, close DevTools and use the side panel`
+        : 'could not attach to this tab';
     });
     return;
   }
-  // From here the run targets the agent tab (so Stop/detach hit the right tab).
-  await mutateActRun((r) => {
-    r.tabId = tabId;
-  });
 
   const ctx: ActContext = {
     tabId,

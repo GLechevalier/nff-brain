@@ -32,7 +32,6 @@
 
     <nav class="tabs">
       <button id="tab-brain" class="tab active">Brain</button>
-      <button id="tab-act" class="tab">Act</button>
       <button id="tab-mcp" class="tab">MCP</button>
       <button id="tab-graph" class="tab">Graph</button>
     </nav>
@@ -66,40 +65,6 @@
         <button id="prompt-send" class="btn primary">Send</button>
       </div>
       <div id="prompt-error" class="small error hidden"></div>
-    </section>
-
-    <section id="act-view" class="view hidden">
-      <p class="muted small">
-        The web agent opens its own tab and drives it with a real, visible cursor (it can't use this DevTools
-        tab — Chrome only allows one debugger per tab). It uses your BYOK API key. Chrome shows a "debugging
-        this browser" bar on that tab while it runs — that is the agent; close the bar or press Stop to end it.
-      </p>
-      <div class="row gap prompt-row">
-        <textarea id="act-goal" class="input grow" rows="2" placeholder="Describe a task on the current tab — e.g. fill in the signup form and submit"></textarea>
-      </div>
-      <div class="row gap">
-        <label class="small" for="act-budget">Max actions</label>
-        <input id="act-budget" class="input narrow" type="number" min="1" max="100" value="40" />
-        <button id="act-start" class="btn primary">Run</button>
-        <button id="act-stop" class="btn small hidden">Stop</button>
-        <button id="act-clear" class="btn small hidden">Clear</button>
-      </div>
-      <div id="act-grant" class="panel hidden">
-        <p class="small">Let the agent act on <strong id="act-grant-origin"></strong>?</p>
-        <div class="row gap">
-          <button id="act-grant-once" class="btn small">Once</button>
-          <button id="act-grant-always" class="btn small">Always</button>
-          <button id="act-grant-never" class="btn small">Never</button>
-        </div>
-      </div>
-      <p id="act-status" class="small"></p>
-      <div id="act-log" class="transcript"></div>
-      <div id="act-error" class="small error hidden"></div>
-
-      <div class="row"><span class="label">Saved workflows</span></div>
-      <p class="muted small">Recorded tasks you can replay. The agent re-finds each target on the live page.</p>
-      <ul id="workflow-list" class="list"></ul>
-      <p id="workflow-empty" class="muted small">No workflows yet — record a task from the popup.</p>
     </section>
 
     <section id="mcp-view" class="view hidden">

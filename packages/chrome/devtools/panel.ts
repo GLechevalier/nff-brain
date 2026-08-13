@@ -15,10 +15,8 @@ import {
   paintHeader,
   paintMcpServerOptions,
   paintMcpToolOptions,
-  paintActRun,
   paintMode,
   renderGraph,
-  renderWorkflows,
   renderMcpList,
   renderTranscript,
   setGraphViewBox,
@@ -599,86 +597,9 @@ function wireGraphCanvas(): void {
   });
 }
 
-// ── web-agent action run (CDP) ────────────────────────────────────────────────
-
-let actPollTimer: ReturnType<typeof setTimeout> | null = null;
-
-function scheduleActPoll(ms: number): void {
-  if (actPollTimer) clearTimeout(actPollTimer);
-  actPollTimer = setTimeout(() => void pollActStatus(), ms);
-}
-
-async function pollActStatus(): Promise<void> {
-  const reply = await send({ type: 'getActStatus' });
-  if (reply.type !== 'actStatus') return;
-  paintActRun(reply.run);
-  // Keep polling while a run is live so the transcript streams; idle otherwise.
-  const live = reply.run && (reply.run.phase === 'running' || reply.run.phase === 'stopping' || reply.run.phase === 'awaiting_grant');
-  if (live && currentTab === 'act') scheduleActPoll(1000);
-}
-
-async function loadWorkflows(): Promise<void> {
-  const reply = await send({ type: 'getWorkflows' });
-  if (reply.type !== 'workflows') return;
-  renderWorkflows(reply.items, (w) => {
-    // Seed the goal box with the workflow's intent so the user can specialize it
-    // (e.g. add "in Berlin, 10 people"), then run bound to that workflow.
-    const goalEl = $('act-goal') as HTMLTextAreaElement;
-    if (!goalEl.value.trim()) goalEl.value = w.intent;
-    void runWorkflow(w.id, goalEl.value.trim() || w.intent);
-  });
-}
-
-async function runWorkflow(workflowId: string, goal: string): Promise<void> {
-  showFieldError('act-error', null);
-  const budget = Number(($('act-budget') as HTMLInputElement).value) || undefined;
-  const tabId = chrome.devtools.inspectedWindow.tabId;
-  const reply = await send({ type: 'actStart', goal, tabId, maxActions: budget, workflowId });
-  if (reply.type === 'error') {
-    showFieldError('act-error', reply.message);
-    return;
-  }
-  if (reply.type === 'actStatus') paintActRun(reply.run);
-  scheduleActPoll(600);
-}
-
-async function startActRun(): Promise<void> {
-  showFieldError('act-error', null);
-  const goal = ($('act-goal') as HTMLTextAreaElement).value.trim();
-  if (!goal) {
-    showFieldError('act-error', 'Describe a task first.');
-    return;
-  }
-  // `debugger` is a REQUIRED manifest permission (Chrome forbids it as optional),
-  // so it is already granted — no runtime request. The SW re-checks it and
-  // reports clearly if a packed install somehow lacks it.
-  const budget = Number(($('act-budget') as HTMLInputElement).value) || undefined;
-  const tabId = chrome.devtools.inspectedWindow.tabId;
-  const reply = await send({ type: 'actStart', goal, tabId, maxActions: budget });
-  if (reply.type === 'error') {
-    showFieldError('act-error', reply.message);
-    return;
-  }
-  if (reply.type === 'actStatus') paintActRun(reply.run);
-  scheduleActPoll(600);
-}
-
-async function actGrant(choice: 'once' | 'always' | 'never'): Promise<void> {
-  const reply = await send({ type: 'actGrant', choice });
-  if (reply.type === 'actStatus') paintActRun(reply.run);
-  scheduleActPoll(600);
-}
-
-async function stopActRun(): Promise<void> {
-  const reply = await send({ type: 'actStop' });
-  if (reply.type === 'actStatus') paintActRun(reply.run);
-  scheduleActPoll(600);
-}
-
-async function clearActRun(): Promise<void> {
-  const reply = await send({ type: 'actEnd' });
-  if (reply.type === 'actStatus') paintActRun(reply.run);
-}
+// The web agent moved to its own side panel (sidepanel/) — it drives the
+// window's active tab, which this DevTools panel could not (Chrome allows one
+// debugger per tab and open DevTools holds that slot).
 
 // ── wiring + boot ─────────────────────────────────────────────────────────────
 
@@ -686,12 +607,6 @@ function wire(): void {
   $('tab-brain').addEventListener('click', () => {
     currentTab = 'brain';
     switchTab('brain');
-  });
-  $('tab-act').addEventListener('click', () => {
-    currentTab = 'act';
-    switchTab('act');
-    void pollActStatus();
-    void loadWorkflows();
   });
   $('tab-mcp').addEventListener('click', () => {
     currentTab = 'mcp';
@@ -720,13 +635,6 @@ function wire(): void {
       void submitPrompt();
     }
   });
-
-  $('act-start').addEventListener('click', () => void startActRun());
-  $('act-stop').addEventListener('click', () => void stopActRun());
-  $('act-clear').addEventListener('click', () => void clearActRun());
-  $('act-grant-once').addEventListener('click', () => void actGrant('once'));
-  $('act-grant-always').addEventListener('click', () => void actGrant('always'));
-  $('act-grant-never').addEventListener('click', () => void actGrant('never'));
 }
 
 async function boot(): Promise<void> {

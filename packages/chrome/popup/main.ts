@@ -92,6 +92,29 @@ async function resolveCurrentHost(): Promise<void> {
   }
 }
 
+// ── web agent (side panel) ───────────────────────────────────────────────────
+
+/**
+ * Open the agent side panel for the current window. chrome.sidePanel.open
+ * requires a user gesture — this popup click is one. Closing the popup right
+ * after is expected (the side panel stays open beside the tab).
+ */
+async function openAgentPanel(): Promise<void> {
+  showFieldError('agent-error', null);
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const windowId = tab?.windowId;
+    if (windowId === undefined) {
+      showFieldError('agent-error', 'Could not find the current window.');
+      return;
+    }
+    await chrome.sidePanel.open({ windowId });
+    window.close();
+  } catch (err) {
+    showFieldError('agent-error', err instanceof Error ? err.message : 'could not open the side panel');
+  }
+}
+
 // ── record-and-automate ──────────────────────────────────────────────────────
 
 function paintTrace(recording: boolean, eventCount: number, pending: { events: number; startUrl: string } | null): void {
@@ -187,6 +210,7 @@ function wire(): void {
     void dispatch({ type: 'clearActivity', alsoRemoveNodes }).then(hideClearConfirm);
   });
 
+  $('open-agent').addEventListener('click', () => void openAgentPanel());
   $('trace-toggle').addEventListener('click', () => void toggleTrace());
 
   // PUSH channel: any write by the service worker repaints us.
