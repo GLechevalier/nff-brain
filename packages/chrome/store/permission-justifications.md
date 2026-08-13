@@ -52,6 +52,17 @@ detaches as soon as the run ends. Passwords and payment fields are never read
 into what the model sees, and the agent is instructed never to solve CAPTCHAs.
 This is the one install-time permission warning the extension carries.
 
+### `tabs`
+
+Required by the same web-agent "Act" feature. The agent acts on the tab the
+user has open in DevTools; the service worker must read that tab's URL to refuse
+browser-internal pages (`chrome://`, the Web Store, `file://`) and to ask the
+user's permission per site before acting. Without `tabs`, the URL of a tab the
+extension holds no host grant for is hidden, so the agent cannot tell a normal
+page from a restricted one. It accompanies `debugger` and exposes strictly less
+(page URLs/titles) than the debugger attachment it gates. Used only for the Act
+feature; the passive recorder and clipping never read other tabs.
+
 ### `optional_host_permissions: http://127.0.0.1/*`
 
 Declared but NOT requested at install. The extension talks to a server the user

@@ -20,7 +20,7 @@ describe('manifest.json', () => {
     expect(manifest.manifest_version).toBe(3);
   });
 
-  it('requests EXACTLY the five warning-free permissions plus debugger', () => {
+  it('requests EXACTLY the five warning-free permissions plus debugger + tabs', () => {
     // storage   — pairing token, capture flag, allowlist, activity buffer; all
     //             must survive service-worker death and browser restart.
     // alarms    — the health heartbeat; a setInterval dies with the worker.
@@ -32,11 +32,16 @@ describe('manifest.json', () => {
     //             itself: the scary part is the host, and hosts stay optional.
     // debugger  — REQUIRED (see next test): Chrome forbids `debugger` in
     //             optional_permissions, so the CDP web agent can only work with
-    //             it declared here. This is the ONE install-time warning we
-    //             accept; adding any OTHER warning-bearing permission is the
-    //             thing this test exists to stop.
+    //             it declared here.
+    // tabs      — the web agent runs on the DevTools-inspected tab, and the SW
+    //             must read that tab's URL (to refuse chrome:// pages and to gate
+    //             actions per origin). Without `tabs`, chrome.tabs.get(tabId).url
+    //             is undefined for a tab the extension has no host grant for.
+    //             Strictly less exposure than the `debugger` it accompanies.
+    // These two are the install-time warnings the web-agent feature accepts;
+    // adding any OTHER warning-bearing permission is what this test stops.
     expect(new Set(manifest.permissions)).toEqual(
-      new Set(['storage', 'alarms', 'activeTab', 'contextMenus', 'scripting', 'debugger']),
+      new Set(['storage', 'alarms', 'activeTab', 'contextMenus', 'scripting', 'debugger', 'tabs']),
     );
   });
 
