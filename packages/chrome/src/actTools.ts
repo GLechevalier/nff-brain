@@ -10,6 +10,7 @@
 import type { BrowserVerb, Modifiers, Target } from '@nff-brain/core/browserVerbs';
 import { validateBrowserVerb, verbClass } from '@nff-brain/core/browserVerbs';
 import { renderSnapshotText } from '@nff-brain/core/pageSnapshot';
+import { extractJson } from '@nff-brain/core/jsonExtract';
 import type { WorkflowSpec } from '@nff-brain/core/workflow';
 import type { ToolSpec } from '@nff-brain/core/provider';
 import type { ToolExecutor } from './providerClient.js';
@@ -278,4 +279,67 @@ function rawUsesRef(raw: unknown): boolean {
 export async function hasActiveRun(): Promise<boolean> {
   const r = await getActRun();
   return !!r && (r.phase === 'running' || r.phase === 'awaiting_grant');
+}
+
+// ── paired-mode JSON-action loop (claude -p, no API key) ─────────────────────
+//
+// BYOK mode uses the Anthropic tool_use protocol (runChatWithTools). The paired
+// server's `claude -p` is a text one-shot, so paired mode uses a JSON contract:
+// the model replies with ONE {action, args} object per turn, we execute it with
+// the SAME executors, and feed the result back as text. Same engine, same gate,
+// same budget — only the transport differs.
+
+const ACT_JSON_TOOLS = [READ_PAGE, POINTER, KEYBOARD, SCROLL, NAVIGATE];
+
+/** The tool contract, rendered as text for the claude -p prompt. */
+export function renderActContract(): string {
+  const tools = ACT_JSON_TOOLS.map((t) => `  ${t.name} — ${t.description}`).join('\n');
+  return [
+    'Control the browser by replying with EXACTLY ONE JSON object and NOTHING else:',
+    '  {"action":"<tool>","args":{...}}  to act',
+    '  {"done":true,"summary":"<what you did>"}  when the goal is met or you are blocked and need the user',
+    'Tools:',
+    tools,
+  ].join('\n');
+}
+
+export type ActAction =
+  | { kind: 'action'; name: string; args: Record<string, unknown> }
+  | { kind: 'done'; summary: string }
+  | { kind: 'invalid' };
+
+/** Parse one claude -p turn into an action. Tolerant: prose around the JSON is fine. */
+export function parseActAction(text: string): ActAction {
+  const obj = extractJson<Record<string, unknown>>(text);
+  if (!obj) return { kind: 'invalid' };
+  if (obj.done === true || obj.action === 'done') return { kind: 'done', summary: typeof obj.summary === 'string' ? obj.summary : '' };
+  if (typeof obj.action === 'string') {
+    const args = obj.args && typeof obj.args === 'object' ? (obj.args as Record<string, unknown>) : {};
+    return { kind: 'action', name: obj.action, args };
+  }
+  return { kind: 'invalid' };
+}
+
+/** Build the per-turn prompt for the paired loop: steering + goal + contract + history. */
+export function buildPairedActPrompt(systemPrompt: string, history: string[]): string {
+  const hist = history.length ? history.join('\n') : '(nothing yet — start by reading the page)';
+  return [systemPrompt, '', renderActContract(), '', 'History so far:', hist, '', 'Reply with the next single JSON object now:'].join('\n');
+}
+
+/**
+ * Run one JSON action through the gate + engine, returning the tool_result text.
+ * Exposed so the paired loop drives the identical path as the BYOK executors.
+ */
+export async function runActByName(
+  ctx: ActContext,
+  name: string,
+  args: Record<string, unknown>,
+  snapshotIdRef: { id: string },
+): Promise<{ ok: boolean; resultText: string }> {
+  const raw = toVerbInput(name, args, snapshotIdRef.id);
+  const verb = validateBrowserVerb(raw);
+  if (!verb) return { ok: false, resultText: `invalid ${name} arguments` };
+  if (name !== 'read_page' && name !== 'navigate' && !snapshotIdRef.id && rawUsesRef(raw))
+    return { ok: false, resultText: 'read_page first to get element refs' };
+  return runVerb(ctx, verb, snapshotIdRef);
 }

@@ -13,11 +13,21 @@ import { ACT_MAX_ACTIONS_CEILING, ACT_MAX_ACTIONS_DEFAULT } from './schema.js';
 import type { ActRunState } from './schema.js';
 import { isRestrictedUrl, originOf } from './actGate.js';
 import { detach, ensureAttached, hasDebuggerPermission } from './cdp.js';
-import { buildActTools, buildSteeringPrompt, buildWorkflowRunPrompt, type ActContext } from './actTools.js';
+import { openAgentTab } from './agentTab.js';
+import {
+  buildActTools,
+  buildPairedActPrompt,
+  buildSteeringPrompt,
+  buildWorkflowRunPrompt,
+  parseActAction,
+  runActByName,
+  type ActContext,
+} from './actTools.js';
 import { appendTranscript, clearActRun, mutateActRun, startActRun } from './actStore.js';
 import { runChatWithTools } from './providerClient.js';
+import { postActStep } from './client.js';
 import { readLocalBrain } from './brainStore.js';
-import { getActHostAllow, getActRun, setActHostAllow } from './storage.js';
+import { getActHostAllow, getActRun, getPairing, setActHostAllow } from './storage.js';
 import type { WorkflowSpec } from '@nff-brain/core/workflow';
 
 const ACT_MAX_TURNS = 24;
@@ -141,9 +151,39 @@ export async function endActionRun(): Promise<void> {
   await clearActRun();
 }
 
-async function drive(runId: string, tabId: number): Promise<void> {
+async function drive(runId: string, inspectedTabId: number): Promise<void> {
   const run = await getActRun();
   if (!run || run.id !== runId || run.phase !== 'running') return;
+
+  // The agent CANNOT drive the DevTools-inspected tab — open DevTools already
+  // owns that tab's single debugger slot, so chrome.debugger.attach there fails.
+  // Open a dedicated tab for the agent (same as the LinkedIn agent's own tab)
+  // and drive THAT; the user watches it while the panel shows the transcript.
+  const workflow = run.workflowId ? await loadWorkflow(run.workflowId) : null;
+  let targetUrl = workflow?.site ? `https://${workflow.site}` : '';
+  if (!targetUrl) {
+    try {
+      targetUrl = (await chrome.tabs.get(inspectedTabId)).url ?? '';
+    } catch {
+      /* inspected tab gone — open a blank agent tab */
+    }
+  }
+
+  let tabId: number;
+  try {
+    tabId = await openAgentTab(targetUrl);
+    await ensureAttached(tabId);
+  } catch (err) {
+    await mutateActRun((r) => {
+      r.phase = 'error';
+      r.error = err instanceof Error ? err.message : 'could not open or attach the agent tab';
+    });
+    return;
+  }
+  // From here the run targets the agent tab (so Stop/detach hit the right tab).
+  await mutateActRun((r) => {
+    r.tabId = tabId;
+  });
 
   const ctx: ActContext = {
     tabId,
@@ -153,22 +193,8 @@ async function drive(runId: string, tabId: number): Promise<void> {
     stopped: false,
   };
 
-  try {
-    await ensureAttached(tabId);
-  } catch (err) {
-    await mutateActRun((r) => {
-      r.phase = 'error';
-      r.error = err instanceof Error ? err.message : 'could not attach the debugger';
-    });
-    return;
-  }
-
   // Replaying a workflow steers with its generalized steps; a free goal steers plainly.
-  let prompt = buildSteeringPrompt(run.goal);
-  if (run.workflowId) {
-    const spec = await loadWorkflow(run.workflowId);
-    if (spec) prompt = buildWorkflowRunPrompt(spec, run.goal);
-  }
+  const prompt = workflow ? buildWorkflowRunPrompt(workflow, run.goal) : buildSteeringPrompt(run.goal);
 
   const result = await runChatWithTools(prompt, buildActTools(ctx), {
     maxTurns: ACT_MAX_TURNS,

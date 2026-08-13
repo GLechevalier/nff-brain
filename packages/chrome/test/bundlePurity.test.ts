@@ -232,6 +232,7 @@ describe('MV3 service-worker discipline', () => {
     'src/actRun.ts',
     'src/cursorScript.ts',
     'src/snapshotScript.ts',
+    'src/agentTab.ts',
     // Record-and-automate (traceCapture.ts has the documented appendChain and is
     // asserted separately below).
     'src/standaloneTraceDistill.ts',

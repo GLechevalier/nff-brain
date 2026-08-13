@@ -312,6 +312,24 @@ export async function askChat(port: number, token: string, message: string, hist
   return body;
 }
 
+// ── web agent (paired mode) ─────────────────────────────────────────────────
+
+/**
+ * One brain step of the paired web agent: send the assembled prompt (steering +
+ * goal + action history + latest page snapshot), get back the raw claude -p text
+ * for the SW to parse into one JSON action. Same long timeout as chat — it waits
+ * out a full claude -p round trip.
+ */
+export async function postActStep(port: number, token: string, prompt: string): Promise<string> {
+  const body = (await call(port, '/v1/act/step', {
+    method: 'POST',
+    token,
+    timeoutMs: CHAT_TIMEOUT_MS,
+    body: JSON.stringify({ prompt }),
+  })) as { text?: unknown };
+  return typeof body.text === 'string' ? body.text : '';
+}
+
 /**
  * Confirm a port is OUR server before sending it a bearer token.
  *

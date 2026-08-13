@@ -70,8 +70,9 @@
 
     <section id="act-view" class="view hidden">
       <p class="muted small">
-        The web agent drives this tab with a real, visible cursor. It uses your BYOK API key. Chrome shows a
-        "debugging this browser" bar while it runs — that is the agent; close the bar or press Stop to end it.
+        The web agent opens its own tab and drives it with a real, visible cursor (it can't use this DevTools
+        tab — Chrome only allows one debugger per tab). It uses your BYOK API key. Chrome shows a "debugging
+        this browser" bar on that tab while it runs — that is the agent; close the bar or press Stop to end it.
       </p>
       <div class="row gap prompt-row">
         <textarea id="act-goal" class="input grow" rows="2" placeholder="Describe a task on the current tab — e.g. fill in the signup form and submit"></textarea>

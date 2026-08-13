@@ -26,6 +26,7 @@ import { AGENT_ADMIN_ROUTES } from './agentAdminRoutes.js';
 import { IMPORT_ROUTES } from './importRoutes.js';
 import { MCP_ROUTES } from './mcpRoutes.js';
 import { CHAT_ROUTES } from './chatRoutes.js';
+import { ACT_ROUTES } from './actRoutes.js';
 
 const PAIR_BODY_MAX = 8 * 1024;
 const CLIP_BODY_MAX = 64 * 1024;
@@ -516,4 +517,5 @@ export const ROUTES: Record<string, Route> = {
   ...IMPORT_ROUTES,
   ...MCP_ROUTES,
   ...CHAT_ROUTES,
+  ...ACT_ROUTES,
 };
