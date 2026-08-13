@@ -13,6 +13,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { chromium, type BrowserContext, type Page, type Worker } from 'playwright';
 
+// The evaluate() callbacks below execute inside the EXTENSION's realms (SW /
+// popup page), where chrome.* exists; this file itself runs in node. One any
+// declaration beats pulling @types/chrome into a package that is 99% node.
+declare const chrome: any;
+
 export interface BrowserHandle {
   context: BrowserContext;
   extensionId: string;

@@ -9,7 +9,8 @@
   "scripts": {
     "build": "npm run build -w @nff-brain/core && npm run build -w nff-brain && npm run build -w nff-brain-vscode && npm run build -w nff-brain-chrome",
     "test": "vitest run",
-    "typecheck": "tsc -p packages/core && tsc -p packages/cli && tsc -p packages/vscode && tsc -p packages/chrome"
+    "typecheck": "tsc -p packages/core && tsc -p packages/cli && tsc -p packages/vscode && tsc -p packages/chrome && tsc -p packages/evals",
+    "evals": "npm run evals -w @nff-brain/evals --"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

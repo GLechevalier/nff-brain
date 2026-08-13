@@ -34,21 +34,23 @@ enumerate or read other tabs.
 The product's core verb: right-click → "Remember this" on a selection, link, or
 page. Without it the extension has no capture mechanism.
 
-### `optional_permissions: debugger`
+### `debugger`
 
-Declared but NOT requested at install — the install dialog stays warning-free.
-It powers the optional web-agent "Act" feature: when the user types a task in
-the DevTools panel's Act tab and clicks Run, the extension requests this
-permission on that click (a user gesture) and attaches the Chrome DevTools
-Protocol to the one tab the user is looking at, to move a visible cursor, click,
-type, and scroll on their behalf toward the task they described. The agent uses
-the user's own bring-your-own-key AI provider; nothing is sent to us. While
+Required (Chrome forbids `debugger` in `optional_permissions`, so it cannot be
+requested at runtime — it must be declared here). It powers the web-agent "Act"
+feature: when the user types a task in the DevTools panel's Act tab and clicks
+Run, the extension attaches the Chrome DevTools Protocol to the one tab the user
+is looking at, to move a visible cursor, click, type, and scroll on their behalf
+toward the task they described. The extension NEVER attaches on its own — only
+after the user starts a run — and it attaches to just that one tab. The agent
+uses the user's own bring-your-own-key AI provider; nothing is sent to us. While
 attached, Chrome shows its standard "nff-brain is debugging this browser" bar —
 by design, so the user can always see the agent and stop it (the bar's Cancel
 detaches us and ends the run, as does the panel's Stop button). The extension
 never attaches to browser-internal pages, the Web Store, or `file://` URLs, and
 detaches as soon as the run ends. Passwords and payment fields are never read
 into what the model sees, and the agent is instructed never to solve CAPTCHAs.
+This is the one install-time permission warning the extension carries.
 
 ### `optional_host_permissions: http://127.0.0.1/*`
 

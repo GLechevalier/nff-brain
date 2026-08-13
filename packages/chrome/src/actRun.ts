@@ -56,7 +56,7 @@ async function loadWorkflow(workflowId: string): Promise<WorkflowSpec | null> {
 
 export async function startActionRun(goal: string, tabId: number, maxActions?: number, workflowId?: string): Promise<StartResult> {
   if (!goal.trim()) return { ok: false, error: 'enter a goal first' };
-  if (!(await hasDebuggerPermission())) return { ok: false, error: 'grant the debugger permission to let the agent act' };
+  if (!(await hasDebuggerPermission())) return { ok: false, error: 'the debugger permission is missing — remove and reload the extension' };
   if (workflowId && !(await loadWorkflow(workflowId))) return { ok: false, error: 'that workflow is no longer in your brain' };
 
   let url: string | undefined;

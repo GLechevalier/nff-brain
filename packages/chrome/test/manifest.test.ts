@@ -20,7 +20,7 @@ describe('manifest.json', () => {
     expect(manifest.manifest_version).toBe(3);
   });
 
-  it('requests EXACTLY the five warning-free permissions', () => {
+  it('requests EXACTLY the five warning-free permissions plus debugger', () => {
     // storage   — pairing token, capture flag, allowlist, activity buffer; all
     //             must survive service-worker death and browser restart.
     // alarms    — the health heartbeat; a setInterval dies with the worker.
@@ -30,22 +30,27 @@ describe('manifest.json', () => {
     //             script only ever reaches an origin the user granted through
     //             Chrome's own prompt at recorder-enable time. Warning-free by
     //             itself: the scary part is the host, and hosts stay optional.
-    // None of these shows an install-time warning. Adding one that does is the
-    // thing this test exists to stop.
+    // debugger  — REQUIRED (see next test): Chrome forbids `debugger` in
+    //             optional_permissions, so the CDP web agent can only work with
+    //             it declared here. This is the ONE install-time warning we
+    //             accept; adding any OTHER warning-bearing permission is the
+    //             thing this test exists to stop.
     expect(new Set(manifest.permissions)).toEqual(
-      new Set(['storage', 'alarms', 'activeTab', 'contextMenus', 'scripting']),
+      new Set(['storage', 'alarms', 'activeTab', 'contextMenus', 'scripting', 'debugger']),
     );
   });
 
-  it('requests the debugger permission ONLY as optional, granted at run time', () => {
-    // The CDP action engine (web agent) drives real trusted input via
-    // chrome.debugger. It is OPTIONAL, not required: the install dialog stays
-    // warning-free, and Chrome shows its own "…is debugging this browser"
-    // infobar (a feature — the user can always see and cancel the agent) only
-    // once the panel requests the grant on a user gesture. Adding a second
-    // optional permission here is a deliberate act with a store-justification
-    // edit attached (store/permission-justifications.md).
-    expect(manifest.optional_permissions).toEqual(['debugger']);
+  it('declares debugger as REQUIRED, never optional (Chrome forbids optional debugger)', () => {
+    // The CDP action engine drives real trusted input via chrome.debugger.
+    // Chrome does NOT allow `debugger` in optional_permissions —
+    // chrome.permissions.request(['debugger']) always fails — so it MUST be a
+    // required permission. That costs one install-time warning ("Access the
+    // page debugger backend") and makes Chrome show its "…is debugging this
+    // browser" infobar while the agent runs (a feature: the user can always see
+    // and cancel it via the bar). For an unpacked load the permission is
+    // auto-granted, so no runtime prompt is involved at all.
+    expect(manifest.optional_permissions).toBeUndefined();
+    expect(manifest.permissions).toContain('debugger');
   });
 
   it('declares NO host_permissions', () => {

@@ -631,16 +631,6 @@ async function loadWorkflows(): Promise<void> {
 
 async function runWorkflow(workflowId: string, goal: string): Promise<void> {
   showFieldError('act-error', null);
-  let granted = false;
-  try {
-    granted = await chrome.permissions.request({ permissions: ['debugger'] });
-  } catch {
-    granted = false;
-  }
-  if (!granted) {
-    showFieldError('act-error', 'The debugger permission is needed to replay a workflow.');
-    return;
-  }
   const budget = Number(($('act-budget') as HTMLInputElement).value) || undefined;
   const tabId = chrome.devtools.inspectedWindow.tabId;
   const reply = await send({ type: 'actStart', goal, tabId, maxActions: budget, workflowId });
@@ -659,18 +649,9 @@ async function startActRun(): Promise<void> {
     showFieldError('act-error', 'Describe a task first.');
     return;
   }
-  // chrome.permissions.request needs a user gesture — this click is it (same
-  // split as toggleAdapter). A denied grant leaves the agent unable to act.
-  let granted = false;
-  try {
-    granted = await chrome.permissions.request({ permissions: ['debugger'] });
-  } catch {
-    granted = false;
-  }
-  if (!granted) {
-    showFieldError('act-error', 'The debugger permission is needed to drive the page. The agent stays off.');
-    return;
-  }
+  // `debugger` is a REQUIRED manifest permission (Chrome forbids it as optional),
+  // so it is already granted — no runtime request. The SW re-checks it and
+  // reports clearly if a packed install somehow lacks it.
   const budget = Number(($('act-budget') as HTMLInputElement).value) || undefined;
   const tabId = chrome.devtools.inspectedWindow.tabId;
   const reply = await send({ type: 'actStart', goal, tabId, maxActions: budget });
