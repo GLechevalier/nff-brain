@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isClipsMapResponse,
+  isGraphResponse,
   isNodesResponse,
   isRetractResponse,
   isSearchResponse,
@@ -41,5 +42,13 @@ describe('panel + feedback-loop wire guards', () => {
   it('isRetractResponse demands a removed array', () => {
     expect(isRetractResponse({ ok: true })).toBe(false);
     expect(isRetractResponse({ ok: true, removed: [] })).toBe(true);
+  });
+
+  it('isGraphResponse demands numeric geometry on every node', () => {
+    expect(isGraphResponse({ ok: true })).toBe(false);
+    expect(isGraphResponse({ ok: true, nodes: [{ id: 'a' }], edges: [] })).toBe(false);
+    expect(isGraphResponse({ ok: true, nodes: [{ id: 'a', x: 0, y: 0 }], edges: [{ from: 'a', to: 'b' }] })).toBe(true);
+    expect(isGraphResponse({ ok: true, nodes: [], edges: [{ from: 'a' }] })).toBe(false);
+    expect(isGraphResponse({ ok: true, nodes: [], edges: [] })).toBe(true);
   });
 });

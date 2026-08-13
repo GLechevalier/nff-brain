@@ -70,6 +70,11 @@ export function removeMcpServer(servers: readonly McpServerConfig[], id: string)
   return servers.filter((s) => s.id !== id);
 }
 
+/** Browser-mutable (item 7's MCP tab): flips an already-registered server's enabled flag. Never touches url/headers. */
+export function setMcpServerEnabled(servers: readonly McpServerConfig[], id: string, enabled: boolean): McpServerConfig[] {
+  return servers.map((s) => (s.id === id ? { ...s, enabled } : s));
+}
+
 export function findMcpServer(servers: readonly McpServerConfig[], id: string): McpServerConfig | undefined {
   return servers.find((s) => s.id === id);
 }

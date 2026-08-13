@@ -3,12 +3,15 @@
 // too, and bundlePurity.test.ts asserts no other origin appears in the bundle.
 
 import {
+  CHAT_TIMEOUT_MS,
   HOST,
   REQUEST_TIMEOUT_MS,
   isAgentGoalResponse,
   isAgentNextActionResponse,
   isAgentStatusResponse,
+  isChatResponse,
   isClipsMapResponse,
+  isGraphResponse,
   isHelloResponse,
   isMcpServersResponse,
   isMcpToolsResponse,
@@ -23,8 +26,11 @@ import type {
   AgentGoalResponse,
   AgentNextActionResponse,
   AgentStatusResponse,
+  ChatResponse,
+  ChatTurn,
   ClipResponse,
   ClipsMapResponse,
+  GraphResponse,
   HelloResponse,
   McpServersResponse,
   McpToolsResponse,
@@ -55,8 +61,12 @@ function url(port: number, path: string): string {
   return `http://${HOST}:${port}${path}`;
 }
 
-async function call(port: number, path: string, init: RequestInit & { token?: string } = {}): Promise<unknown> {
-  const { token, ...rest } = init;
+async function call(
+  port: number,
+  path: string,
+  init: RequestInit & { token?: string; timeoutMs?: number } = {},
+): Promise<unknown> {
+  const { token, timeoutMs, ...rest } = init;
   let res: Response;
   try {
     res = await fetch(url(port, path), {
@@ -68,7 +78,10 @@ async function call(port: number, path: string, init: RequestInit & { token?: st
       },
       // A hung fetch in a service worker is a bad failure mode: it keeps the
       // worker alive burning nothing useful and it makes the popup hang.
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      // Every call site gets the same short ceiling EXCEPT chat, which
+      // genuinely needs to wait out a claude -p round trip (askChat passes
+      // its own longer timeoutMs) — see CHAT_TIMEOUT_MS in protocol.ts.
+      signal: AbortSignal.timeout(timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
     const name = (err as Error)?.name;
@@ -127,6 +140,13 @@ export async function getNodes(port: number, token: string, limit?: number): Pro
   return body;
 }
 
+/** The full node/edge set with geometry, for the panel's Graph tab canvas. */
+export async function getGraph(port: number, token: string): Promise<GraphResponse> {
+  const body = await call(port, '/v1/graph', { token });
+  if (!isGraphResponse(body)) throw new HttpError(0, 'protocol', 'unexpected graph response');
+  return body;
+}
+
 /** Ranked retrieval — powers both the panel's Search tab and its Ask tab. */
 export async function searchBrain(port: number, token: string, q: string, limit?: number): Promise<SearchResponse> {
   const qs = `?q=${encodeURIComponent(q)}${limit ? `&limit=${encodeURIComponent(String(limit))}` : ''}`;
@@ -155,7 +175,7 @@ export async function retract(port: number, token: string, nodeIds: string[]): P
 export async function submitAgentGoal(
   port: number,
   token: string,
-  params: { goal: string; maxActions: number; listTarget: WebAgentListTarget | null },
+  params: { goal: string; maxActions: number; listTarget: WebAgentListTarget | null; autoApprove: boolean },
 ): Promise<AgentGoalResponse> {
   const body = await call(port, '/v1/agent/goal', { method: 'POST', token, body: JSON.stringify(params) });
   if (!isAgentGoalResponse(body)) throw new HttpError(0, 'protocol', 'unexpected goal response');
@@ -225,6 +245,38 @@ export async function getMcpServers(port: number, token: string): Promise<McpSer
 export async function getMcpTools(port: number, token: string, serverId: string): Promise<McpToolsResponse> {
   const body = await call(port, `/v1/mcp/tools?server=${encodeURIComponent(serverId)}`, { token });
   if (!isMcpToolsResponse(body)) throw new HttpError(0, 'protocol', 'unexpected mcp tools response');
+  return body;
+}
+
+/** Browser-mutable: enable/disable an already-registered server. Registering a new one stays CLI-only. */
+export async function setMcpServerEnabled(
+  port: number,
+  token: string,
+  id: string,
+  enabled: boolean,
+): Promise<McpServersResponse> {
+  const body = await call(port, '/v1/mcp/servers/enable', { method: 'POST', token, body: JSON.stringify({ id, enabled }) });
+  if (!isMcpServersResponse(body)) throw new HttpError(0, 'protocol', 'unexpected mcp servers response');
+  return body;
+}
+
+export async function removeMcpServer(port: number, token: string, id: string): Promise<McpServersResponse> {
+  const body = await call(port, '/v1/mcp/servers/remove', { method: 'POST', token, body: JSON.stringify({ id }) });
+  if (!isMcpServersResponse(body)) throw new HttpError(0, 'protocol', 'unexpected mcp servers response');
+  return body;
+}
+
+// ── Brain tab chat (Manual mode) ────────────────────────────────────────────
+
+/** The one call site with a longer-than-usual timeout — a chat reply genuinely needs to wait out claude -p. */
+export async function askChat(port: number, token: string, message: string, history: ChatTurn[]): Promise<ChatResponse> {
+  const body = await call(port, '/v1/chat', {
+    method: 'POST',
+    token,
+    timeoutMs: CHAT_TIMEOUT_MS,
+    body: JSON.stringify({ message, history }),
+  });
+  if (!isChatResponse(body)) throw new HttpError(0, 'protocol', 'unexpected chat response');
   return body;
 }
 

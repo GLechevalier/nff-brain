@@ -62,6 +62,7 @@ const agentGoal: Handler = async (req, res, ctx) => {
     goal?: unknown;
     maxActions?: unknown;
     listTarget?: unknown;
+    autoApprove?: unknown;
   };
   const goal = typeof body?.goal === 'string' ? body.goal.trim().slice(0, AGENT_GOAL_MAX) : '';
   if (!goal) {
@@ -80,8 +81,9 @@ const agentGoal: Handler = async (req, res, ctx) => {
       ? body.maxActions
       : WEB_AGENT_MAX_ACTIONS_CEILING;
   const listTarget = parseListTarget(body.listTarget);
+  const autoApprove = body.autoApprove === true;
 
-  const run = await startPlanning(goal, ctx.client!.id, { maxActions, listTarget });
+  const run = await startPlanning(goal, ctx.client!.id, { maxActions, listTarget, autoApprove });
   sendJson(res, 201, { ok: true, runId: run.id }, ctx.cors);
 };
 

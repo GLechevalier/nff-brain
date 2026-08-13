@@ -348,3 +348,34 @@ describe('POST /v1/agent/stop', () => {
   });
 });
 
+describe('auto mode — autoApprove skips the review step', () => {
+  it('goes straight from planning to running once the plan lands, with no approve call', async () => {
+    const token = await pairAs(ORIGIN_A);
+    const submitted = await request(port, {
+      path: '/v1/agent/goal',
+      method: 'POST',
+      headers: auth(ORIGIN_A, token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ goal: 'find robotics engineers', maxActions: 1, listTarget: null, autoApprove: true }),
+    });
+    expect(submitted.status).toBe(201);
+
+    const run = await waitForPhase(ORIGIN_A, token, (p) => p !== 'planning' && p !== 'awaiting_approval');
+    expect(run.phase).toBe('running');
+    expect(run.autoApprove).toBe(true);
+    expect(run.plan.steps.length).toBeGreaterThan(0);
+
+    // The pacing gate is set exactly like an explicit approve does — an
+    // action is grantable immediately, not stuck behind a stale timestamp.
+    const next = await request(port, { path: '/v1/agent/next-action', headers: auth(ORIGIN_A, token) });
+    expect(next.json<{ action: unknown }>().action).not.toBeNull();
+  });
+
+  it('omitting autoApprove still requires an explicit approve, as before', async () => {
+    const token = await pairAs(ORIGIN_A);
+    await submitGoal(ORIGIN_A, token);
+    const run = await waitForPhase(ORIGIN_A, token, (p) => p !== 'planning');
+    expect(run.phase).toBe('awaiting_approval');
+    expect(run.autoApprove).toBe(false);
+  });
+});
+

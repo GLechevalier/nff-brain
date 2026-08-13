@@ -93,10 +93,6 @@ async function resolveCurrentHost(): Promise<void> {
 }
 
 function wire(): void {
-  $('open-agent').addEventListener('click', () => {
-    void chrome.tabs.create({ url: chrome.runtime.getURL('agent.html') });
-  });
-
   $('retry').addEventListener('click', () => void dispatch({ type: 'probeNow' }));
 
   $('connect').addEventListener('click', () => {

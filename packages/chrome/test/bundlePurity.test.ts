@@ -16,7 +16,7 @@ const root = path.resolve(here, '..');
 
 function sources(): { file: string; rel: string; text: string }[] {
   const out: { file: string; rel: string; text: string }[] = [];
-  for (const dir of ['src', 'popup', 'devtools', 'content', 'agent']) {
+  for (const dir of ['src', 'popup', 'devtools', 'content']) {
     const abs = path.join(root, dir);
     if (!fs.existsSync(abs)) continue;
     for (const name of fs.readdirSync(abs)) {
@@ -49,11 +49,20 @@ function code(text: string): string {
  */
 const RECORDER_SITE_URLS = new Set(['https://github.com', 'https://www.linkedin.com']);
 
+/**
+ * XML namespace identifiers are opaque spec-mandated strings, never fetched —
+ * the graph canvas's document.createElementNS needs the literal SVG one. The
+ * regex below stops at the first '/' after the host, same as it does for
+ * every other URL here, so this is the host-only prefix, not the full URI.
+ * Exact-match only, same discipline as RECORDER_SITE_URLS above.
+ */
+const NAMESPACE_URIS = new Set(['http://www.w3.org']);
+
 /** Absolute URL literals with a concrete host. `http://${HOST}` is fine. */
 function offDeviceUrls(text: string): string[] {
   return [...text.matchAll(/https?:\/\/[A-Za-z0-9.-]+/g)]
     .map((m) => m[0])
-    .filter((u) => !u.startsWith('http://127.0.0.1') && !RECORDER_SITE_URLS.has(u));
+    .filter((u) => !u.startsWith('http://127.0.0.1') && !RECORDER_SITE_URLS.has(u) && !NAMESPACE_URIS.has(u));
 }
 
 describe('source purity', () => {
@@ -244,9 +253,6 @@ describe('built artifacts', () => {
       'panel.js',
       'panel.html',
       'panel.css',
-      'agent.js',
-      'agent.html',
-      'agent.css',
       'rec-github.js',
       'rec-linkedin.js',
       'rec-linkedin-agent.js',
@@ -257,7 +263,7 @@ describe('built artifacts', () => {
 
   it('contains no off-device URL and no framework runtime', () => {
     if (!fs.existsSync(dist)) return;
-    for (const name of ['sw.js', 'popup.js', 'devtools.js', 'panel.js', 'agent.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js']) {
+    for (const name of ['sw.js', 'popup.js', 'devtools.js', 'panel.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js']) {
       const text = read(name);
       // This is what actually ships — it catches an egress URL arriving through
       // a dependency rather than through our own source.

@@ -84,6 +84,7 @@ function baseRun(over: Partial<WebAgentRun> = {}): WebAgentRun {
     phase: 'running',
     clientId: 'cl_1',
     goal: 'find robotics engineers',
+    autoApprove: false,
     plan: {
       goal: 'find robotics engineers',
       site: 'linkedin',

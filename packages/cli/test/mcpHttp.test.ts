@@ -230,3 +230,68 @@ describe('POST /v1/mcp/call', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('POST /v1/mcp/servers/enable', () => {
+  it('flips enabled without ever touching url/headers', async () => {
+    const token = await pair();
+    const id = registerMockServer();
+    const res = await request(port, {
+      path: '/v1/mcp/servers/enable',
+      method: 'POST',
+      headers: auth(token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ id, enabled: false }),
+    });
+    expect(res.status).toBe(200);
+    const servers = res.json<{ servers: Array<{ id: string; enabled: boolean }> }>().servers;
+    expect(servers.find((s) => s.id === id)?.enabled).toBe(false);
+    expect(JSON.stringify(res.json())).not.toContain('sekrit');
+
+    const reEnabled = await request(port, {
+      path: '/v1/mcp/servers/enable',
+      method: 'POST',
+      headers: auth(token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ id, enabled: true }),
+    });
+    expect(reEnabled.json<{ servers: Array<{ id: string; enabled: boolean }> }>().servers.find((s) => s.id === id)?.enabled).toBe(true);
+  });
+
+  it('400s an unknown server id', async () => {
+    const token = await pair();
+    const res = await request(port, {
+      path: '/v1/mcp/servers/enable',
+      method: 'POST',
+      headers: auth(token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ id: 'no_such_server', enabled: false }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /v1/mcp/servers/remove', () => {
+  it('removes an already-registered server', async () => {
+    const token = await pair();
+    const id = registerMockServer();
+    const res = await request(port, {
+      path: '/v1/mcp/servers/remove',
+      method: 'POST',
+      headers: auth(token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ id }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.json<{ servers: unknown[] }>().servers).toEqual([]);
+
+    const after = await request(port, { path: '/v1/mcp/servers', headers: auth(token) });
+    expect(after.json<{ servers: unknown[] }>().servers).toEqual([]);
+  });
+
+  it('400s an unknown server id', async () => {
+    const token = await pair();
+    const res = await request(port, {
+      path: '/v1/mcp/servers/remove',
+      method: 'POST',
+      headers: auth(token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ id: 'no_such_server' }),
+    });
+    expect(res.status).toBe(400);
+  });
+});

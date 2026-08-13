@@ -176,6 +176,42 @@ export function isSearchResponse(v: unknown): v is SearchResponse {
   );
 }
 
+// ── Graph tab canvas — the full node/edge set with geometry ──────────────────
+
+export interface GraphNode {
+  id: string;
+  title: string;
+  category: string;
+  origin: string;
+  x: number;
+  y: number;
+  size: number;
+  color: string;
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+  strength: number;
+}
+
+export interface GraphResponse {
+  ok: true;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export function isGraphResponse(v: unknown): v is GraphResponse {
+  return (
+    isObj(v) &&
+    v.ok === true &&
+    Array.isArray(v.nodes) &&
+    v.nodes.every((n) => isObj(n) && typeof n.id === 'string' && typeof n.x === 'number' && typeof n.y === 'number') &&
+    Array.isArray(v.edges) &&
+    v.edges.every((e) => isObj(e) && typeof e.from === 'string' && typeof e.to === 'string')
+  );
+}
+
 export function isClipsMapResponse(v: unknown): v is ClipsMapResponse {
   return (
     isObj(v) &&
@@ -264,6 +300,8 @@ export interface WebAgentRun {
   phase: RunPhase;
   clientId: string;
   goal: string;
+  /** Auto mode: the plan was (or will be) approved automatically, no review click. */
+  autoApprove: boolean;
   plan: WebAgentPlan | null;
   listTarget: WebAgentListTarget | null;
   cursor: number;
@@ -369,6 +407,41 @@ export function isMcpToolsResponse(v: unknown): v is McpToolsResponse {
   );
 }
 
+// ── Brain tab chat (Manual mode) — extension → nff-brain serve ───────────────
+//
+// Unlike every other route, a chat exchange genuinely needs to wait out a
+// full claude -p round trip — CHAT_TIMEOUT_MS is what client.ts's askChat()
+// passes as call()'s timeoutMs override instead of the blanket
+// REQUEST_TIMEOUT_MS every other call site uses.
+
+export const CHAT_TIMEOUT_MS = 45_000;
+
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+export interface ChatSource {
+  id: string;
+  title: string;
+}
+
+export interface ChatResponse {
+  ok: true;
+  answer: string;
+  sources: ChatSource[];
+}
+
+export function isChatResponse(v: unknown): v is ChatResponse {
+  return (
+    isObj(v) &&
+    v.ok === true &&
+    typeof v.answer === 'string' &&
+    Array.isArray(v.sources) &&
+    v.sources.every((s: unknown) => isObj(s) && typeof s.id === 'string' && typeof s.title === 'string')
+  );
+}
+
 // ── SW ↔ content script (LinkedIn agent adapter) ─────────────────────────────
 //
 // A THIRD, narrower channel than the two above: only two verbs ever cross it,
@@ -399,27 +472,35 @@ export type PopupToSw =
   // panel realm (same discipline as PublicState omitting it).
   | { type: 'getNodes'; limit?: number }
   | { type: 'searchBrain'; q: string; limit?: number }
+  | { type: 'getGraph' }
   // Recorders. The popup runs chrome.permissions.request itself (a user
   // gesture is required there); this message only flips state + registration.
   | { type: 'setRecorderEnabled'; id: string; enabled: boolean }
-  // Web agent (item 7) — the agent page speaks this same channel (AgentPageToSw
-  // below), so the token stays SW-side exactly like getNodes/searchBrain above.
-  // Enabling the LinkedIn adapter runs chrome.permissions.request in the
-  // CALLING page (popup or agent page — a user gesture is required there);
-  // this message only flips state + registration, same split as recorders.
+  // Web agent (item 7) — lives in the DevTools panel (PanelToSw below), so the
+  // token stays SW-side exactly like getNodes/searchBrain above. Enabling the
+  // LinkedIn adapter runs chrome.permissions.request in the CALLING page
+  // (popup or panel — a user gesture is required there); this message only
+  // flips state + registration, same split as recorders.
   | { type: 'setAgentAdapterEnabled'; id: string; enabled: boolean }
-  | { type: 'agentSubmitGoal'; goal: string; maxActions: number; listTarget: WebAgentListTarget | null }
+  | { type: 'agentSubmitGoal'; goal: string; maxActions: number; listTarget: WebAgentListTarget | null; autoApprove: boolean }
   | { type: 'agentApprovePlan'; runId: string }
   | { type: 'agentRejectPlan'; runId: string }
   | { type: 'agentStop'; runId: string }
   | { type: 'getAgentStatus' }
+  // Manual-mode chat — the one route that costs a token per message,
+  // deliberately opt-in (Manual is a mode the user picks, not the default
+  // reply path for every prompt).
+  | { type: 'chatAsk'; message: string; history: ChatTurn[] }
+  // MCP tab: read-only listing already existed (getMcpServers/getMcpTools);
+  // these two are the new browser-mutable surface — enable/disable/remove an
+  // ALREADY-registered server. Registering a NEW one stays CLI-only.
   | { type: 'getMcpServers' }
-  | { type: 'getMcpTools'; server: string };
+  | { type: 'getMcpTools'; server: string }
+  | { type: 'setMcpServerEnabled'; id: string; enabled: boolean }
+  | { type: 'removeMcpServer'; id: string };
 
-/** The panel speaks the same channel as the popup. */
+/** The panel speaks the same channel as the popup — including the item-7 Agent tab. */
 export type PanelToSw = PopupToSw;
-/** So does the web agent page. */
-export type AgentPageToSw = PopupToSw;
 
 /**
  * Everything the popup renders. Deliberately NOT StoredState: the bearer token
@@ -464,9 +545,10 @@ export type SwToPopup =
   | { type: 'error'; message: string }
   | { type: 'nodes'; data: NodesResponse }
   | { type: 'search'; data: SearchResponse }
+  | { type: 'graph'; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: 'agentStatus'; run: WebAgentRun | null }
+  | { type: 'chatAnswer'; answer: string; sources: ChatSource[] }
   | { type: 'mcpServers'; servers: McpServerSummary[] }
   | { type: 'mcpTools'; tools: McpToolDef[] };
 
 export type SwToPanel = SwToPopup;
-export type SwToAgentPage = SwToPopup;

@@ -47,3 +47,4 @@ export * from './webAgentFilter.js';
 export * from './webAgentListWrite.js';
 export * from './mcpClient.js';
 export * from './mcpServers.js';
+export * from './chatPrompt.js';

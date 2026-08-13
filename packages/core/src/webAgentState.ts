@@ -124,6 +124,7 @@ function cleanRun(r: WebAgentRun): WebAgentRun {
   const pendingConnects = Array.isArray(r.pendingConnects) ? r.pendingConnects.filter(isCardResult) : [];
   return {
     ...r,
+    autoApprove: r.autoApprove === true,
     listTarget: r.listTarget ?? null,
     pendingConnects,
     pendingConnectsStepId: pendingConnects.length > 0 && typeof r.pendingConnectsStepId === 'string' ? r.pendingConnectsStepId : null,

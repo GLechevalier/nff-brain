@@ -19,6 +19,7 @@ function run(over: Partial<WebAgentRun> = {}): WebAgentRun {
     phase: 'running',
     clientId: 'cl_1',
     goal: 'find robotics engineers',
+    autoApprove: false,
     plan: null,
     listTarget: null,
     cursor: 0,

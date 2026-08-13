@@ -23,6 +23,7 @@ import { readJsonBody, sendError, sendJson } from './http.js';
 import type { ServeState } from './state.js';
 import { AGENT_ROUTES } from './agentRoutes.js';
 import { MCP_ROUTES } from './mcpRoutes.js';
+import { CHAT_ROUTES } from './chatRoutes.js';
 
 const PAIR_BODY_MAX = 8 * 1024;
 const CLIP_BODY_MAX = 64 * 1024;
@@ -281,6 +282,36 @@ const nodes: Handler = (req, res, ctx) => {
 };
 
 /**
+ * The full node/edge set with GEOMETRY — for the panel's Graph tab canvas.
+ * Deliberately not capped like `nodes`' `recent` list: a graph with a hole in
+ * it is worse than a slightly bigger payload for what's realistically a few
+ * hundred nodes. Positions/size/color are whatever `nff-brain layout` last
+ * computed and stored — this route only ever reads them, never computes.
+ */
+const graph: Handler = (_req, res, ctx) => {
+  const merged = ctx.state.mergedBrain();
+  sendJson(
+    res,
+    200,
+    {
+      ok: true,
+      nodes: merged.nodes.map((n) => ({
+        id: n.id,
+        title: n.title,
+        category: n.category,
+        origin: n.origin,
+        x: n.x,
+        y: n.y,
+        size: n.size,
+        color: n.color,
+      })),
+      edges: merged.edges.map((e) => ({ from: e.from, to: e.to, strength: e.strength })),
+    },
+    ctx.cors,
+  );
+};
+
+/**
  * Ranked retrieval for the panel's Search tab AND its Ask tab (item 5 is this
  * same response rendered conversationally — retrieval-only, no LLM). Lexical
  * ranking only: the semantic runtime (model download, embedding cache) stays
@@ -433,10 +464,12 @@ export const ROUTES: Record<string, Route> = {
   '/v1/clips/map': { method: 'GET', auth: 'client', origin: 'paired', handler: clipsMap },
   '/v1/retract': { method: 'POST', auth: 'client', origin: 'paired', handler: retract },
   '/v1/nodes': { method: 'GET', auth: 'client', origin: 'paired', handler: nodes },
+  '/v1/graph': { method: 'GET', auth: 'client', origin: 'paired', handler: graph },
   '/v1/search': { method: 'GET', auth: 'client', origin: 'paired', handler: search },
   '/v1/admin/pair-window': { method: 'POST', auth: 'admin', origin: 'absent', handler: adminPairWindow },
   '/v1/admin/clients': { method: 'GET', auth: 'admin', origin: 'absent', handler: adminClients },
   '/v1/admin/revoke': { method: 'POST', auth: 'admin', origin: 'absent', handler: adminRevoke },
   ...AGENT_ROUTES,
   ...MCP_ROUTES,
+  ...CHAT_ROUTES,
 };

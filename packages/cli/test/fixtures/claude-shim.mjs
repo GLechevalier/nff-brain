@@ -106,6 +106,10 @@ process.stdin.on('end', () => {
     // web agent list-write: map whatever name was read straight through.
     const m = /"name":"([^"]*)"/.exec(prompt);
     process.stdout.write(JSON.stringify({ args: { name: m?.[1] ?? 'Unknown' } }));
+  } else if (prompt.includes('brain chat assistant')) {
+    // chat: plain prose, deliberately NOT JSON — echoes back a marker the
+    // route test can assert on without depending on exact wording.
+    process.stdout.write('Here is what your notes say, in plain prose: loopback only for the OAuth callback url.');
   } else if (prompt.includes('graph explainer')) {
     // ingest-graphify: batched intent explanations keyed by brain node id
     process.stdout.write(

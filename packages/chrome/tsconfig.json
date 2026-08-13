@@ -16,7 +16,6 @@
     "popup/**/*.ts",
     "devtools/**/*.ts",
     "content/**/*.ts",
-    "agent/**/*.ts",
     "test/**/*.ts",
     "build.mjs",
     "zip.mjs"

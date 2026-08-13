@@ -4,7 +4,15 @@
 // registered and CALL an already-registered tool. `headers` (where a bearer
 // token or an X-Admin-Data-Secret lives) is never echoed back.
 
-import { callMcpTool, listMcpTools, loadMcpServers, type McpToolDef } from '@nff-brain/core';
+import {
+  callMcpTool,
+  listMcpTools,
+  loadMcpServers,
+  removeMcpServer,
+  saveMcpServers,
+  setMcpServerEnabled,
+  type McpToolDef,
+} from '@nff-brain/core';
 import { readJsonBody, sendError, sendJson } from './http.js';
 import type { Handler, Route } from './routes.js';
 
@@ -62,8 +70,44 @@ const mcpCall: Handler = async (req, res, ctx) => {
   sendJson(res, 200, { ok: true, result: result.content }, ctx.cors);
 };
 
+const MCP_MUTATE_BODY_MAX = 1 * 1024;
+
+/**
+ * Browser-mutable (the MCP tab): enable/disable an ALREADY-registered server.
+ * Deliberately narrow — this never touches url/headers, so a compromised or
+ * malicious page can silence or resume a server, never plant credentials.
+ * Registering a NEW server stays CLI-only (`nff-brain mcp add`).
+ */
+const mcpServersEnable: Handler = async (req, res, ctx) => {
+  const body = (await readJsonBody(req, MCP_MUTATE_BODY_MAX)) as { id?: unknown; enabled?: unknown };
+  const id = typeof body?.id === 'string' ? body.id : '';
+  const servers = loadMcpServers();
+  if (!id || !servers.some((s) => s.id === id)) {
+    sendError(res, 400, 'bad_request', 'unknown server id', ctx.cors);
+    return;
+  }
+  const next = setMcpServerEnabled(servers, id, body.enabled === true);
+  saveMcpServers(next);
+  sendJson(res, 200, { ok: true, servers: next.map((s) => ({ id: s.id, name: s.name, enabled: s.enabled })) }, ctx.cors);
+};
+
+const mcpServersRemove: Handler = async (req, res, ctx) => {
+  const body = (await readJsonBody(req, MCP_MUTATE_BODY_MAX)) as { id?: unknown };
+  const id = typeof body?.id === 'string' ? body.id : '';
+  const servers = loadMcpServers();
+  if (!id || !servers.some((s) => s.id === id)) {
+    sendError(res, 400, 'bad_request', 'unknown server id', ctx.cors);
+    return;
+  }
+  const next = removeMcpServer(servers, id);
+  saveMcpServers(next);
+  sendJson(res, 200, { ok: true, servers: next.map((s) => ({ id: s.id, name: s.name, enabled: s.enabled })) }, ctx.cors);
+};
+
 export const MCP_ROUTES: Record<string, Route> = {
   '/v1/mcp/servers': { method: 'GET', auth: 'client', origin: 'paired', handler: mcpServersRoute },
+  '/v1/mcp/servers/enable': { method: 'POST', auth: 'client', origin: 'paired', handler: mcpServersEnable },
+  '/v1/mcp/servers/remove': { method: 'POST', auth: 'client', origin: 'paired', handler: mcpServersRemove },
   '/v1/mcp/tools': { method: 'GET', auth: 'client', origin: 'paired', handler: mcpTools },
   '/v1/mcp/call': { method: 'POST', auth: 'client', origin: 'paired', handler: mcpCall },
 };

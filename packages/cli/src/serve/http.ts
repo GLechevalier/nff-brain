@@ -18,7 +18,8 @@ export type ErrorCode =
   | 'pairing_closed'
   | 'bad_code'
   | 'run_active'
-  | 'mcp_error';
+  | 'mcp_error'
+  | 'chat_error';
 
 const BASE_HEADERS: Record<string, string> = {
   'content-type': 'application/json; charset=utf-8',

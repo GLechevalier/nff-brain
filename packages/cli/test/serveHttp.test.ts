@@ -693,4 +693,40 @@ describe('DevTools panel routes (/v1/nodes + /v1/search)', () => {
     expect(body.workspace.nodes).toBe(0);
     expect(body.merged.nodes).toBe(2); // the global side still serves
   });
+
+  it('graph: returns every node with its stored geometry, plus edges — no cap like /v1/nodes recent', async () => {
+    const token = await pair();
+    seedPanelBrains();
+    const res = await request(port, { path: '/v1/graph', headers: auth(token) });
+    expect(res.status).toBe(200);
+    const body = res.json<any>();
+    expect(body.nodes).toHaveLength(4); // p×3 + g×2, 'shared' counted once, same dedupe as /v1/nodes
+    for (const n of body.nodes) {
+      expect(typeof n.x).toBe('number');
+      expect(typeof n.y).toBe('number');
+      expect(typeof n.size).toBe('number');
+      expect(typeof n.color).toBe('string');
+    }
+    const ids = body.nodes.map((n: any) => n.id);
+    expect(ids).toContain('docker-dns-wedge');
+    expect(ids).toContain('shared');
+    const edgeIds = body.edges.map((e: any) => `${e.from}->${e.to}`);
+    expect(edgeIds).toContain('docker-dns-wedge->compose-env');
+  });
+
+  it('graph demands auth + the paired origin like every client route', async () => {
+    const token = await pair();
+    expect((await request(port, { path: '/v1/graph', headers: { origin: ORIGIN } })).status).toBe(401);
+    expect((await request(port, { path: '/v1/graph', headers: auth(token, { origin: OTHER_ORIGIN }) })).status).toBe(403);
+  });
+
+  it('graph: a corrupt project brain degrades to global-only data, never a 500', async () => {
+    const token = await pair();
+    seedPanelBrains();
+    fs.writeFileSync(projectBrain, '{ definitely not json');
+    const res = await request(port, { path: '/v1/graph', headers: auth(token) });
+    expect(res.status).toBe(200);
+    const body = res.json<any>();
+    expect(body.nodes).toHaveLength(2); // the global side still serves
+  });
 });

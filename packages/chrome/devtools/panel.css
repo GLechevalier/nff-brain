@@ -22,6 +22,7 @@ body {
 .muted { color: #888; }
 .small { font-size: 11px; }
 .push { margin-left: auto; }
+.grow { flex: 1; min-width: 0; }
 .ellipsis { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hidden { display: none !important; }
 
@@ -60,8 +61,9 @@ body {
   font: inherit;
 }
 .input:focus { outline: none; border-color: #00ffcc; }
-
-#results-label { margin: 10px 0 4px; }
+textarea.input, select.input { font: inherit; }
+textarea.input { resize: vertical; }
+.input.narrow { width: 80px; flex: none; }
 
 .list { list-style: none; }
 .list li {
@@ -86,11 +88,153 @@ body {
 .hit-excerpt { color: #aaa; margin-top: 2px; }
 .hit-related { color: #777; font-size: 11px; margin-top: 2px; }
 
-.transcript { margin-bottom: 10px; }
-.msg-q {
-  color: #ddd; font-weight: 600;
-  padding: 6px 0 2px;
+.row { display: flex; align-items: center; gap: 6px; }
+.row.gap { margin-top: 6px; }
+.strong { font-weight: 700; color: #ddd; }
+.label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  color: #888;
 }
-.msg-a { margin-bottom: 8px; }
-.msg-a .lead { color: #aaa; margin-bottom: 4px; }
-.empty-answer { color: #888; font-style: italic; }
+.error { color: #fca5a5; }
+
+.panel {
+  padding: 10px 0;
+  border-bottom: 1px solid #333;
+}
+.panel:last-of-type { border-bottom: 0; }
+
+.btn {
+  background: #2d2d2d;
+  color: #ddd;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) { background: #383838; }
+.btn:disabled { color: #666; cursor: default; }
+.btn.primary { border-color: #00ffcc; color: #00ffcc; }
+.btn.danger { border-color: #f87171; color: #fca5a5; }
+.btn.wide { display: block; width: 100%; margin-top: 6px; text-align: left; }
+.btn.small { padding: 2px 8px; font-size: 11px; }
+
+/* ── Brain tab: mode switch ──────────────────────────────────────────────── */
+
+.mode-switch {
+  border: 1px solid #444;
+  border-radius: 4px;
+  overflow: hidden;
+  width: fit-content;
+  margin-top: 8px !important; /* overrides .row.gap's generic margin */
+}
+.mode-btn {
+  background: #2d2d2d;
+  color: #888;
+  border: 0;
+  border-right: 1px solid #444;
+  padding: 4px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.mode-btn:last-child { border-right: 0; }
+.mode-btn.active { background: #00332e; color: #00ffcc; }
+
+/* ── Brain tab: transcript ───────────────────────────────────────────────── */
+
+.transcript {
+  margin: 10px 0;
+  max-height: 420px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.entry { border-radius: 6px; padding: 8px 10px; }
+
+.entry-user {
+  background: #1c2f2c;
+  border: 1px solid #22443c;
+  align-self: flex-end;
+  max-width: 85%;
+}
+
+.entry-answer { background: #242424; border: 1px solid #333; }
+.entry-answer .answer-text { white-space: pre-wrap; }
+.entry-answer .entry-sources { margin-top: 6px; }
+.entry-answer .entry-sources .chip { margin-right: 4px; }
+
+.entry-plan, .entry-run { background: #20241c; border: 1px solid #3a3a20; }
+.entry-plan .list, .entry-run .list { margin-top: 6px; }
+.entry-plan .list li, .entry-run .list li {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: #262626;
+}
+.entry-run .list li > span:last-child { align-self: flex-end; }
+
+.prompt-row { align-items: flex-end; }
+
+/* ── MCP tab ──────────────────────────────────────────────────────────────── */
+
+#mcp-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#mcp-list .mcp-name { font-weight: 600; }
+#mcp-list .mcp-dot { width: 7px; height: 7px; border-radius: 50%; background: #666; flex: none; }
+#mcp-list .mcp-dot.enabled { background: #4ade80; }
+#mcp-list .mcp-actions { margin-left: auto; display: flex; gap: 4px; }
+
+code {
+  display: block;
+  background: #2d2d2d;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin-top: 4px;
+  color: #00ffcc;
+  font-size: 11px;
+  overflow-x: auto;
+  white-space: pre;
+}
+code.inline {
+  display: inline;
+  padding: 1px 4px;
+  margin-top: 0;
+  white-space: nowrap;
+}
+
+/* ── Graph tab ────────────────────────────────────────────────────────────── */
+
+.view.wide { max-width: none; }
+
+.graph-canvas {
+  height: 480px;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #181818;
+  overflow: hidden;
+  cursor: grab;
+}
+.graph-canvas.panning { cursor: grabbing; }
+.graph-canvas svg { display: block; width: 100%; height: 100%; }
+.graph-canvas .graph-edge { stroke: #555; }
+.graph-canvas .graph-node { stroke: #1e1e1e; stroke-width: 1; }
+.graph-canvas .graph-label {
+  fill: #ccc;
+  font-size: 6px;
+  font-family: inherit;
+  pointer-events: none;
+  user-select: none;
+}
+.graph-canvas .graph-empty {
+  fill: #888;
+  font-size: 13px;
+  font-family: inherit;
+}

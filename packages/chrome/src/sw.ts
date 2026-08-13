@@ -25,13 +25,17 @@ import { createMenus, onMenuClicked } from './capture.js';
 import { paintBadge } from './badge.js';
 import {
   approveAgentPlan,
+  askChat,
   getAgentStatus,
+  getGraph,
   getMcpServers,
   getMcpTools,
   getNodes,
   rejectAgentPlan,
+  removeMcpServer,
   retract,
   searchBrain,
+  setMcpServerEnabled as setMcpServerEnabledOnServer,
   stopAgentRun,
   submitAgentGoal,
 } from './client.js';
@@ -132,6 +136,13 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       return { type: 'nodes', data: await getNodes(pairing.port, pairing.token, msg.limit) };
     }
 
+    case 'getGraph': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      const { nodes: graphNodes, edges } = await getGraph(pairing.port, pairing.token);
+      return { type: 'graph', nodes: graphNodes, edges };
+    }
+
     case 'searchBrain': {
       const pairing = await getPairing();
       if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
@@ -162,6 +173,7 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
           goal: msg.goal,
           maxActions: msg.maxActions,
           listTarget: msg.listTarget,
+          autoApprove: msg.autoApprove,
         });
       } catch (err) {
         return { type: 'error', message: err instanceof Error ? err.message : String(err) };
@@ -217,6 +229,37 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
       const { tools } = await getMcpTools(pairing.port, pairing.token, msg.server);
       return { type: 'mcpTools', tools };
+    }
+
+    // MCP tab mutations — enable/disable/remove an ALREADY-registered server.
+    // Registering a new one stays CLI-only (nff-brain mcp add); these two
+    // never touch url/headers.
+    case 'setMcpServerEnabled': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      const { servers } = await setMcpServerEnabledOnServer(pairing.port, pairing.token, msg.id, msg.enabled);
+      return { type: 'mcpServers', servers };
+    }
+
+    case 'removeMcpServer': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      const { servers } = await removeMcpServer(pairing.port, pairing.token, msg.id);
+      return { type: 'mcpServers', servers };
+    }
+
+    // Manual-mode chat (item: Brain tab redesign) — the one route that costs
+    // a token per message, and the one call site that needs a longer timeout
+    // than every other route (see CHAT_TIMEOUT_MS).
+    case 'chatAsk': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      try {
+        const { answer, sources } = await askChat(pairing.port, pairing.token, msg.message, msg.history);
+        return { type: 'chatAnswer', answer, sources };
+      } catch (err) {
+        return { type: 'error', message: err instanceof Error ? err.message : String(err) };
+      }
     }
 
     case 'clearActivity': {

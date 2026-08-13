@@ -43,8 +43,7 @@ published `key` to `manifest.json` so unpacked and store builds share one id.
 | `src/agentRunner.ts` | SW side of the web agent: adapter enable/disable, the alarm-redriven poll loop, tab driving, dispatch to the LinkedIn content script |
 | `src/sw.ts` | listener registration only — read its header before editing |
 | `popup/` | static skeleton + `paint(state)`; plain DOM, no framework |
-| `devtools/` | the Brain panel (F12 → Brain): counts + search + retrieval-only Ask; all HTTP via the worker, token never in the panel |
-| `agent/` | the Web Agent page (item 7): submit a goal, review the plan, approve/stop a run — all HTTP via the worker, same as the panel |
+| `devtools/` | the Brain panel (F12 → Brain), two tabs: **Brain** — one chat transcript with a Manual/Plan/Auto mode switch (Manual = LLM-synthesized chat over retrieved nodes; Plan/Auto = the item-7 web agent, with/without a review step) — and **MCP** — list/test/enable/disable/remove registered MCP servers, browser-mutable but never able to register a new one with a secret. Both tabs go through the worker, token never in the panel |
 | `content/` | recorder + web-agent content scripts — no token, no fetch, no storage (CI-enforced); `linkedinAgent.ts` is the one exception that RECEIVES commands (`sendResponse` only, never `sendMessage`) |
 | `store/` | Web Store assets: privacy policy, permission justifications, listing copy, submission runbook |
 
@@ -75,15 +74,20 @@ Automated tests cover the pure logic; the rest needs a browser. Prerequisite:
 | **Clear activity history** | With records buffered but **no drain yet run**: the dialog offers only "wipe the local buffer" and no checkbox. With an empty buffer the button is **disabled**. |
 | **The loop (the epic's Done-when)** | Capture a selection (+ a link, + a page) → `nff-brain clips` lists them → `nff-brain clips --drain` → `brain.json` gains `origin:"clip"` nodes with `sourceUrl` → a new Claude Code session's preamble shows `[clip] …` lines. |
 | **Clip→node feedback + retract** | After a drain, within ~1 min (the probe piggyback) the clear dialog shows "Also delete the N brain nodes…". Confirm with the box ticked → the nodes are gone from `brain.json` and `clip-map.jsonl` no longer names them. Kill `serve` and try again → an error, and the buffer is NOT cleared. |
-| **DevTools Brain panel** | F12 anywhere → Brain tab: counts match `nff-brain list`. Hand-append a node to `brain.json` → count bumps ≤5 s without a reload; with a matching search active, the new node appears in the results. Inspect the panel document itself → Network: **zero requests** (everything rides the worker). Unpaired → the banner says to pair from the popup. |
-| **Ask tab** | "what did I learn about oauth callbacks" → an answer card citing nodes with related links; a nonsense query → the honest empty answer; the retrieval-only disclaimer is visible. |
+| **DevTools Brain panel — header** | F12 anywhere → Brain tab: counts match `nff-brain list`. Hand-append a node to `brain.json` → count bumps ≤5 s without a reload. Inspect the panel document itself → Network: **zero requests** (everything rides the worker). Unpaired → the banner says to pair from the popup. |
+| **Manual mode (chat)** | "what did I learn about oauth callbacks" → a prose answer appears in the transcript with source chips for the nodes it actually retrieved; a nonsense question → an honest "doesn't answer that" reply rather than padded generic advice. Confirm this is the only mode that costs a `claude -p` call — Plan/Auto submissions and the MCP tab must not trigger one. |
+| **Plan mode** | Type a goal → a plan card appears in the transcript with Approve/Discard — nothing runs until Approve is clicked. Discard → the card shows "Discarded." and no run starts. |
+| **Auto mode** | Type a goal → **no plan-review card appears at all**; the transcript goes straight to a live run card and polling starts immediately. |
 | **Recorder enable/disable** | Enable the GitHub recorder → Chrome prompts for github.com ONLY; `github.com` appears in the allowlist. Disable → `chrome://extensions` → site access shows the permission is **gone**. |
 | **Recorder events land** | With capture ON: open two issues and post one comment on GitHub → three `recorder-event` clips pending (`nff-brain clips`), titles and repos correct. Same on LinkedIn: send an invite → one event with the name (and note). Double-submit → still one event. |
 | **Recorder respects pause + allowlist** | Toggle capture PAUSED → a recorder action lands nothing, without reloading the page. Remove `github.com` from the allowlist while the recorder is enabled → nothing lands, and the popup row shows "blocked". |
 | **Recorder survives update** | Bump the version and reload the unpacked extension (`onInstalled` fires with `reason:'update'`, which CLEARS registered scripts) → the recorder still fires on the next action (the reconciliation re-registered it). |
-| **Web agent — LinkedIn DOM (unverified, see docs/EPIC-chrome.md item 7)** | Register an MCP server (`nff-brain mcp add`), enable the LinkedIn agent adapter from the Web Agent page (Chrome prompts for `www.linkedin.com` — confirm it's a SEPARATE grant from the recorder's), submit a small goal with `maxActions: 2`. Confirm: the plan appears for approval; approving starts polling; the SW opens/reuses one background tab and navigates it; `readResultCards` actually finds the visible people-search cards (this is where LinkedIn's real DOM will have rotted the selectors in `content/linkedinAgent.ts` if anything did); at most 2 Connect clicks fire, each with a **randomized, multi-minute** gap (never back-to-back); each produces a clip (`nff-brain clips`) AND a call to the configured MCP tool. |
-| **Web agent — Stop is immediate** | Mid-run, click Stop on the Web Agent page. Confirm no further Connect click ever fires (poll the SW's alarm via `chrome://extensions` → service worker → Application → the alarm should be cleared), and the one action already in flight (if any) still completes and records before the run shows `stopped`. |
-| **Web agent — opt-in is separate from the recorder** | With the LinkedIn recorder OFF and the web agent ON (or vice versa), confirm each toggle is independent in the popup/agent page and that disabling the agent releases its own permission grant without touching the recorder's. |
+| **Web agent — LinkedIn DOM (unverified, see docs/EPIC-chrome.md item 7)** | Register an MCP server (`nff-brain mcp add`), F12 → Brain tab → enable the LinkedIn agent adapter (Chrome prompts for `www.linkedin.com` — confirm it's a SEPARATE grant from the recorder's), switch to Plan or Auto mode, pick the registered server/tool as "add matches to", submit a small goal with `maxActions: 2`. Confirm: the SW opens/reuses one background tab and navigates it; `readResultCards` actually finds the visible people-search cards (this is where LinkedIn's real DOM will have rotted the selectors in `content/linkedinAgent.ts` if anything did); at most 2 Connect clicks fire, each with a **randomized, multi-minute** gap (never back-to-back); each produces a clip (`nff-brain clips`) AND a call to the configured MCP tool. |
+| **Web agent — Stop is immediate** | Mid-run, click Stop on the run card. Confirm no further Connect click ever fires (poll the SW's alarm via `chrome://extensions` → service worker → Application → the alarm should be cleared), and the one action already in flight (if any) still completes and records before the run shows `stopped`. |
+| **Web agent — opt-in is separate from the recorder** | With the LinkedIn recorder OFF and the web agent ON (or vice versa), confirm each toggle is independent (popup's Recorders row vs. the Brain tab's own toggle) and that disabling the agent releases its own permission grant without touching the recorder's. |
+| **MCP tab — list/test/enable/disable/remove** | A CLI-registered server (`nff-brain mcp add`) appears with a dot + name; Test populates a live tool count; Disable turns the dot grey and a subsequent Test still works (disabling doesn't revoke reachability, just eligibility as a list target); Remove drops it from the list and from `~/.nff-brain/mcp-servers.json`. Confirm no header/secret value is ever visible in the panel's DOM (inspect the elements, not just the visible text). |
+| **MCP tab — cannot register a new server** | Confirm there is no form to add a server, only the copy-pasteable `nff-brain mcp add …` hint — registering a new one always requires the terminal. |
+| **Graph tab** | F12 → Brain panel → Graph tab: nodes render as colored circles with edges between them, count matches `nff-brain list`. Scroll to zoom, drag to pan — confirm panning/zooming does NOT flicker or reset on the next ~5s poll tick. Hand-append a node to `brain.json` → it appears within one poll tick, and your current pan/zoom is preserved. |
 
 ### Local Network Access — findings
 
@@ -102,10 +106,11 @@ Automated tests cover the pure logic; the rest needs a browser. Prerequisite:
 - **"Also remove nodes" lights up only after a drain has run** and the ~1-min
   probe piggyback has fetched the clip→node map. Until then the popup shows no
   checkbox — honest, not broken.
-- **No graph drawing in the Brain panel** (deliberate): the acceptance needed
-  count + search, and porting the React webview renderer is banned by
-  `bundlePurity` (no react-dom in dist). If ever wanted, extract a
-  framework-free SVG painter around `@nff-brain/core/layout` — do not port.
+- **Graph tab is read-only geometry, not a layout engine.** It renders
+  whatever `x`/`y`/`size`/`color` are already stored on each node (via a
+  plain inline SVG — no react-dom, `bundlePurity` still bans it) and never
+  computes a layout itself. Nodes that predate a `nff-brain layout` run may
+  cluster at the origin; re-run `nff-brain layout` for a clearer picture.
 - **Recorder selectors rot.** GitHub detection is URL/form-shape-based and
   should be sturdy; LinkedIn leans on accessible labels and WILL need
   maintenance. The classifiers are pure (`test/recorder.test.ts`), so rot is a
@@ -125,3 +130,15 @@ Automated tests cover the pure logic; the rest needs a browser. Prerequisite:
 - **One active web-agent run globally**, not per-tab or per-goal — the browser
   has no workspace concept, so a second `agentSubmitGoal` while one is active
   is refused (409) until the first is stopped or finishes.
+- **Manual-mode chat costs one `claude -p` call per message** — a deliberate
+  reversal of items 5 and 7's original "retrieval-only, no LLM synthesis"
+  stance, now explicitly requested. Plan/Auto goal submission and everything
+  in the MCP tab stay free; only sending a Manual-mode message spends a call.
+- **The MCP tab can mutate the server registry (enable/disable/remove) from
+  the browser** — a deliberate, narrow widening of the trust boundary.
+  Registering a *new* server (where a secret header/token would be entered)
+  still requires `nff-brain mcp add` in a terminal; the panel only ever shows
+  a copy-pasteable command for that, never a form.
+- **Chat history is client-side and ephemeral** — a plain array in the panel
+  document, same precedent as the old Ask tab's transcript. It does not
+  survive closing DevTools, and it is never written to disk.

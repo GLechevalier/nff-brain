@@ -173,9 +173,16 @@ The port is the cost here — panel registration itself is trivial.
 graph drawing.** The acceptance line never required one, the webview renderer
 is React and `bundlePurity` bans react-dom from dist, so shipping zero graph
 UIs in the panel is how the two-graph-UIs risk was avoided rather than
-incurred. If a panel graph is ever wanted: `packages/core/src/layout.ts`
-already holds the browser-safe geometry — extract a framework-free SVG painter
-both UIs wrap; do not port React.
+incurred.
+
+**Graph tab added 2026-08-12, by request.** A third DevTools tab renders the
+node/edge set as a plain inline SVG (no framework, `bundlePurity` still bans
+react-dom) via a new `GET /v1/graph` route. It reads geometry
+`nff-brain layout` already computed and stored on each `BrainNode`
+(`x`/`y`/`size`/`color`) — it never computes a layout itself, so the risk
+above (two competing layout engines) still didn't materialize; only the
+*rendering* was duplicated, not the *layout math*. Pan/zoom only touch the
+SVG's `viewBox` attribute, never rebuild the DOM.
 
 ---
 
@@ -230,6 +237,14 @@ brain, which is tuned for recall-into-coding-sessions.
 **Retrieval-only** (ranked nodes, no LLM synthesis) sidesteps both objections and
 delivers most of the value. Recommended starting point.
 
+**Superseded 2026-08-12 by item 7's Brain-tab redesign**: the standalone Ask
+tab (and Search) were folded into a single chat transcript with a Manual mode
+that DOES call `claude -p` for a real synthesized answer — the "costs tokens"
+objection was explicitly re-litigated and accepted this time, deliberately
+opt-in (Manual is a mode the user picks, never the default reply path for a
+Plan/Auto goal). See item 7 below; this section is kept for the historical
+record of why retrieval-only was the original, correct starting point.
+
 ---
 
 ## 6. Web Store release
@@ -250,12 +265,12 @@ knowingly crosses item 4's "observe-only, never automate" bright line.*
 
 | | |
 |---|---|
-| **Scope** | A natural-language goal produces a plan the user approves once (`packages/chrome/agent/`), then the local server drives a LinkedIn content script through a narrow, fixed action vocabulary (`navigate`, `readResultCards`, `clickConnect` — never arbitrary DOM eval) up to a configurable cap, with server-authoritative randomized pacing and an always-visible Stop. Every real action lands in the existing clip pipeline via `deliverRecorderClip()`, and every matched person is written to a **user-registered, plug-and-play HTTP MCP server** (`nff-brain mcp add/list/remove/test`, `/v1/mcp/*`) — not a hardcoded CRM integration. |
-| **Example** | "find robotics engineers at Series A startups on LinkedIn, connect, and add them to my CRM" → plan review → up to N connects, each logged and each triggering a `tools/call` on whichever MCP tool the user picked for that run. |
-| **Acceptance** | Approve a plan capped at 3 → at most 3 Connect clicks happen, each with a randomized (never fixed-interval) 1–4 min delay, each produces a clip AND an MCP tool call, and Stop mid-run halts new actions within one poll cycle while letting an in-flight action finish. |
-| **Depends on** | 0, 1, 4 (reuses the recorder's clip pipeline and the LinkedIn host-permission opt-in machinery) |
-| **Package** | `packages/core` (`webAgent*.ts`, `mcpClient.ts`, `mcpServers.ts` — pure prompt/parse + the hand-rolled MCP client), `packages/cli` (`webAgentRun.ts` orchestration, `serve/agentRoutes.ts` + `serve/mcpRoutes.ts`, `commands/mcp.ts`), `packages/chrome` (`agentGate.ts`, `agentRegistry.ts`, `agentRunner.ts`, `content/linkedinAgent(Classify).ts`, `agent/`) |
-| **Size** | XL — shipped |
+| **Scope** | F12 → Brain tab: one chat transcript with a **Manual / Plan / Auto** mode switch. In Plan or Auto mode, a natural-language goal produces a plan (Plan mode: the user must approve it; Auto mode: approved automatically the instant it's ready), then the local server drives a LinkedIn content script through a narrow, fixed action vocabulary (`navigate`, `readResultCards`, `clickConnect` — never arbitrary DOM eval) up to a configurable cap, with server-authoritative randomized pacing and an always-visible Stop. Every real action lands in the existing clip pipeline via `deliverRecorderClip()`, and every matched person is written to a **user-registered, plug-and-play HTTP MCP server** (managed from a separate **MCP tab** — list/test/enable/disable/remove; registering a *new* one stays CLI-only, `nff-brain mcp add/list/remove/test`, `/v1/mcp/*`) — not a hardcoded CRM integration. |
+| **Example** | "find robotics engineers at Series A startups on LinkedIn, connect, and add them to my CRM" → plan review (Plan mode) or straight to running (Auto mode) → up to N connects, each logged and each triggering a `tools/call` on whichever MCP tool the user picked for that run. |
+| **Acceptance** | Approve a plan capped at 3 (or submit the same goal in Auto mode) → at most 3 Connect clicks happen, each with a randomized (never fixed-interval) 1–4 min delay, each produces a clip AND an MCP tool call, and Stop mid-run halts new actions within one poll cycle while letting an in-flight action finish. |
+| **Depends on** | 0, 1, 3, 4 (embeds in the DevTools panel built for item 3; reuses the recorder's clip pipeline and the LinkedIn host-permission opt-in machinery from item 4) |
+| **Package** | `packages/core` (`webAgent*.ts`, `chatPrompt.ts`, `mcpClient.ts`, `mcpServers.ts` — pure prompt/parse + the hand-rolled MCP client), `packages/cli` (`webAgentRun.ts` orchestration, `serve/agentRoutes.ts` + `serve/mcpRoutes.ts` + `serve/chatRoutes.ts`, `commands/mcp.ts`), `packages/chrome` (`agentGate.ts`, `agentRegistry.ts`, `agentRunner.ts`, `content/linkedinAgent(Classify).ts`, the Brain + MCP tabs in `devtools/panel.html`/`panel.ts`/`panelPaint.ts`/`panel.css`) |
+| **Size** | XL — shipped, redesigned 2026-08-12 into the two-tab Brain/MCP shape described above (originally a third "Agent" tab alongside separate Search/Ask tabs) |
 
 **Four risks, priced and answered:**
 
@@ -302,6 +317,30 @@ knowingly crosses item 4's "observe-only, never automate" bright line.*
   deliberate v1 scope limits, not oversights; see `packages/cli/src/webAgentRun.ts`'s
   header comment and `WebAgentRun`'s phase doc-comment in
   `packages/core/src/webAgentTypes.ts` for the reasoning.
+- **The MCP tab is browser-mutable in one narrow way.** Item 7's original cut
+  made `/v1/mcp/*` entirely read-only to the extension — registering a server
+  was CLI-only specifically so a browser page never holds a secret header.
+  The redesign explicitly widens that: the extension can now enable/disable/
+  remove an ALREADY-registered server (`POST /v1/mcp/servers/enable`,
+  `POST /v1/mcp/servers/remove`), because that mutation never touches
+  `url`/`headers`. Registering a *new* server is untouched and still
+  CLI-only; the MCP tab shows a copy-pasteable `nff-brain mcp add …` command
+  rather than a form, on purpose.
+- **Auto mode's `autoApprove` is one boolean, not a new state machine.** The
+  run still passes through `phase:'planning'`; `runPlanningStep`'s success
+  branch just picks `'running'` instead of `'awaiting_approval'` when the
+  flag is set, applying the exact same `nextAllowedAtMs: Date.now()`
+  transition `approvePlan()` already did. No new phase, no new route beyond
+  one extra body field on `/v1/agent/goal`.
+- **Chat (Manual mode) is synchronous, not fire-and-forget-with-polling like
+  planning.** A chat exchange has nothing that needs to survive a page close
+  or a multi-minute pace, so `POST /v1/chat` just awaits `runClaude()`
+  directly — the one route with a longer client-side timeout
+  (`CHAT_TIMEOUT_MS`) instead of the blanket `REQUEST_TIMEOUT_MS` every other
+  route lives within. Sources shown alongside an answer are the nodes
+  actually retrieved server-side (`fuseRanked`, the same ranker `/v1/search`
+  uses), never a model-self-reported citation — avoids a hallucinated
+  reference to a node that was never fed to the model.
 
 ---
 

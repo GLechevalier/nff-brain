@@ -45,6 +45,8 @@ export const WEB_AGENT_FILTER_TIMEOUT_MS = 45_000;
 export interface StartPlanningOptions {
   maxActions: number;
   listTarget: WebAgentListTarget | null;
+  /** Auto mode: skip the awaiting_approval review step once the plan lands. */
+  autoApprove: boolean;
   model?: string;
 }
 
@@ -70,6 +72,7 @@ export async function startPlanning(
     phase: 'planning',
     clientId,
     goal,
+    autoApprove: opts.autoApprove,
     plan: null,
     listTarget: opts.listTarget,
     cursor: 0,
@@ -98,9 +101,11 @@ export async function runPlanningStep(runId: string, goal: string, maxActions: n
       // A Stop (or anything else) may have landed while this was in flight —
       // only a run still actually 'planning' should accept this result.
       if (run.phase !== 'planning') return run;
-      return plan
-        ? { ...run, phase: 'awaiting_approval', plan, updatedAt: nowIso() }
-        : { ...run, phase: 'error', error: 'the planner returned no usable steps', updatedAt: nowIso() };
+      if (!plan) return { ...run, phase: 'error', error: 'the planner returned no usable steps', updatedAt: nowIso() };
+      // Auto mode: skip the review step entirely, same transition approvePlan() does.
+      return run.autoApprove
+        ? { ...run, phase: 'running', plan, nextAllowedAtMs: Date.now(), updatedAt: nowIso() }
+        : { ...run, phase: 'awaiting_approval', plan, updatedAt: nowIso() };
     });
   } catch (err) {
     updateActiveRun(runId, (run) =>

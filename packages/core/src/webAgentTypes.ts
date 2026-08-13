@@ -108,6 +108,8 @@ export interface WebAgentRun {
   /** Owning paired extension client — no cross-client control. */
   clientId: string;
   goal: string;
+  /** Auto mode: skip the awaiting_approval review step, go straight to running once planned. */
+  autoApprove: boolean;
   plan: WebAgentPlan | null;
   listTarget: WebAgentListTarget | null;
   /** Index into plan.steps. */
