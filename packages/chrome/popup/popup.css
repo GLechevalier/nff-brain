@@ -266,3 +266,7 @@ code {
 .rules button:hover {
   color: var(--danger);
 }
+
+/* Header link to the options page (BYOK key + models). */
+.settings-link { font-size: 11px; text-decoration: none; color: inherit; opacity: 0.75; }
+.settings-link:hover { opacity: 1; text-decoration: underline; }

@@ -135,6 +135,8 @@ describe('pruneClips', () => {
     const brain = emptyBrain();
     upsertNode(brain, node('c1', { origin: 'clip' }));
     expect(pruneClips(brain)).toEqual([]);
-    expect(MAX_CLIP_NODES).toBe(60);
+    // 200, not 60: standalone mode's whole brain is clip-origin, and a migrated
+    // standalone brain must survive /v1/import without immediate eviction.
+    expect(MAX_CLIP_NODES).toBe(200);
   });
 });

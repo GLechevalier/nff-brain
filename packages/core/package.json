@@ -12,6 +12,14 @@
     "./rank": "./src/rank.ts",
     "./activity": "./src/activity.ts",
     "./layout": "./src/layout.ts",
-    "./spine": "./src/spine.ts"
+    "./spine": "./src/spine.ts",
+    "./types": "./src/types.ts",
+    "./brainGraph": "./src/brainGraph.ts",
+    "./clip": "./src/clip.ts",
+    "./clipDistill": "./src/clipDistill.ts",
+    "./clipApply": "./src/clipApply.ts",
+    "./chatPrompt": "./src/chatPrompt.ts",
+    "./jsonExtract": "./src/jsonExtract.ts",
+    "./provider": "./src/provider.ts"
   }
 }

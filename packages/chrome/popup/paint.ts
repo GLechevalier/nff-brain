@@ -16,6 +16,7 @@ const PHASE_TEXT: Record<PublicState['phase'], string> = {
   disconnected: 'Disconnected',
   rejected: 'Pairing expired',
   unpaired: 'Not paired',
+  standalone: 'Standalone',
 };
 
 export interface PaintDeps {
@@ -35,21 +36,32 @@ export function paint(state: PublicState, deps: PaintDeps, nowMs = Date.now()): 
   $('version').textContent = health.serverVersion ? `v${health.serverVersion}` : '';
 
   const counts =
-    health.projectNodes === null
-      ? ''
-      : `${health.projectNodes} project · ${health.globalNodes ?? 0} global nodes`;
+    phase === 'standalone'
+      ? `${state.standaloneNodes ?? 0} local note${(state.standaloneNodes ?? 0) === 1 ? '' : 's'} · your API key`
+      : health.projectNodes === null
+        ? ''
+        : `${health.projectNodes} project · ${health.globalNodes ?? 0} global nodes`;
   const age = relativeAge(health.lastOkAt, nowMs);
   // Showing last-known numbers WITH their age is honest in both phases; showing
   // them bare while disconnected is not.
-  $('counts').textContent = counts && (phase === 'connected' ? counts : age ? `${counts}, as of ${age}` : counts);
+  $('counts').textContent =
+    counts && (phase === 'connected' || phase === 'standalone' ? counts : age ? `${counts}, as of ${age}` : counts);
   $('workspace').textContent = health.workspaceRoot ?? '';
 
-  const showError = phase !== 'connected' && !!health.lastError;
+  const showError = phase !== 'connected' && phase !== 'standalone' && !!health.lastError;
   $('conn-error').textContent = health.lastError ?? '';
   $('conn-error').classList.toggle('hidden', !showError);
   $('retry').classList.toggle('hidden', phase !== 'disconnected');
 
-  const needsPairing = phase === 'unpaired' || phase === 'rejected';
+  $('migration').textContent =
+    state.migrationPending !== null
+      ? `Moving ${state.migrationPending} standalone note${state.migrationPending === 1 ? '' : 's'} into your local brain…`
+      : '';
+  $('migration').classList.toggle('hidden', state.migrationPending === null);
+
+  // Standalone keeps the pair form reachable — pairing is the doorway to
+  // migrating the local brain into a real server.
+  const needsPairing = phase === 'unpaired' || phase === 'rejected' || phase === 'standalone';
   $('pair-form').classList.toggle('hidden', !needsPairing);
   ($('connect') as HTMLButtonElement).textContent = phase === 'rejected' ? 'Re-pair' : 'Connect';
 

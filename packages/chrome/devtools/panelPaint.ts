@@ -78,7 +78,8 @@ export type TranscriptEntry =
   | { kind: 'user'; text: string }
   | { kind: 'answer'; text: string; sources: ChatSource[] }
   | { kind: 'plan'; runId: string; run: WebAgentRun }
-  | { kind: 'run'; runId: string; run: WebAgentRun };
+  | { kind: 'run'; runId: string; run: WebAgentRun }
+  | { kind: 'pending'; word: string };
 
 export interface TranscriptHandlers {
   onApprovePlan: (runId: string) => void;
@@ -113,6 +114,16 @@ function answerEntryEl(text: string, sources: readonly ChatSource[]): HTMLDivEle
     src.append(document.createTextNode('from: '), ...sources.map(sourceChip));
     div.append(src);
   }
+  return div;
+}
+
+function pendingEntryEl(word: string): HTMLDivElement {
+  const div = document.createElement('div');
+  div.className = 'entry entry-pending';
+  const span = document.createElement('span');
+  span.className = 'pending-word';
+  span.textContent = word;
+  div.append(span);
   return div;
 }
 
@@ -228,6 +239,8 @@ function entryEl(entry: TranscriptEntry, handlers: TranscriptHandlers): HTMLElem
       return planEntryEl(entry.run, handlers);
     case 'run':
       return runEntryEl(entry.run, handlers);
+    case 'pending':
+      return pendingEntryEl(entry.word);
   }
 }
 

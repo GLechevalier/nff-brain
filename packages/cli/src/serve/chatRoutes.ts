@@ -12,7 +12,11 @@ import { readJsonBody, sendError, sendJson } from './http.js';
 import type { Handler, Route } from './routes.js';
 
 const CHAT_BODY_MAX = 16 * 1024;
-const CHAT_TIMEOUT_MS = 45_000;
+// A few seconds BELOW the extension's own CHAT_TIMEOUT_MS (protocol.ts) on
+// purpose — this route's own timeout must fire and send its specific error
+// before the client's fetch aborts, or the panel only ever shows the
+// client's generic "did not answer in time" instead of the real cause.
+const CHAT_TIMEOUT_MS = 90_000;
 const CHAT_RETRIEVAL_LIMIT = 8;
 const CHAT_HISTORY_MAX = 6;
 

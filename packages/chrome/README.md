@@ -2,8 +2,19 @@
 
 Local-first memory for Claude Code, in the browser. Right-click any selected
 text → **Remember this**, and it lands in a queue the next Claude Code session
-distills into your brain. Nothing leaves your machine: the extension talks only
-to `nff-brain serve` on `127.0.0.1`.
+distills into your brain. Two modes:
+
+- **Paired** (preferred): the extension talks only to `nff-brain serve` on
+  `127.0.0.1`. Nothing leaves your machine.
+- **Standalone** (no CLI, no Claude Code): save your own AI API key on the
+  options page and the brain lives in `chrome.storage.local` — captures
+  distill on a background model via a direct provider call from the service
+  worker, and the DevTools Brain tab chats over them with a stronger one. A
+  stored pairing always wins; pairing later migrates the local brain into the
+  server automatically (`POST /v1/import`).
+
+The CSP enumerates exactly two reachable hosts (loopback + the shipped
+provider's API); nothing is sent anywhere until you pair or save a key.
 
 See `docs/docs.md` §13 for the transport, the clip queue, and the threat model.
 
@@ -45,6 +56,13 @@ published `key` to `manifest.json` so unpacked and store builds share one id.
 | `popup/` | static skeleton + `paint(state)`; plain DOM, no framework |
 | `devtools/` | the Brain panel (F12 → Brain), two tabs: **Brain** — one chat transcript with a Manual/Plan/Auto mode switch (Manual = LLM-synthesized chat over retrieved nodes; Plan/Auto = the item-7 web agent, with/without a review step) — and **MCP** — list/test/enable/disable/remove registered MCP servers, browser-mutable but never able to register a new one with a secret. Both tabs go through the worker, token never in the panel |
 | `content/` | recorder + web-agent content scripts — no token, no fetch, no storage (CI-enforced); `linkedinAgent.ts` is the one exception that RECEIVES commands (`sendResponse` only, never `sendMessage`) |
+| `src/mode.ts` | paired / standalone / unconfigured resolution — a stored pairing always wins |
+| `src/providerClient.ts` | the ONLY module that sends a provider request (adapters are pure, in `@nff-brain/core/provider`); key read from storage at call time |
+| `src/brainStore.ts` | the standalone brain's serialized write path (the second documented module-level variable) |
+| `src/standaloneDrain.ts` | capture tail → `nb.clipQueue` → alarm-driven drain → local nodes; one atomic `commitDrain` |
+| `src/standalone.ts` | local-brain siblings of getNodes/search/graph/chat/clear — same response shapes as serve |
+| `src/migrate.ts` | standalone→paired migration, piggybacked on the healthy probe; idempotent |
+| `options/` | the settings page (BYOK key, provider, two model slots); key never rendered back |
 | `store/` | Web Store assets: privacy policy, permission justifications, listing copy, submission runbook |
 
 Two invariants are enforced by `test/bundlePurity.test.ts` rather than by
@@ -65,7 +83,7 @@ Automated tests cover the pure logic; the rest needs a browser. Prerequisite:
 |---|---|
 | **Local Network Access** — do this first | On the newest stable Chrome, fresh profile: pair. If the fetch fails with a local-network error, confirm the popup's Connect button triggers `chrome.permissions.request` and that granting it fixes the connection. **Record the Chrome version and outcome below.** |
 | **Narrowest permissions** | Upload the zip as a Web Store draft; the computed list must be exactly storage + alarms + activeTab + contextMenus. Install the packed build in a clean profile and screenshot the install dialog — it must show **no** permission warnings. |
-| **Local-first** | Open the service worker's own DevTools (`chrome://extensions` → *service worker*) → Network → clear. Run ≥5 min through several alarm ticks, open/close the popup 10×, add and remove domains, capture a clip. **Every request must be 127.0.0.1.** Repeat in the popup's DevTools. Then stop `serve`: the failures must be connection refusals, not DNS lookups — a DNS query is itself an off-device call. |
+| **Local-first** | With NO provider key saved: open the service worker's own DevTools (`chrome://extensions` → *service worker*) → Network → clear. Run ≥5 min through several alarm ticks, open/close the popup 10×, add and remove domains, capture a clip. **Every request must be 127.0.0.1.** Repeat in the popup's DevTools. Then stop `serve`: the failures must be connection refusals, not DNS lookups — a DNS query is itself an off-device call. (With a key saved, the ONLY additional host ever contacted must be `api.anthropic.com`.) |
 | **Connected + node count** | Popup green; counts match `nff-brain list`. Ctrl-C the server → badge red within one alarm tick. Restart → the popup opens green **immediately** (the forced probe, not the next tick). Corrupt the stored token → *Pairing expired*, and the worker log shows probing has **stopped**, not backed off. |
 | **Pause halts capture within one page load** | Allowlist a domain, capture ON, right-click a selection → the clip lands (`nff-brain doctor` shows pending +1). Toggle to PAUSED. **Without reloading the page**, right-click again → nothing lands and the activity count is unchanged. |
 | **Pause survives restart** | Set PAUSED. Quit Chrome entirely — verify no `chrome.exe` remains, or a background process keeps storage warm and invalidates the test. Relaunch → still PAUSED. **Then bump the version and reload the unpacked extension** so `onInstalled` fires with `reason: 'update'` → still PAUSED. That second half is what catches the default-reseeding bug. |
@@ -88,6 +106,13 @@ Automated tests cover the pure logic; the rest needs a browser. Prerequisite:
 | **MCP tab — list/test/enable/disable/remove** | A CLI-registered server (`nff-brain mcp add`) appears with a dot + name; Test populates a live tool count; Disable turns the dot grey and a subsequent Test still works (disabling doesn't revoke reachability, just eligibility as a list target); Remove drops it from the list and from `~/.nff-brain/mcp-servers.json`. Confirm no header/secret value is ever visible in the panel's DOM (inspect the elements, not just the visible text). |
 | **MCP tab — cannot register a new server** | Confirm there is no form to add a server, only the copy-pasteable `nff-brain mcp add …` hint — registering a new one always requires the terminal. |
 | **Graph tab** | F12 → Brain panel → Graph tab: nodes render as colored circles with edges between them, count matches `nff-brain list`. Scroll to zoom, drag to pan — confirm panning/zooming does NOT flicker or reset on the next ~5s poll tick. Hand-append a node to `brain.json` → it appears within one poll tick, and your current pan/zoom is preserved. |
+| **Standalone — provider CORS (do FIRST, real key)** | NO serve running, no pairing. From the SW console run one `fetch('https://api.anthropic.com/v1/messages', {method:'POST', headers:{'content-type':'application/json','x-api-key':'<real key>','anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'}, body: JSON.stringify({model:'claude-haiku-4-5',max_tokens:1,messages:[{role:'user',content:'ping'}]})})`. A 200 proves the CORS path from a `chrome-extension://` origin. **If it fails**: fall back to adding `https://api.anthropic.com/*` to `optional_host_permissions`, requested at key-save time. Record the Chrome version + outcome below. |
+| **Standalone — key save + test** | Popup → Settings (opens a tab). Save a real key → field empties, "Key saved" renders, badge turns the standalone color. Test connection → green "key accepted". Enter a garbage key → Test shows "invalid API key". Clear → popup back to "Not paired". |
+| **Standalone — the loop** | Key saved, capture ON, site allowlisted, NO serve: capture a selection → badge flashes +1, activity shows delivered. Within ~1 min (alarm tick) the note appears in the Graph tab and `getNodes` counts bump. Ask about it in the Brain tab → a prose answer with source chips. Plan/Auto buttons and the MCP tab must be hidden. |
+| **Standalone — retract** | After a local drain: clear activity with "also remove nodes" ticked → nodes gone from the Graph tab. The checkbox must not render before the drain has produced nodes. |
+| **Standalone — fail-open drain** | Save a garbage key, capture a clip → the clip stays queued (activity delivered, no node), Settings shows the failed last-test, and the SW console shows no retry storm (backoff ladder holds). Fix the key → the queued clip distills on a later tick without re-capturing. |
+| **Standalone — SW kill mid-drain** | Queue a few clips, and from `chrome://serviceworker-internals` stop the worker right after a capture. Reopen → next alarm tick drains them; confirm NO duplicate nodes (the seen ring). |
+| **Migration** | Build a small standalone brain (≥2 notes), then `nff-brain serve` + `nff-brain pair` and pair from the popup. The popup shows "moving N standalone notes…" then it clears; `nff-brain search` finds the migrated notes (origin `clip`); retract from the popup still deletes them server-side; the badge is the paired green and captures now POST to the server. Kill serve mid-migration → everything stays local and the next healthy probe finishes the job. |
 
 ### Local Network Access — findings
 
@@ -142,3 +167,12 @@ Automated tests cover the pure logic; the rest needs a browser. Prerequisite:
 - **Chat history is client-side and ephemeral** — a plain array in the panel
   document, same precedent as the old Ask tab's transcript. It does not
   survive closing DevTools, and it is never written to disk.
+- **Standalone mode is lexical-only and clip-only.** Search/chat retrieval is
+  `fuseRanked` (no semantic embeddings in the browser), every note is
+  `origin:'clip'` capped at 200, and `recallBrain`'s preamble path is
+  deliberately not ported — the surfaces are the popup, the Brain tab, and
+  the Graph tab. Anthropic is the only shipped provider; OpenAI/Gemini are
+  interface-ready (`@nff-brain/core/provider`) but greyed out in Settings.
+- **Standalone drain quality depends on the background model** — a weaker
+  model raises the parser's null rate; the queue never drops (fail-open +
+  backoff), it just distills later or after a model change.

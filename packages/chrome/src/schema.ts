@@ -7,6 +7,10 @@
 // No chrome.* and no node:* imports: vitest imports this directly, and so do
 // both bundles.
 
+import type { BrainFile } from '@nff-brain/core/types';
+import type { ClipRecord } from '@nff-brain/core/clip';
+import type { ModelSlot, ProviderId } from '@nff-brain/core/provider';
+
 export const SCHEMA_VERSION = 1 as const;
 
 /**
@@ -27,6 +31,13 @@ export const KEYS = {
   recorderSeen: 'nb.recorderSeen',
   agentAdapters: 'nb.agentAdapters',
   agentTab: 'nb.agentTab',
+  // Standalone mode (no local server): BYOK provider + the in-browser brain.
+  provider: 'nb.provider',
+  brain: 'nb.brain',
+  clipQueue: 'nb.clipQueue',
+  clipSeen: 'nb.clipSeen',
+  drain: 'nb.drain',
+  migrationBackup: 'nb.migrationBackup',
 } as const;
 
 // ── pairing ──────────────────────────────────────────────────────────────────
@@ -46,8 +57,12 @@ export interface Pairing {
  * 'rejected' is NOT 'disconnected'. A 401 means the token is dead, so retrying
  * every minute forever is pure noise in the server log and pure battery drain.
  * It gets its own phase, its own copy, and no backoff.
+ *
+ * 'standalone' = no pairing stored but a BYOK provider key is configured: the
+ * brain lives in extension storage and LLM calls go straight to the provider.
+ * A stored pairing always wins — standalone never activates while one exists.
  */
-export type ConnectionPhase = 'unpaired' | 'connected' | 'disconnected' | 'rejected';
+export type ConnectionPhase = 'unpaired' | 'connected' | 'disconnected' | 'rejected' | 'standalone';
 
 export interface Health {
   phase: ConnectionPhase;
@@ -140,6 +155,68 @@ export const ACTIVITY_MAX = 500;
 export const ACTIVITY_URL_MAX = 512;
 export const ACTIVITY_TITLE_MAX = 256;
 export const ACTIVITY_TEXT_MAX = 2000;
+
+// ── standalone mode: BYOK provider settings ─────────────────────────────────
+
+export interface ProviderTestResult {
+  ok: boolean;
+  at: string;
+  /** Short and user-showable. NEVER the key, never a stack. */
+  message: string;
+}
+
+export type ModelSlots = Record<ModelSlot, string>;
+
+export interface ProviderSettings {
+  provider: ProviderId;
+  /**
+   * The BYOK API key. Same posture as Pairing.token: it NEVER crosses the
+   * popup/panel/options channel outward — not even a last-4 hint. Inbound
+   * once, via the setProvider message; PublicState carries zero key material.
+   */
+  apiKey: string;
+  models: ModelSlots;
+  addedAt: string;
+  lastTest: ProviderTestResult | null;
+}
+
+// ── standalone mode: the in-browser brain ───────────────────────────────────
+
+/**
+ * nb.brain holds a core BrainFile VERBATIM (same schema as .nff-brain/
+ * brain.json) so migration is a serialization, not a translation. ≤200 nodes
+ * (MAX_CLIP_NODES) ≈ 300 KB against the 10 MB storage.local quota.
+ */
+export type StandaloneBrain = BrainFile;
+
+/** Queued raw captures awaiting a drain — the browser analog of clips.jsonl. */
+export const CLIP_QUEUE_MAX = 200;
+
+/** Processed clip ids (at-least-once dedupe) — the analog of seenClipIds(). */
+export const CLIP_SEEN_MAX = 500;
+
+export type StandaloneClip = ClipRecord;
+
+/**
+ * THE DRAIN SCHEDULE LIVES HERE, not in the alarm — same discipline as
+ * Health.nextProbeAtMs. The alarm is only a tick; this number on disk decides.
+ */
+export interface DrainState {
+  nextDrainAtMs: number;
+  consecutiveFailures: number;
+}
+
+export const DEFAULT_DRAIN: DrainState = { nextDrainAtMs: 0, consecutiveFailures: 0 };
+
+/**
+ * Snapshot taken immediately before a migration pushes the standalone brain
+ * into the local server — insurance against a bad first pairing. Overwritten
+ * by the next migration, cleared manually.
+ */
+export interface MigrationBackup {
+  brain: BrainFile;
+  migratedAt: string;
+}
 
 export interface StoredState {
   version: typeof SCHEMA_VERSION;

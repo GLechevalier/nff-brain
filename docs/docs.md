@@ -776,8 +776,21 @@ rules ever require it) plus one narrow pattern per recorder adapter
 (`https://github.com/*`, `https://www.linkedin.com/*`), each requested only
 when the user enables that recorder and released again on disable.
 
-`connect-src 'self' http://127.0.0.1:*` in the manifest makes Chrome itself
-enforce "no network calls off-device", and `bundlePurity.test.ts` asserts no
-other origin appears in either source or the built bundles.
+`connect-src 'self' http://127.0.0.1:* https://api.anthropic.com` in the
+manifest makes Chrome itself enforce the network boundary: loopback plus the
+one provider endpoint used by the extension's optional standalone mode (a
+user-supplied Anthropic API key saved on the options page — see
+`packages/chrome/README.md`), and nothing else. `bundlePurity.test.ts` asserts
+no other origin appears in either source or the built bundles
+(`PROVIDER_API_URLS` is the deliberate, exact-match allowlist). Without a
+saved key and without a pairing, nothing is sent anywhere — captures queue in
+`chrome.storage.local`.
+
+In standalone mode the brain itself lives in the browser (`nb.brain`, a core
+`BrainFile` capped at `MAX_CLIP_NODES` clip nodes), distilled by an
+alarm-driven drain that mirrors the CLI's (`packages/chrome/src/
+standaloneDrain.ts`), and migrates into the local global brain via
+`POST /v1/import` on first pairing — imported nodes are forced to
+`origin:'clip'` so the existing `/v1/retract` gates keep working.
 
 See `packages/chrome/README.md` for the manual verification checklist.

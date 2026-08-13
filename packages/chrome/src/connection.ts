@@ -7,21 +7,37 @@ import { paintBadge } from './badge.js';
 import * as client from './client.js';
 import { HttpError } from './client.js';
 import { applyProbe, derivePhase, dueForProbe } from './health.js';
+import { migrateIfNeeded } from './migrate.js';
 import { DEFAULT_HEALTH } from './schema.js';
 import type { ConnectionPhase, Pairing } from './schema.js';
-import { getActivity, getCapture, getHealth, getPairing, setActivity, setHealth, setPairing } from './storage.js';
+import {
+  getActivity,
+  getCapture,
+  getHealth,
+  getPairing,
+  getProviderSettings,
+  setActivity,
+  setHealth,
+  setPairing,
+} from './storage.js';
 
 /**
- * The ONE permitted module-level variable in the whole extension: an in-flight
- * probe promise, so an alarm and a popup firing in the same worker lifetime do
- * not double-fetch. Losing it when the worker dies is harmless — the worst case
- * is one extra request.
+ * One of the TWO permitted module-level variables in the whole extension (the
+ * other is brainStore.ts's mutation chain): an in-flight probe promise, so an
+ * alarm and a popup firing in the same worker lifetime do not double-fetch.
+ * Losing it when the worker dies is harmless — the worst case is one extra
+ * request.
  */
 let inFlightProbe: Promise<ConnectionPhase> | null = null;
 
 export async function currentPhase(nowMs = Date.now()): Promise<ConnectionPhase> {
   const [pairing, health] = await Promise.all([getPairing(), getHealth()]);
-  return derivePhase(health, pairing !== null, nowMs);
+  if (pairing === null) {
+    // No pairing: a configured BYOK provider means the local brain is live.
+    // A stored pairing always wins over standalone (see mode.ts).
+    return (await getProviderSettings()) !== null ? 'standalone' : 'unpaired';
+  }
+  return derivePhase(health, true, nowMs);
 }
 
 /**
@@ -70,6 +86,10 @@ async function runProbe({ force }: { force?: boolean }): Promise<ConnectionPhase
     // Piggyback on the healthy probe: resolve clip→node mappings the drain has
     // reported since. One extra request, and only while something is unresolved.
     await resolveClipMappings(pairing);
+    // Second piggyback: migrate any standalone brain/queue into this server.
+    // Early-returns when there is nothing local; self-heals partial failures
+    // because the next healthy probe lands here again (import is idempotent).
+    await migrateIfNeeded(pairing);
   } catch (err) {
     const http = err instanceof HttpError ? err : null;
     next = applyProbe(health, {

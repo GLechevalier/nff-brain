@@ -16,7 +16,7 @@ const root = path.resolve(here, '..');
 
 function sources(): { file: string; rel: string; text: string }[] {
   const out: { file: string; rel: string; text: string }[] = [];
-  for (const dir of ['src', 'popup', 'devtools', 'content']) {
+  for (const dir of ['src', 'popup', 'devtools', 'content', 'options']) {
     const abs = path.join(root, dir);
     if (!fs.existsSync(abs)) continue;
     for (const name of fs.readdirSync(abs)) {
@@ -58,11 +58,26 @@ const RECORDER_SITE_URLS = new Set(['https://github.com', 'https://www.linkedin.
  */
 const NAMESPACE_URIS = new Set(['http://www.w3.org']);
 
+/**
+ * BYOK provider endpoints — the ONE deliberate egress class. User-key-gated
+ * (nothing is sent until the user saves a key on the options page) and
+ * CSP-enumerated (manifest.test.ts pins the exact connect-src). Exact-match
+ * only: a new provider host fails here AND in the manifest CSP pin until
+ * deliberately added to both, plus store/privacy-policy.md, in one commit.
+ */
+const PROVIDER_API_URLS = new Set(['https://api.anthropic.com']);
+
 /** Absolute URL literals with a concrete host. `http://${HOST}` is fine. */
 function offDeviceUrls(text: string): string[] {
   return [...text.matchAll(/https?:\/\/[A-Za-z0-9.-]+/g)]
     .map((m) => m[0])
-    .filter((u) => !u.startsWith('http://127.0.0.1') && !RECORDER_SITE_URLS.has(u) && !NAMESPACE_URIS.has(u));
+    .filter(
+      (u) =>
+        !u.startsWith('http://127.0.0.1') &&
+        !RECORDER_SITE_URLS.has(u) &&
+        !NAMESPACE_URIS.has(u) &&
+        !PROVIDER_API_URLS.has(u),
+    );
 }
 
 describe('source purity', () => {
@@ -84,9 +99,26 @@ describe('source purity', () => {
   });
 
   it('only ever imports the browser-safe subpaths of @nff-brain/core', () => {
-    const allowed = new Set(['score', 'vector', 'rank', 'activity']);
+    // Standalone mode widened this set (types/brainGraph/clip*/chatPrompt/
+    // jsonExtract carry the in-browser brain; provider carries the BYOK
+    // adapters). Every entry must stay node-free — guarded by
+    // packages/core/test/webviewImports.test.ts's browser-safe module rows.
+    const allowed = new Set([
+      'score',
+      'vector',
+      'rank',
+      'activity',
+      'types',
+      'brainGraph',
+      'clip',
+      'clipDistill',
+      'clipApply',
+      'chatPrompt',
+      'jsonExtract',
+      'provider',
+    ]);
     for (const { rel, text } of FILES) {
-      for (const m of text.matchAll(/from ['"]@nff-brain\/core(?:\/([a-z]+))?['"]/g)) {
+      for (const m of text.matchAll(/from ['"]@nff-brain\/core(?:\/([a-zA-Z]+))?['"]/g)) {
         expect(m[1], `${rel} imports the bare core barrel, which pulls in node:*`).toBeDefined();
         expect(allowed.has(m[1]!), `${rel} imports @nff-brain/core/${m[1]}`).toBe(true);
       }
@@ -168,14 +200,25 @@ describe('MV3 service-worker discipline', () => {
     'src/agentRunner.ts',
     'src/agentRegistry.ts',
     'src/agentGate.ts',
+    'src/providerClient.ts',
+    'src/mode.ts',
+    'src/standaloneDrain.ts',
+    'src/standalone.ts',
+    'src/migrate.ts',
   ])('%s declares no mutable module-level state', (rel) => {
     expect(topLevelBindings(FILES.find((f) => f.rel === rel)!.text)).toEqual([]);
   });
 
-  it('permits exactly one documented module-level variable, in connection.ts', () => {
+  it('permits exactly two documented module-level variables', () => {
+    // connection.ts: the in-flight probe promise. brainStore.ts: the mutation
+    // serialization chain. Both are harmless to lose on worker death (death
+    // means nothing is in flight) and each must keep its rationale inline.
     const conn = FILES.find((f) => f.rel === 'src/connection.ts')!;
     expect(topLevelBindings(conn.text)).toEqual(['inFlightProbe']);
     expect(conn.text).toMatch(/harmless/i); // the rationale must stay next to it
+    const store = FILES.find((f) => f.rel === 'src/brainStore.ts')!;
+    expect(topLevelBindings(store.text)).toEqual(['mutateChain']);
+    expect(store.text).toMatch(/harmless/i);
   });
 
   it('registers every listener synchronously at the top level of sw.ts', () => {
@@ -253,6 +296,9 @@ describe('built artifacts', () => {
       'panel.js',
       'panel.html',
       'panel.css',
+      'options.js',
+      'options.html',
+      'options.css',
       'rec-github.js',
       'rec-linkedin.js',
       'rec-linkedin-agent.js',
@@ -263,7 +309,7 @@ describe('built artifacts', () => {
 
   it('contains no off-device URL and no framework runtime', () => {
     if (!fs.existsSync(dist)) return;
-    for (const name of ['sw.js', 'popup.js', 'devtools.js', 'panel.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js']) {
+    for (const name of ['sw.js', 'popup.js', 'devtools.js', 'panel.js', 'options.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js']) {
       const text = read(name);
       // This is what actually ships — it catches an egress URL arriving through
       // a dependency rather than through our own source.

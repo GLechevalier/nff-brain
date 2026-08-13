@@ -14,6 +14,7 @@ import { HttpError, postClip } from './client.js';
 import type { ClipPayload } from './client.js';
 import { currentPhase } from './connection.js';
 import { shouldCapture } from './gate.js';
+import { enqueueStandaloneClip } from './standaloneDrain.js';
 import { getAllowlist, getCapture, getPairing, getRecent, setRecent } from './storage.js';
 
 export const MENU_ID = 'nb.remember';
@@ -101,8 +102,12 @@ export async function onMenuClicked(
   });
 
   if (!pairing) {
-    await markDelivery(id, 'failed');
-    await flashCaptured(false);
+    // Standalone/unconfigured: the clip lands in the LOCAL queue instead of the
+    // server's — same delivery contract, different destination. Never lost.
+    await enqueueStandaloneClip(payload, id);
+    setTimeout(() => {
+      void currentPhase().then((phase) => paintBadge(phase, capture.enabled));
+    }, 1200);
     return;
   }
 

@@ -9,10 +9,12 @@ dashboard answers and the manifest can never drift apart silently.
 ### `storage`
 
 Stores the user's pairing token for their own local server, the capture on/off
-flag, the domain allowlist, and a capped local history of recent captures. All
-of this must survive service-worker termination and browser restarts; MV3
-service workers are killed after ~30 seconds of idle, so in-memory state is not
-an option.
+flag, the domain allowlist, and a capped local history of recent captures. In
+the optional bring-your-own-key mode it also stores the user's own AI API key,
+their model choices, queued captures, and the in-browser knowledge base built
+from them. All of this must survive service-worker termination and browser
+restarts; MV3 service workers are killed after ~30 seconds of idle, so
+in-memory state is not an option.
 
 ### `alarms`
 
@@ -43,14 +45,20 @@ for loopback. It never requests access to any real website.
 ### Single-purpose statement
 
 nff-brain captures notes the user explicitly selects in their browser into a
-local, user-run memory server (127.0.0.1), so those notes can be recalled in
-the user's Claude Code sessions. Nothing leaves the user's machine.
+personal knowledge base — either a local, user-run memory server (127.0.0.1)
+recalled in the user's Claude Code sessions, or, only if the user adds their
+own AI API key, a knowledge base kept inside the browser. By default nothing
+leaves the user's machine; with a user-supplied key, captures go only to that
+user's own AI provider account (CSP-enumerated, one host).
 
 ### Data-usage certification answers
 
 - Collects "Website content": **yes** — only text/links the user explicitly
   right-clicks to save.
-- Transmitted off the user's device: **no** (CSP-enforced loopback only).
+- Transmitted off the user's device: **only** to the AI provider the user
+  explicitly configures with their own API key, at the user's request; never
+  by default and never to us (the CSP enumerates loopback + that one provider
+  host and nothing else).
 - Sold to third parties: **no**. Used for unrelated purposes: **no**.
 - Used for creditworthiness/lending: **no**.
 

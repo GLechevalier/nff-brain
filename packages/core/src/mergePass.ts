@@ -9,12 +9,12 @@
 //   recalled agent nodes fold into their nearest surviving neighbour (strongest
 //   edge → most similar text → the hub). Knowledge is appended, never deleted.
 
+import { nodeDegree, upsertEdge } from './brainGraph.js';
 import type { OneShot } from './claude.js';
+import { extractJson } from './jsonExtract.js';
 import { NFF_PROMPT_MARKERS } from './promptMarkers.js';
 import { trigramSim } from './score.js';
-import { nodeDegree, upsertEdge } from './store.js';
 import type { BrainFile, BrainNode } from './types.js';
-import { extractJson } from './distill.js';
 
 interface RawMerge {
   merge?: unknown;

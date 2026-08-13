@@ -7,7 +7,7 @@
 // another origin — /v1/retract deletes by origin, so a clip node must contain
 // only clip content).
 
-import { nodeDegree, removeNode, upsertEdge, upsertNode } from './store.js';
+import { nodeDegree, removeNode, upsertEdge, upsertNode } from './brainGraph.js';
 import { trigramSim } from './score.js';
 import { resolveRoot } from './spine.js';
 import { placeNode, slug, type BrainFile, type BrainNode } from './types.js';
@@ -16,9 +16,12 @@ import type { ClipDuplicate, ClipProposal } from './clipDistill.js';
 
 /**
  * Own budget, separate from the 400-node agent cap (clips are exempt there).
- * Roughly a season of casual clipping; past it the least-recalled clips go.
+ * Past it the least-recalled clips go. Raised 60→200 for the extension's
+ * standalone mode, where the clip pool IS the whole brain (and a migrated
+ * standalone brain must survive /v1/import intact). Unobservable for existing
+ * paired brains: no reachable state exceeds 60 — the old cap enforced that.
  */
-export const MAX_CLIP_NODES = 60;
+export const MAX_CLIP_NODES = 200;
 
 const CLIP_SAME_PAGE_STRENGTH = 0.5;
 const CLIP_SIMILARITY_MIN = 0.4;

@@ -1,11 +1,12 @@
 # nff-brain Chrome Extension — Privacy Policy
 
-**Effective date:** 2026-08-11
+**Effective date:** 2026-08-12
 
 nff-brain is a local-first memory tool for Claude Code. This extension's entire
 purpose is to let you save snippets from your browser into a knowledge base
-**that you run yourself, on your own machine**. It has no servers of ours, no
-accounts, no analytics, and no way to send your data anywhere else.
+**that you run yourself, on your own machine** — or, only if you choose to add
+your own AI API key, into a knowledge base kept inside your browser. It has no
+servers of ours, no accounts, and no analytics.
 
 ## What the extension collects
 
@@ -24,13 +25,39 @@ Nothing is captured unless capture is switched **on** (it is off after install)
 
 ## Where captured data goes
 
-Exclusively to `nff-brain serve`, a program **you** start on your own computer,
-reachable only at `127.0.0.1` (your machine's loopback address). The extension's
-Content Security Policy (`connect-src 'self' http://127.0.0.1:*`) makes it
-technically impossible for it to contact any other host — this is enforced by
-Chrome itself, not merely promised, and verified by the extension's automated
-test suite. Zero data leaves your device. There are no analytics, no telemetry,
-no crash reporting, and no remote code.
+By default, exclusively to `nff-brain serve`, a program **you** start on your
+own computer, reachable only at `127.0.0.1` (your machine's loopback address).
+The extension's Content Security Policy (`connect-src 'self'
+http://127.0.0.1:* https://api.anthropic.com`) restricts it to exactly two
+destinations — your own loopback server, and the one AI provider endpoint used
+by the optional bring-your-own-key mode below. This is enforced by Chrome
+itself, not merely promised, and verified by the extension's automated test
+suite. There are no analytics, no telemetry, no crash reporting, and no remote
+code.
+
+## Optional: bring your own AI key (standalone mode)
+
+If you are **not** running a local server, you may paste your own Anthropic API
+key on the extension's Settings page. This is entirely optional and **off by
+default** — without a key (and without a paired server) captures simply queue
+on your device and nothing is sent anywhere.
+
+When you save a key:
+
+- Your captured snippets, and excerpts of the notes already in your in-browser
+  knowledge base, are sent **directly to `api.anthropic.com`** under your own
+  account, solely to distill captures into notes and to answer questions you
+  ask in the DevTools panel. They go nowhere else — we never see them.
+- The key is stored only in the extension's local browser storage, is never
+  displayed back (not even partially), never leaves the service worker except
+  in requests to that provider, and is removed by the **Clear** button or by
+  uninstalling.
+- Your provider's own privacy terms apply to those requests (for Anthropic:
+  their API terms). Anthropic states API inputs are not used to train models
+  by default.
+
+If you later pair with a local server, the notes built in your browser are
+moved into your own local brain and standalone mode ends.
 
 ## What is stored locally in your browser
 
@@ -39,6 +66,8 @@ no crash reporting, and no remote code.
 - Your capture on/off flag and domain allowlist.
 - A capped local activity history of recent captures, so you can review and
   delete them.
+- In standalone mode: your API key, your model choices, the queued captures,
+  and the in-browser knowledge base built from them (capped at 200 notes).
 
 ## Your controls
 
@@ -51,7 +80,8 @@ no crash reporting, and no remote code.
 
 ## What we never do
 
-- Sell, share, or transmit your data (we never possess it).
+- Sell, share, or transmit your data to us or to anyone you did not configure
+  (we never possess it).
 - Read pages, profiles, or content you did not explicitly act on.
 - Run in incognito windows (`"incognito": "not_allowed"`).
 - Load remote code.

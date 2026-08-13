@@ -33,6 +33,23 @@ const $ = (id: string): HTMLElement => document.getElementById(id)!;
 const AGENT_STATUS_POLL_MS = 4000;
 const CHAT_HISTORY_TURNS_MAX = 6;
 
+// Cycling "waiting for a reply" words, shown in the transcript between
+// sending a prompt and the answer/plan/run entry landing — same spirit as
+// Claude Code CLI's spinner words, themed for a knowledge-brain assistant.
+const PENDING_WORDS = [
+  'Pondering…',
+  'Percolating…',
+  'Rummaging…',
+  'Skimming your notes…',
+  'Cross-referencing…',
+  'Connecting the dots…',
+  'Digging through the brain…',
+  'Untangling…',
+  'Mulling it over…',
+  'Fetching thoughts…',
+];
+const PENDING_TICK_MS = 2000;
+
 let latestNodes: NodesResponse | null = null;
 let mode: ChatMode = 'manual';
 let transcript: TranscriptEntry[] = [];
@@ -40,6 +57,7 @@ let chatHistory: ChatTurn[] = [];
 const mcpToolsByServer = new Map<string, McpToolDef[]>();
 let mcpListItems: McpListItem[] = [];
 let agentPollTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingTimer: ReturnType<typeof setInterval> | null = null;
 let submitting = false;
 let currentTab: PanelTab = 'brain';
 let graphViewBox: GraphViewBox | null = null;
@@ -70,9 +88,29 @@ async function refreshNodes(): Promise<void> {
   paintHeader(latestNodes, true);
 }
 
+/**
+ * Standalone mode: Plan/Auto and the MCP tab are intrinsically server-backed
+ * (web-agent state and MCP registry live in nff-brain serve), so they hide
+ * rather than error. Brain (Manual chat) and Graph run off the local brain.
+ */
+function paintStandaloneMode(standalone: boolean): void {
+  $('tab-mcp').classList.toggle('hidden', standalone);
+  $('mode-plan').classList.toggle('hidden', standalone);
+  $('mode-auto').classList.toggle('hidden', standalone);
+  $('adapter-toggle').classList.toggle('hidden', standalone);
+  if (standalone && mode !== 'manual') setMode('manual');
+  if (standalone && currentTab === 'mcp') {
+    currentTab = 'brain';
+    switchTab('brain');
+  }
+}
+
 async function refreshAdapterState(): Promise<void> {
   const reply = await send({ type: 'getState' });
-  if (reply.type === 'state') paintAdapter(reply.state);
+  if (reply.type === 'state') {
+    paintAdapter(reply.state);
+    paintStandaloneMode(reply.state.phase === 'standalone');
+  }
 }
 
 /**
@@ -166,6 +204,31 @@ const transcriptHandlers = {
 
 function paintTranscript(): void {
   renderTranscript(transcript, transcriptHandlers);
+}
+
+/**
+ * A single cycling-word entry shown while a reply is in flight, covering both
+ * Manual chat (submitChat) and the gap before Plan/Auto's first agent-status
+ * poll (submitGoal) — see submitPrompt's try/finally, the one place both
+ * flows funnel through on success AND error.
+ */
+function pushPending(): void {
+  let i = Math.floor(Math.random() * PENDING_WORDS.length);
+  transcript.push({ kind: 'pending', word: PENDING_WORDS[i] });
+  paintTranscript();
+  pendingTimer = setInterval(() => {
+    const entry = transcript.find((e): e is Extract<TranscriptEntry, { kind: 'pending' }> => e.kind === 'pending');
+    if (!entry) return;
+    i = (i + 1) % PENDING_WORDS.length;
+    entry.word = PENDING_WORDS[i];
+    paintTranscript();
+  }, PENDING_TICK_MS);
+}
+
+function clearPending(): void {
+  if (pendingTimer) clearInterval(pendingTimer);
+  pendingTimer = null;
+  transcript = transcript.filter((e) => e.kind !== 'pending');
 }
 
 /** Finds the entry for this run (there is at most one — see applyRunUpdate) or null. */
@@ -264,11 +327,14 @@ async function submitPrompt(): Promise<void> {
   transcript.push({ kind: 'user', text: message });
   input.value = '';
   paintTranscript();
+  pushPending();
 
   try {
     if (mode === 'manual') await submitChat(message);
     else await submitGoal(message);
   } finally {
+    clearPending();
+    paintTranscript();
     submitting = false;
     ($('prompt-send') as HTMLButtonElement).disabled = false;
   }
@@ -455,6 +521,9 @@ async function boot(): Promise<void> {
   setInterval(() => {
     if (document.hidden) return;
     void refreshNodes();
+    // Keeps the standalone/paired surface split current if the user pairs or
+    // unpairs while the panel is open (getState is a sub-ms local read).
+    void refreshAdapterState();
     // Only while the Graph tab is showing — the pan/zoom viewBox survives a
     // refetch because renderGraph's fitted box only seeds it on tab entry.
     if (currentTab === 'graph') void loadGraph(false);

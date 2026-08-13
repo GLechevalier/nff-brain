@@ -9,7 +9,7 @@
 // the model; the parser translates indices back. `i` may be an array, which is
 // how several selections from one page fold into ONE node.
 
-import { extractJson } from './distill.js';
+import { extractJson } from './jsonExtract.js';
 import { NFF_PROMPT_MARKERS } from './promptMarkers.js';
 import { CATEGORY_HINTS, type BrainNode, type Category } from './types.js';
 import type { ClipRecord } from './clip.js';

@@ -3,7 +3,15 @@
 //   1. popup ⇄ service worker (chrome.runtime messages)
 //   2. extension → nff-brain serve (the /v1 HTTP surface)
 
-import type { AllowRule, Capture, ConnectionPhase, Health } from './schema.js';
+import type {
+  AllowRule,
+  Capture,
+  ConnectionPhase,
+  Health,
+  ModelSlots,
+  ProviderTestResult,
+} from './schema.js';
+import type { ProviderId } from '@nff-brain/core/provider';
 
 /**
  * Owned by item 0 (packages/core/src/serveConfig.ts). This is the ONLY place
@@ -231,6 +239,27 @@ export function isRetractResponse(v: unknown): v is RetractResponse {
   return isObj(v) && v.ok === true && Array.isArray(v.removed) && v.removed.every((id: unknown) => typeof id === 'string');
 }
 
+// ── POST /v1/import — standalone→paired brain migration ──────────────────────
+
+export interface ImportResponse {
+  ok: true;
+  imported: number;
+  /** Ids the server re-minted on collision — MUST be applied to activity nodeIds. */
+  remapped: Array<{ from: string; to: string }>;
+  evicted: string[];
+}
+
+export function isImportResponse(v: unknown): v is ImportResponse {
+  return (
+    isObj(v) &&
+    v.ok === true &&
+    typeof v.imported === 'number' &&
+    Array.isArray(v.remapped) &&
+    v.remapped.every((r: unknown) => isObj(r) && typeof r.from === 'string' && typeof r.to === 'string') &&
+    Array.isArray(v.evicted)
+  );
+}
+
 // ── web agent (item 7) — extension → nff-brain serve ────────────────────────
 //
 // Independently redeclared rather than imported from @nff-brain/core, same
@@ -412,9 +441,15 @@ export function isMcpToolsResponse(v: unknown): v is McpToolsResponse {
 // Unlike every other route, a chat exchange genuinely needs to wait out a
 // full claude -p round trip — CHAT_TIMEOUT_MS is what client.ts's askChat()
 // passes as call()'s timeoutMs override instead of the blanket
-// REQUEST_TIMEOUT_MS every other call site uses.
+// REQUEST_TIMEOUT_MS every other call site uses. A real synthesized answer
+// (multiple retrieved notes, several paragraphs) measured 30-34s end to end,
+// so 45s cut it too close. Kept a few seconds ABOVE the server's own
+// CHAT_TIMEOUT_MS (packages/cli/src/serve/chatRoutes.ts) on purpose: if the
+// brain does time out, the server's more specific error should win the race
+// and reach the panel instead of this client aborting first and masking it
+// behind the generic "did not answer in time" message below.
 
-export const CHAT_TIMEOUT_MS = 45_000;
+export const CHAT_TIMEOUT_MS = 95_000;
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
@@ -497,7 +532,13 @@ export type PopupToSw =
   | { type: 'getMcpServers' }
   | { type: 'getMcpTools'; server: string }
   | { type: 'setMcpServerEnabled'; id: string; enabled: boolean }
-  | { type: 'removeMcpServer'; id: string };
+  | { type: 'removeMcpServer'; id: string }
+  // BYOK provider settings (options page). setProvider is the ONE message that
+  // carries the key inbound; nothing ever carries it back out.
+  | { type: 'setProvider'; provider: ProviderId; apiKey: string }
+  | { type: 'setProviderModels'; models: ModelSlots }
+  | { type: 'clearProvider' }
+  | { type: 'testProvider' };
 
 /** The panel speaks the same channel as the popup — including the item-7 Agent tab. */
 export type PanelToSw = PopupToSw;
@@ -538,6 +579,16 @@ export interface PublicState {
   removableNodeCount: number;
   recorders: RecorderRow[];
   agentAdapters: AgentAdapterRow[];
+  // BYOK provider (standalone mode). ZERO key material crosses this channel —
+  // not even a last-4 hint; same total-omission posture as the bearer token.
+  providerConfigured: boolean;
+  provider: ProviderId | null;
+  providerModels: ModelSlots | null;
+  providerLastTest: ProviderTestResult | null;
+  /** Node count of the in-browser brain while standalone; null when paired. */
+  standaloneNodes: number | null;
+  /** Local nodes awaiting migration into the paired brain; null when idle. */
+  migrationPending: number | null;
 }
 
 export type SwToPopup =
@@ -549,6 +600,7 @@ export type SwToPopup =
   | { type: 'agentStatus'; run: WebAgentRun | null }
   | { type: 'chatAnswer'; answer: string; sources: ChatSource[] }
   | { type: 'mcpServers'; servers: McpServerSummary[] }
-  | { type: 'mcpTools'; tools: McpToolDef[] };
+  | { type: 'mcpTools'; tools: McpToolDef[] }
+  | { type: 'providerTest'; result: ProviderTestResult };
 
 export type SwToPanel = SwToPopup;

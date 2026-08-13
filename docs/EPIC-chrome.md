@@ -300,10 +300,18 @@ knowingly crosses item 4's "observe-only, never automate" bright line.*
 
 - **The planning "brain" is interim by design.** v1 shells to the user's own
   local `claude -p` (`runClaude()`/`makeOneShot()`, same as distill/merge) —
-  no API key ever touches this codebase. Every call site takes `brain:
-  OneShot` as a parameter rather than reaching for `runClaude()` directly, so
-  a future web-hosted planning brain is a rebind of one parameter in
-  `packages/cli/src/webAgentRun.ts`, not a rewrite of the prompt/parse logic.
+  no API key ever touches the CLI/serve side of this codebase. Every call site
+  takes `brain: OneShot` as a parameter rather than reaching for `runClaude()`
+  directly, so a future web-hosted planning brain is a rebind of one parameter
+  in `packages/cli/src/webAgentRun.ts`, not a rewrite of the prompt/parse logic.
+  - **Decision reversal (2026-08-12), extension side only:** the "no API key
+    ever" rule was deliberately relaxed for the EXTENSION's standalone mode —
+    a user-supplied BYOK key lives in `chrome.storage.local` (`nb.provider`),
+    SW-realm only, and powers the in-browser drain + Brain-tab chat via
+    `@nff-brain/core/provider` adapters when no server is paired
+    (`packages/chrome/src/providerClient.ts`). CLI/serve remain key-free; the
+    web agent remains paired-only. Same reversal precedent as Manual chat
+    costing tokens (§5).
 - **The generic MCP client is reusable infrastructure beyond this item.** It's
   also the missing piece that would let a future revision of item 5's Ask
   panel *call* tools, not just retrieve nodes — item 5 shipped retrieval-only

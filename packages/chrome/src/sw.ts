@@ -52,21 +52,46 @@ import {
   pollAgent,
   setAgentAdapterEnabled,
 } from './agentRunner.js';
-import { getActivity, getAllowlist, getCapture, getHealth, getPairing, seedDefaults, setAllowlist, setCapture } from './storage.js';
+import {
+  getActivity,
+  getAllowlist,
+  getBrain,
+  getCapture,
+  getHealth,
+  getPairing,
+  getProviderSettings,
+  seedDefaults,
+  setAllowlist,
+  setCapture,
+  setProviderSettings,
+} from './storage.js';
+import { testProviderKey } from './providerClient.js';
+import { handleStandaloneMessage } from './standalone.js';
+import { DRAIN_ALARM, drainStandaloneClips, ensureDrainAlarm } from './standaloneDrain.js';
+import { PROVIDERS } from '@nff-brain/core/provider';
 import type { PopupToSw, PublicState, SwToPopup } from './protocol.js';
 
 async function publicState(): Promise<PublicState> {
-  const [pairing, health, capture, allowlist, activity] = await Promise.all([
+  const [pairing, health, capture, allowlist, activity, provider, brain] = await Promise.all([
     getPairing(),
     getHealth(),
     getCapture(),
     getAllowlist(),
     getActivity(),
+    getProviderSettings(),
+    getBrain(),
   ]);
   const { nextProbeAtMs, ...rest } = health;
   void nextProbeAtMs; // internal scheduling; the popup has no use for it
+  const localNodes = brain?.nodes.length ?? 0;
   return {
-    phase: derivePhase(health, pairing !== null, Date.now()),
+    // A stored pairing always wins — standalone only exists while unpaired.
+    phase:
+      pairing !== null
+        ? derivePhase(health, true, Date.now())
+        : provider !== null
+          ? 'standalone'
+          : 'unpaired',
     port: pairing?.port ?? null,
     health: rest,
     capture,
@@ -75,10 +100,27 @@ async function publicState(): Promise<PublicState> {
     removableNodeCount: removableNodeCount(activity),
     recorders: await recorderPublicState(),
     agentAdapters: await agentAdapterPublicState(),
+    providerConfigured: provider !== null,
+    provider: provider?.provider ?? null,
+    providerModels: provider?.models ?? null,
+    providerLastTest: provider?.lastTest ?? null,
+    standaloneNodes: pairing === null ? localNodes : null,
+    // While paired, any surviving local brain is a migration waiting to finish.
+    migrationPending: pairing !== null && localNodes > 0 ? localNodes : null,
   };
 }
 
 async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
+  // STANDALONE INTERCEPTOR — before the switch, so every paired case below
+  // stays byte-identical. Only when no pairing is stored: messages with a
+  // local-brain meaning are answered from nb.brain; 'handled' means the work
+  // is done and the default state reply should follow; null falls through to
+  // the existing not-paired guards.
+  if (!(await getPairing())) {
+    const local = await handleStandaloneMessage(msg);
+    if (local === 'handled') return { type: 'state', state: await publicState() };
+    if (local) return local;
+  }
   switch (msg.type) {
     case 'getState':
       break;
@@ -262,6 +304,44 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       }
     }
 
+    // BYOK provider settings (options page). setProvider is the ONE inbound
+    // path for the key; no reply ever carries it back out.
+    case 'setProvider': {
+      const adapter = PROVIDERS[msg.provider];
+      if (!adapter) return { type: 'error', message: 'that provider is not available yet' };
+      const key = msg.apiKey.trim();
+      if (!key) return { type: 'error', message: 'an API key is required' };
+      const existing = await getProviderSettings();
+      await setProviderSettings({
+        provider: msg.provider,
+        apiKey: key,
+        // Keep the user's model picks across a key rotation; defaults otherwise.
+        models: existing?.provider === msg.provider ? existing.models : { ...adapter.defaultModels },
+        addedAt: new Date().toISOString(),
+        lastTest: null,
+      });
+      await paintBadge(await currentPhase(), (await getCapture()).enabled);
+      break;
+    }
+
+    case 'setProviderModels': {
+      const existing = await getProviderSettings();
+      if (!existing) return { type: 'error', message: 'save an API key first' };
+      const background = msg.models.background.trim();
+      const chat = msg.models.chat.trim();
+      if (!background || !chat) return { type: 'error', message: 'both model fields are required' };
+      await setProviderSettings({ ...existing, models: { background, chat } });
+      break;
+    }
+
+    case 'clearProvider':
+      await setProviderSettings(null);
+      await paintBadge(await currentPhase(), (await getCapture()).enabled);
+      break;
+
+    case 'testProvider':
+      return { type: 'providerTest', result: await testProviderKey() };
+
     case 'clearActivity': {
       if (msg.alsoRemoveNodes) {
         const nodeIds = [...new Set((await getActivity()).flatMap((r) => r.nodeIds))];
@@ -308,6 +388,9 @@ async function onStartup(): Promise<void> {
   // chrome.alarms survive a browser restart, so a mid-run nb.agentPoll alarm
   // should still fire on its own — this is just insurance in case it didn't.
   void pollAgent();
+  // Same insurance for the standalone drain: a queue left over from before the
+  // restart re-arms its tick (the handler no-ops unless a drain is actually due).
+  void ensureDrainAlarm();
 }
 
 async function onAlarm(alarm: chrome.alarms.Alarm): Promise<void> {
@@ -317,6 +400,10 @@ async function onAlarm(alarm: chrome.alarms.Alarm): Promise<void> {
   }
   if (alarm.name === AGENT_POLL_ALARM) {
     await pollAgent();
+    return;
+  }
+  if (alarm.name === DRAIN_ALARM) {
+    await drainStandaloneClips();
   }
 }
 

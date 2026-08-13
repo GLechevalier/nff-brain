@@ -9,8 +9,21 @@
 // other; and a storage.local.get is sub-millisecond while this extension does
 // perhaps ten a minute.
 
-import { DEFAULTS, KEYS } from './schema.js';
-import type { ActivityRecord, Allowlist, Capture, Health, Pairing, RecentClip, StoredState } from './schema.js';
+import { DEFAULT_DRAIN, DEFAULTS, KEYS } from './schema.js';
+import type {
+  ActivityRecord,
+  Allowlist,
+  Capture,
+  DrainState,
+  Health,
+  MigrationBackup,
+  Pairing,
+  ProviderSettings,
+  RecentClip,
+  StandaloneBrain,
+  StandaloneClip,
+  StoredState,
+} from './schema.js';
 import type { RecorderSeenEntry, RecorderState } from './recorderTypes.js';
 import type { AgentAdapterState, AgentTabRef } from './agentTypes.js';
 
@@ -114,6 +127,91 @@ export function getAgentTab(): Promise<AgentTabRef | null> {
 
 export async function setAgentTab(ref: AgentTabRef | null): Promise<void> {
   await chrome.storage.local.set({ [KEYS.agentTab]: ref });
+}
+
+// ── standalone mode ─────────────────────────────────────────────────────────
+
+export function getProviderSettings(): Promise<ProviderSettings | null> {
+  return raw<ProviderSettings | null>(
+    KEYS.provider,
+    null,
+    (v) =>
+      v === null ||
+      (isObj(v) && typeof v.provider === 'string' && typeof v.apiKey === 'string' && isObj(v.models)),
+  );
+}
+
+export async function setProviderSettings(p: ProviderSettings | null): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.provider]: p });
+}
+
+export function getBrain(): Promise<StandaloneBrain | null> {
+  return raw<StandaloneBrain | null>(
+    KEYS.brain,
+    null,
+    (v) => v === null || (isObj(v) && Array.isArray(v.nodes) && Array.isArray(v.edges)),
+  );
+}
+
+export async function setBrain(brain: StandaloneBrain | null): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.brain]: brain });
+}
+
+export function getClipQueue(): Promise<StandaloneClip[]> {
+  return raw<StandaloneClip[]>(KEYS.clipQueue, [], (v) => Array.isArray(v));
+}
+
+export async function setClipQueue(queue: StandaloneClip[]): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.clipQueue]: queue });
+}
+
+export function getClipSeen(): Promise<string[]> {
+  return raw<string[]>(KEYS.clipSeen, [], (v) => Array.isArray(v));
+}
+
+export async function setClipSeen(ids: string[]): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.clipSeen]: ids });
+}
+
+export function getDrainState(): Promise<DrainState> {
+  return raw<DrainState>(KEYS.drain, DEFAULT_DRAIN, (v) => isObj(v) && typeof v.nextDrainAtMs === 'number');
+}
+
+export async function setDrainState(state: DrainState): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.drain]: state });
+}
+
+export function getMigrationBackup(): Promise<MigrationBackup | null> {
+  return raw<MigrationBackup | null>(
+    KEYS.migrationBackup,
+    null,
+    (v) => v === null || (isObj(v) && isObj(v.brain) && typeof v.migratedAt === 'string'),
+  );
+}
+
+export async function setMigrationBackup(backup: MigrationBackup | null): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.migrationBackup]: backup });
+}
+
+/**
+ * The standalone drain's commit: ONE multi-key set, so a worker kill either
+ * loses the whole drain (clips redeliver — at-least-once, deduped by the seen
+ * ring) or lands it fully consistent. Never split this into separate sets.
+ */
+export async function commitDrain(w: {
+  brain: StandaloneBrain;
+  queue: StandaloneClip[];
+  seen: string[];
+  activity: ActivityRecord[];
+  drain: DrainState;
+}): Promise<void> {
+  await chrome.storage.local.set({
+    [KEYS.brain]: w.brain,
+    [KEYS.clipQueue]: w.queue,
+    [KEYS.clipSeen]: w.seen,
+    [KEYS.activity]: w.activity,
+    [KEYS.drain]: w.drain,
+  });
 }
 
 export async function getState(): Promise<StoredState> {

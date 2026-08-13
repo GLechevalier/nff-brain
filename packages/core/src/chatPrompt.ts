@@ -65,7 +65,27 @@ export function buildChatPrompt(params: ChatPromptParams): string {
   return lines.join('\n');
 }
 
-/** Trim only — there is no structure to parse out of a prose answer. */
+/**
+ * The prompt asks for plain prose, but the model doesn't always comply — this
+ * strips the markdown it slips in anyway so the panel (plain textContent, no
+ * renderer) never shows raw emphasis/code/header/bullet syntax. Order matters: fences first (so
+ * code content isn't mangled by the later passes), bullets/headers next
+ * (line-anchored, before bold/italic touch mid-line asterisks), then bold
+ * before italic (else "**x**" would be left as "*x*" by the italic pass).
+ */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/```(?:\w*)?\n?([\s\S]*?)\n?```/g, '$1')
+    .replace(/^(\s*)[-*]\s+/gm, '$1• ')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1');
+}
+
 export function cleanChatAnswer(raw: string): string {
-  return raw.trim().slice(0, CHAT_ANSWER_MAX);
+  return stripMarkdown(raw.trim()).trim().slice(0, CHAT_ANSWER_MAX);
 }

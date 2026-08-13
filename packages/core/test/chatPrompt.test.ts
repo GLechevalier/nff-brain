@@ -45,4 +45,35 @@ describe('cleanChatAnswer', () => {
   it('caps an overlong answer', () => {
     expect(cleanChatAnswer('y'.repeat(10_000)).length).toBeLessThanOrEqual(4000);
   });
+
+  it('unwraps fenced code blocks, keeping the body', () => {
+    expect(cleanChatAnswer('before\n```ts\nconst x = 1;\n```\nafter')).toBe('before\nconst x = 1;\nafter');
+  });
+
+  it('converts leading bullet markers to a plain bullet', () => {
+    expect(cleanChatAnswer('- one\n* two\n  - nested')).toBe('• one\n• two\n  • nested');
+  });
+
+  it('strips header hashes', () => {
+    expect(cleanChatAnswer('# Title\n## Subtitle\ntext')).toBe('Title\nSubtitle\ntext');
+  });
+
+  it('unwraps bold and italic emphasis', () => {
+    expect(cleanChatAnswer('**bold** and *italic* and __also bold__ and _also italic_')).toBe(
+      'bold and italic and also bold and also italic',
+    );
+  });
+
+  it('unwraps inline code, keeping the content', () => {
+    expect(cleanChatAnswer('run `npm test` first')).toBe('run npm test first');
+  });
+
+  it('keeps only the label from a markdown link', () => {
+    expect(cleanChatAnswer('see [the docs](https://example.com/docs) for more')).toBe('see the docs for more');
+  });
+
+  it('strips a mix of markdown in one answer', () => {
+    const raw = '# Notes\n- **OAuth** uses `PKCE`\n- see [the rule](https://example.com)\n\n```js\nconst y = 2;\n```';
+    expect(cleanChatAnswer(raw)).toBe('Notes\n• OAuth uses PKCE\n• see the rule\n\nconst y = 2;');
+  });
 });

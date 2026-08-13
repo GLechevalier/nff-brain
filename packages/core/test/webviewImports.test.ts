@@ -60,7 +60,24 @@ describe('webview bundle purity', () => {
 describe('browser-safe core modules', () => {
   const CORE = path.resolve(HERE, '../src');
 
-  it.each(['score.ts', 'vector.ts', 'rank.ts', 'layout.ts', 'spine.ts'])(
+  it.each([
+    'score.ts',
+    'vector.ts',
+    'rank.ts',
+    'layout.ts',
+    'spine.ts',
+    // Standalone-brain subpaths (Chrome extension): these plus their pure deps
+    // must stay node-free or the extension bundle breaks at runtime.
+    'types.ts',
+    'brainGraph.ts',
+    'clip.ts',
+    'clipDistill.ts',
+    'clipApply.ts',
+    'chatPrompt.ts',
+    'jsonExtract.ts',
+    'promptMarkers.ts',
+    'provider.ts',
+  ])(
     '%s has no node: imports',
     (name) => {
       const src = fs.readFileSync(path.join(CORE, name), 'utf8');

@@ -95,6 +95,13 @@ async function resolveCurrentHost(): Promise<void> {
 function wire(): void {
   $('retry').addEventListener('click', () => void dispatch({ type: 'probeNow' }));
 
+  // BYOK key + model settings live on the options page — a popup closes on
+  // focus loss, which is hostile to pasting a key from a password manager.
+  $('open-settings').addEventListener('click', (e) => {
+    e.preventDefault();
+    void chrome.runtime.openOptionsPage();
+  });
+
   $('connect').addEventListener('click', () => {
     const port = Number(($('port') as HTMLInputElement).value || DEFAULT_PORT);
     const code = ($('code') as HTMLInputElement).value;

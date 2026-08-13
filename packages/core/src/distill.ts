@@ -3,9 +3,10 @@
 // and proposes nodes/edges as STRICT JSON; the delta is applied with the same
 // rules: refine-by-id, capped new-node growth, edges only between real nodes.
 
+import { upsertEdge, upsertNode } from './brainGraph.js';
 import type { OneShot } from './claude.js';
+import { extractJson } from './jsonExtract.js';
 import { NFF_PROMPT_MARKERS } from './promptMarkers.js';
-import { upsertEdge, upsertNode } from './store.js';
 import {
   CATEGORIES,
   CATEGORY_HINTS,
@@ -32,18 +33,9 @@ export interface RawDelta {
   edges?: RawEdge[];
 }
 
-// Tolerant JSON extraction: strip prose / code fences, take the outermost object.
-export function extractJson<T>(text: string): T | null {
-  if (!text) return null;
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as T;
-  } catch {
-    return null;
-  }
-}
+// Tolerant JSON extraction moved to jsonExtract.ts (browser-safe subpath);
+// re-exported here so existing node callers are untouched.
+export { extractJson } from './jsonExtract.js';
 
 export interface DistillPromptParams {
   taskText: string;

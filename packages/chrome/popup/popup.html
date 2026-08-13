@@ -15,6 +15,7 @@
     <header class="bar">
       <span class="wordmark">nff-brain</span>
       <span id="version" class="muted"></span>
+      <a id="open-settings" class="muted push settings-link" href="#" title="API key &amp; model settings">Settings</a>
     </header>
 
     <section id="conn" class="panel">
@@ -26,13 +27,17 @@
       <div id="counts" class="muted small"></div>
       <div id="workspace" class="muted small ellipsis"></div>
       <div id="conn-error" class="small error hidden"></div>
+      <div id="migration" class="small muted hidden"></div>
       <button id="retry" class="btn hidden">Retry</button>
     </section>
 
-    <!-- Shown only when unpaired or rejected. -->
+    <!-- Shown when unpaired, rejected, or standalone (pairing stays reachable
+         from standalone — it is the doorway to migrating the local brain). -->
     <section id="pair-form" class="panel hidden">
       <p class="small">
         Run <code>nff-brain serve</code> in your project, then enter the code it prints.
+        Captures are kept on this device either way — or add your own AI API key under
+        Settings to build a brain right here in the browser.
       </p>
       <div class="row gap">
         <label class="small" for="port">Port</label>

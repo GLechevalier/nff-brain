@@ -9,6 +9,7 @@ const COLORS: Record<ConnectionPhase, string> = {
   disconnected: '#b3261e',
   rejected: '#d29922',
   unpaired: '#767676',
+  standalone: '#0b6bcb',
 };
 
 const TITLES: Record<ConnectionPhase, string> = {
@@ -16,17 +17,20 @@ const TITLES: Record<ConnectionPhase, string> = {
   disconnected: 'nff-brain — brain not reachable (run `nff-brain serve`)',
   rejected: 'nff-brain — pairing expired, re-pair in the popup',
   unpaired: 'nff-brain — not paired yet',
+  standalone: 'nff-brain — standalone (local brain, your API key)',
 };
 
 export async function paintBadge(phase: ConnectionPhase, captureEnabled: boolean): Promise<void> {
   try {
-    // Paused is worth shouting about even while connected: it is the difference
-    // between "this is recording" and "this is not".
-    const text = phase === 'connected' ? (captureEnabled ? '' : '❚❚') : '!';
+    // Paused is worth shouting about even while capturing works: it is the
+    // difference between "this is recording" and "this is not". Standalone is
+    // a healthy phase — capture lands in the local brain, so no '!'.
+    const healthy = phase === 'connected' || phase === 'standalone';
+    const text = healthy ? (captureEnabled ? '' : '❚❚') : '!';
     await chrome.action.setBadgeText({ text });
     await chrome.action.setBadgeBackgroundColor({ color: COLORS[phase] });
     await chrome.action.setTitle({
-      title: `${TITLES[phase]}${phase === 'connected' && !captureEnabled ? ' · capture paused' : ''}`,
+      title: `${TITLES[phase]}${healthy && !captureEnabled ? ' · capture paused' : ''}`,
     });
   } catch {
     /* the action API is unavailable during teardown — never fail a probe */

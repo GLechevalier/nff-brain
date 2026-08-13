@@ -13,6 +13,7 @@ import {
   isClipsMapResponse,
   isGraphResponse,
   isHelloResponse,
+  isImportResponse,
   isMcpServersResponse,
   isMcpToolsResponse,
   isNodesResponse,
@@ -32,6 +33,7 @@ import type {
   ClipsMapResponse,
   GraphResponse,
   HelloResponse,
+  ImportResponse,
   McpServersResponse,
   McpToolsResponse,
   NodesResponse,
@@ -130,6 +132,27 @@ export interface ClipPayload {
 
 export async function postClip(port: number, token: string, clip: ClipPayload): Promise<ClipResponse> {
   return (await call(port, '/v1/clip', { method: 'POST', token, body: JSON.stringify(clip) })) as ClipResponse;
+}
+
+export interface ImportPayload {
+  nodes: Array<Record<string, unknown>>;
+  edges: Array<{ from: string; to: string; strength: number }>;
+  map: Array<{ clipId: string; nodeIds: string[] }>;
+}
+
+/** Standalone→paired migration. A ~300 KB body + a synchronous server-side
+ *  brain mutate outgrow the blanket 2.5s ceiling, hence the override. */
+const IMPORT_TIMEOUT_MS = 15_000;
+
+export async function postImport(port: number, token: string, payload: ImportPayload): Promise<ImportResponse> {
+  const body = await call(port, '/v1/import', {
+    method: 'POST',
+    token,
+    timeoutMs: IMPORT_TIMEOUT_MS,
+    body: JSON.stringify(payload),
+  });
+  if (!isImportResponse(body)) throw new HttpError(0, 'protocol', 'unexpected import response');
+  return body;
 }
 
 /** Node counts + recent nodes for the DevTools Brain panel. */

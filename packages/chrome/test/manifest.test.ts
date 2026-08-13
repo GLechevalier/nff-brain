@@ -67,16 +67,28 @@ describe('manifest.json', () => {
     expect(manifest.web_accessible_resources).toBeUndefined();
   });
 
-  it('locks the CSP down and confines network access to loopback', () => {
+  it('locks the CSP down: loopback + the user-keyed provider host, nothing else', () => {
     const csp = manifest.content_security_policy.extension_pages;
-    expect(csp).toMatch(/script-src 'self'/);
-    expect(csp).toMatch(/object-src 'self'/);
     expect(csp).not.toMatch(/unsafe-eval/);
     expect(csp).not.toMatch(/unsafe-inline/);
-    // Chrome itself then enforces "zero network calls off-device" — the
-    // acceptance criterion becomes a platform guarantee, not a promise.
-    expect(csp).toMatch(/connect-src 'self' http:\/\/127\.0\.0\.1:\*/);
     expect(csp).not.toMatch(/localhost/); // dual-stack; can resolve to ::1
+    // Pinned as the FULL string now that it is a compound claim: Chrome
+    // enforces that requests reach loopback or api.anthropic.com and nowhere
+    // else. Adding a provider host is a deliberate act with a privacy-policy
+    // edit attached (store/privacy-policy.md and bundlePurity's
+    // PROVIDER_API_URLS must move in the same commit).
+    expect(csp).toBe(
+      "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:* https://api.anthropic.com",
+    );
+  });
+
+  it('registers the options page (BYOK key entry) as a full tab', () => {
+    // A popup closes on focus loss — hostile to key paste and password
+    // managers; store reviewers expect credential config on an options page.
+    expect(manifest.options_ui).toEqual({ page: 'options.html', open_in_tab: true });
+    for (const f of ['options/options.html', 'options/options.css', 'options/main.ts']) {
+      expect(fs.existsSync(path.join(root, f)), `missing ${f}`).toBe(true);
+    }
   });
 
   it('refuses to run in incognito', () => {

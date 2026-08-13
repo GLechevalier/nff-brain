@@ -15,6 +15,8 @@ const STATIC = [
   ['devtools/devtools.html', 'devtools.html'],
   ['devtools/panel.html', 'panel.html'],
   ['devtools/panel.css', 'panel.css'],
+  ['options/options.html', 'options.html'],
+  ['options/options.css', 'options.css'],
   ['icons', 'icons'],
 ];
 
@@ -52,10 +54,11 @@ const swCtx = await esbuild.context({ ...common, entryPoints: ['src/sw.ts'], out
 const popupCtx = await esbuild.context({ ...common, entryPoints: ['popup/main.ts'], outfile: `${OUT}/popup.js` });
 const devtoolsCtx = await esbuild.context({ ...common, entryPoints: ['devtools/devtools.ts'], outfile: `${OUT}/devtools.js` });
 const panelCtx = await esbuild.context({ ...common, entryPoints: ['devtools/panel.ts'], outfile: `${OUT}/panel.js` });
+const optionsCtx = await esbuild.context({ ...common, entryPoints: ['options/main.ts'], outfile: `${OUT}/options.js` });
 const contentCtxs = await Promise.all(
   CONTENT.map(([entry, out]) => esbuild.context({ ...common, entryPoints: [entry], outfile: `${OUT}/${out}` })),
 );
-const contexts = [swCtx, popupCtx, devtoolsCtx, panelCtx, ...contentCtxs];
+const contexts = [swCtx, popupCtx, devtoolsCtx, panelCtx, optionsCtx, ...contentCtxs];
 
 copyStatic();
 

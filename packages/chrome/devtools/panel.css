@@ -19,6 +19,18 @@ body {
   background: #252526;
 }
 .wordmark { font-weight: 700; color: #00ffcc; }
+.mascot {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  image-rendering: pixelated;
+  animation: capybara-blink 5s ease-in-out infinite;
+}
+
+@keyframes capybara-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  96% { transform: scaleY(0.15); }
+}
 .muted { color: #888; }
 .small { font-size: 11px; }
 .push { margin-left: auto; }
@@ -175,6 +187,14 @@ textarea.input { resize: vertical; }
   background: #262626;
 }
 .entry-run .list li > span:last-child { align-self: flex-end; }
+
+.entry-pending { background: #242424; border: 1px solid #333; color: #999; }
+.entry-pending .pending-word { animation: brain-pulse 1.2s ease-in-out infinite; }
+
+@keyframes brain-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
 
 .prompt-row { align-items: flex-end; }
 
