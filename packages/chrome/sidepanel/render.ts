@@ -66,11 +66,9 @@ export function paintActRun(run: ActRunState | null): void {
   const phase = run?.phase ?? null;
   const running = phase === 'running' || phase === 'stopping' || phase === 'awaiting_grant';
 
-  // In Act mode the Brain prompt IS the agent goal box and Send IS "Run", so a
-  // live run disables them and swaps Send for the Stop button.
-  ($('prompt-input') as HTMLTextAreaElement).disabled = running;
+  // The run-feedback area shows only while a replayed workflow is active/recent.
+  $('act-run').classList.toggle('hidden', idle);
   ($('act-budget') as HTMLInputElement).disabled = running;
-  $('prompt-send').classList.toggle('hidden', running);
   $('act-stop').classList.toggle('hidden', !running);
   $('act-grant').classList.toggle('hidden', phase !== 'awaiting_grant');
   $('act-clear').classList.toggle('hidden', idle || running);
@@ -140,45 +138,29 @@ export function showActError(msg: string | null): void {
 
 // ── Brain tab: mode switch ───────────────────────────────────────────────────
 
-// 'act' is the default: the prompt drives the CDP web agent on the active tab
-// (press a button, fill a form, …). 'manual' (labelled "Ask") answers from your
-// notes. 'plan'/'auto' are the LinkedIn recruiting flow (paired only).
-export type ChatMode = 'act' | 'manual' | 'plan' | 'auto';
+// Claude-Code-style modes. 'manual' answers from your notes AND executes an
+// action intent ("navigate to X") after asking permission — fast, in-tab.
+// 'plan'/'auto' are the LinkedIn recruiting flow (paired only).
+export type ChatMode = 'manual' | 'plan' | 'auto';
 
 const MODE_HINT: Record<ChatMode, string> = {
-  act: 'Tell the agent what to do on the current tab — it drives the page with a real, visible cursor. Chrome shows a "debugging this browser" bar while it works.',
-  manual: 'Chat answers from your notes. A "navigate to X" request still asks for confirmation first.',
+  manual: 'Chat answers from your notes. A "navigate to X" request opens the page after asking you.',
   plan: 'Type a goal. A plan is generated and shown for your approval before anything runs. A "navigate to X" request still asks first.',
   auto: 'Type a goal. The plan is approved automatically the moment it is ready — no review step. A "navigate to X" request opens immediately too, no asking.',
 };
 
 const PLACEHOLDER: Record<ChatMode, string> = {
-  act: 'Tell the agent to do something on this tab — e.g. press the Get Started button',
-  manual: 'Ask your brain — e.g. what did I learn about OAuth callbacks',
+  manual: 'Ask your brain, or say "navigate to linkedin.com"',
   plan: 'Describe a goal…',
   auto: 'Describe a goal…',
 };
 
 export function paintMode(mode: ChatMode): void {
-  for (const m of ['act', 'manual', 'plan', 'auto'] as const) {
+  for (const m of ['manual', 'plan', 'auto'] as const) {
     $(`mode-${m}`).classList.toggle('active', m === mode);
   }
   $('mode-hint').textContent = MODE_HINT[mode];
-  const isAct = mode === 'act';
-  const isGoal = mode === 'plan' || mode === 'auto';
-  // Act mode shows the agent panel (status/grant/log/workflows) instead of the
-  // chat transcript; the LinkedIn adapter + goal-options belong to Plan/Auto.
-  $('act-panel').classList.toggle('hidden', !isAct);
-  $('transcript').classList.toggle('hidden', isAct);
-  $('goal-options').classList.toggle('hidden', !isGoal);
-  $('adapter-row').classList.toggle('hidden', !isGoal);
-  $('prompt-send').textContent = isAct ? 'Run' : 'Send';
-  // Act mode's paintActRun hides Send (Stop takes over) while a run is live;
-  // leaving Act must always restore the chat Send + re-enable the input.
-  if (!isAct) {
-    $('prompt-send').classList.remove('hidden');
-    ($('prompt-input') as HTMLTextAreaElement).disabled = false;
-  }
+  $('goal-options').classList.toggle('hidden', mode === 'manual');
   ($('prompt-input') as HTMLTextAreaElement).placeholder = PLACEHOLDER[mode];
 }
 

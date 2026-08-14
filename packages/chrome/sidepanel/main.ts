@@ -168,9 +168,9 @@ function paintStandaloneMode(standalone: boolean): void {
   $('sp-tab-mcp').classList.toggle('hidden', standalone);
   $('mode-plan').classList.toggle('hidden', standalone);
   $('mode-auto').classList.toggle('hidden', standalone);
-  $('adapter-toggle').classList.toggle('hidden', standalone);
-  // Plan/Auto are paired-only; standalone keeps Act (agent) + Ask (chat).
-  if (standalone && (mode === 'plan' || mode === 'auto')) setMode('act');
+  $('adapter-row').classList.toggle('hidden', standalone);
+  // Plan/Auto are paired-only; standalone keeps Manual (chat + navigate-intent).
+  if (standalone && mode !== 'manual') setMode('manual');
   if (standalone && currentTab === 'mcp') {
     currentTab = 'brain';
     switchTab('brain');
@@ -248,10 +248,9 @@ async function loadWorkflows(): Promise<void> {
   const reply = await send({ type: 'getWorkflows' });
   if (reply.type !== 'workflows') return;
   renderWorkflows(reply.items, (w: WorkflowRow) => {
-    const goalEl = $('prompt-input') as HTMLTextAreaElement;
-    if (!goalEl.value.trim()) goalEl.value = w.intent;
-    if (mode !== 'act') setMode('act');
-    void startActRun(goalEl.value.trim() || w.intent, w.id);
+    // Replaying a recorded workflow runs the CDP agent; the run-feedback area
+    // (act-run) appears while it works.
+    void startActRun(w.intent, w.id);
   });
 }
 
@@ -530,15 +529,6 @@ async function submitPrompt(): Promise<void> {
     return;
   }
   showFieldError('prompt-error', null);
-
-  // Act mode: the prompt IS the agent goal — drive the CDP web agent on the
-  // active tab. No chat transcript / pending word; the act panel shows progress.
-  if (mode === 'act') {
-    input.value = '';
-    await startActRun(message);
-    return;
-  }
-
   submitting = true;
   ($('prompt-send') as HTMLButtonElement).disabled = true;
 
@@ -824,9 +814,8 @@ function wire(): void {
   $('sp-tab-graph').addEventListener('click', () => selectTab('graph'));
   $('sp-tab-settings').addEventListener('click', () => selectTab('settings'));
 
-  // Brain tab — modes (Act default). Act mode runs the CDP web agent; the act
-  // panel's Stop/Clear/grant controls live here now that the Agent tab is gone.
-  $('mode-act').addEventListener('click', () => setMode('act'));
+  // Brain tab — Claude-Code-style modes. The act Stop/Clear/grant controls drive
+  // a REPLAYED workflow (record-and-automate), shown in the workflows section.
   $('mode-manual').addEventListener('click', () => setMode('manual'));
   $('mode-plan').addEventListener('click', () => setMode('plan'));
   $('mode-auto').addEventListener('click', () => setMode('auto'));
@@ -871,7 +860,7 @@ function wire(): void {
 async function boot(): Promise<void> {
   wire();
   wireGraphCanvas();
-  setMode('act'); // default: the Brain prompt drives the web agent
+  setMode('manual'); // Claude-Code-style default
 
   const initial = await readInitialTab();
   currentTab = initial;

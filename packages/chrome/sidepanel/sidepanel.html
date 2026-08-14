@@ -52,52 +52,25 @@
     </section>
 
     <!--
-      Brain: one prompt, four modes. Act (default) drives the CDP web agent on
-      THIS tab (press a button, fill a form) with a visible cursor. Ask answers
-      from your notes. Plan/Auto are the LinkedIn recruiting flow (paired).
+      Brain: one prompt, three Claude-Code-style modes. Manual answers from your
+      notes and, on a "navigate to X" request, opens the page after asking you.
+      Plan/Auto are the LinkedIn recruiting flow (paired only).
     -->
     <section id="brain-view" class="view">
-      <div id="adapter-row" class="row hidden">
+      <div id="adapter-row" class="row">
         <span class="small strong">LinkedIn agent</span>
         <button id="adapter-toggle" class="btn small push">Enable</button>
       </div>
       <div id="adapter-error" class="small error hidden"></div>
 
       <div class="row gap mode-switch" role="radiogroup" aria-label="Mode">
-        <button id="mode-act" class="mode-btn active" data-mode="act" type="button">Act</button>
-        <button id="mode-manual" class="mode-btn" data-mode="manual" type="button">Ask</button>
+        <button id="mode-manual" class="mode-btn active" data-mode="manual" type="button">Manual</button>
         <button id="mode-plan" class="mode-btn" data-mode="plan" type="button">Plan</button>
         <button id="mode-auto" class="mode-btn" data-mode="auto" type="button">Auto</button>
       </div>
       <p id="mode-hint" class="muted small"></p>
 
-      <!-- Ask/Plan/Auto: the chat transcript. -->
       <div id="transcript" class="transcript"></div>
-
-      <!-- Act mode: the web-agent panel (status/grant/log + Stop/Clear + workflows). -->
-      <div id="act-panel" class="hidden">
-        <div class="row gap">
-          <label class="small" for="act-budget">Max actions</label>
-          <input id="act-budget" class="input narrow" type="number" min="1" max="100" value="40" />
-          <button id="act-stop" class="btn small hidden">Stop</button>
-          <button id="act-clear" class="btn small hidden">Clear</button>
-        </div>
-        <div id="act-grant" class="grant hidden">
-          <p class="small">Let the agent act on <strong id="act-grant-origin"></strong>?</p>
-          <div class="row gap">
-            <button id="act-grant-once" class="btn small">Once</button>
-            <button id="act-grant-always" class="btn small">Always</button>
-            <button id="act-grant-never" class="btn small">Never</button>
-          </div>
-        </div>
-        <p id="act-status" class="small"></p>
-        <div id="act-log" class="transcript"></div>
-        <div id="act-error" class="small error hidden"></div>
-
-        <div class="row"><span class="label">Saved workflows</span></div>
-        <ul id="workflow-list" class="list"></ul>
-        <p id="workflow-empty" class="muted small">No workflows yet — record a task from the popup.</p>
-      </div>
 
       <!-- Only shown in Plan/Auto mode — a recruiting goal with a cap + list target. -->
       <div id="goal-options" class="row gap hidden">
@@ -108,10 +81,40 @@
       </div>
 
       <div class="row gap prompt-row">
-        <textarea id="prompt-input" class="input grow" rows="2" placeholder="Tell the agent to do something on this tab…"></textarea>
-        <button id="prompt-send" class="btn primary">Run</button>
+        <textarea id="prompt-input" class="input grow" rows="2" placeholder="Ask your brain, or say navigate to…"></textarea>
+        <button id="prompt-send" class="btn primary">Send</button>
       </div>
       <div id="prompt-error" class="small error hidden"></div>
+
+      <!-- Record-and-automate: replay a recorded workflow (drives the CDP agent). -->
+      <div class="workflows">
+        <div class="row gap">
+          <span class="label grow">Saved workflows</span>
+          <label class="small" for="act-budget">Max actions</label>
+          <input id="act-budget" class="input narrow" type="number" min="1" max="100" value="40" />
+        </div>
+        <ul id="workflow-list" class="list"></ul>
+        <p id="workflow-empty" class="muted small">No workflows yet — record a task from the popup.</p>
+
+        <!-- Replay run feedback — hidden unless a replay is active. -->
+        <div id="act-run" class="hidden">
+          <div id="act-grant" class="grant hidden">
+            <p class="small">Let the agent act on <strong id="act-grant-origin"></strong>?</p>
+            <div class="row gap">
+              <button id="act-grant-once" class="btn small">Once</button>
+              <button id="act-grant-always" class="btn small">Always</button>
+              <button id="act-grant-never" class="btn small">Never</button>
+            </div>
+          </div>
+          <p id="act-status" class="small"></p>
+          <div id="act-log" class="transcript"></div>
+          <div class="row gap">
+            <button id="act-stop" class="btn small hidden">Stop</button>
+            <button id="act-clear" class="btn small hidden">Clear</button>
+          </div>
+          <div id="act-error" class="small error hidden"></div>
+        </div>
+      </div>
     </section>
 
     <!--
