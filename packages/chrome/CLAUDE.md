@@ -15,17 +15,25 @@ and renders what it gets back.
 
 ## The two brains (this drives everything)
 
-The extension runs in one of two modes, decided by whether a **pairing** is
-stored (`nb.pairing`). A stored pairing ALWAYS wins (`src/mode.ts`):
+Two peer AI backends, chosen by an EXPLICIT user preference (`nb.brainMode`,
+the "AI backend" control in Settings) and resolved by `src/mode.ts`
+(`deriveBrainMode`). No preference stored = the legacy rule: a stored pairing
+(`nb.pairing`) wins, else BYOK if a key is saved. The resolution is
+work-or-degrade — a preference for an unconfigured backend falls back to the
+other one, never to a dead end.
 
-- **Paired** — the brain is a local `nff-brain serve` process on
-  `127.0.0.1:7373`. The extension is a thin HTTP client (`src/client.ts`); the
-  brain, LLM calls (`claude -p` via the user's Claude Code login), and web-agent
+- **Paired** — a local `nff-brain serve` process on `127.0.0.1:7373`. The
+  extension is a thin HTTP client (`src/client.ts`); the brain graph, LLM
+  calls (`claude -p` via the user's Claude Code login), and web-agent
   reasoning all live server-side. No API key needed.
-- **Standalone / BYOK** — no server. The brain lives in `chrome.storage.local`
-  (`nb.brain`), and LLM calls go straight to the user's own Anthropic key
-  (`src/providerClient.ts`). Handlers mirror the paired routes 1:1
-  (`src/standalone.ts`) so the UI is mode-agnostic.
+- **BYOK / Direct API** — no server, no Claude Code. LLM calls go straight to
+  the user's own Anthropic key (`src/providerClient.ts`), streamed + prompt-
+  cached; the act loop, chat (`src/byokChat.ts`), workflow replay
+  (`src/workflowStore.ts`), trace distillation
+  (`src/standaloneTraceDistill.ts`), and the clip drain
+  (`src/standaloneDrain.ts` → the local brain `nb.brain`) all run in the
+  browser. The local brain is RETRIEVAL FUEL only — the Graph/MCP tabs stay
+  server-backed and simply gate on the pairing's health, not on the mode.
 
 `connect-src` in the CSP is pinned to loopback + `api.anthropic.com` — the only
 two hosts the extension may ever reach.
@@ -75,14 +83,32 @@ are CDP-injected (no host permissions needed for arbitrary origins), so the
 Stop pill can't message the SW directly; it sets a page-side flag `keepGoing()`
 (`src/actRun.ts`) polls between turns, the same checkpoint the panel's own Stop
 button already goes through.
-The reasoning loop runs through paired `claude -p` (default) or the BYOK
-Anthropic tool-use API.
+The reasoning loop runs through whichever backend the AI-backend switch picks
+(`src/mode.ts`): paired `claude -p`, or the BYOK Anthropic tool-use API —
+prompt-cached, streamed, and abortable mid-call.
 
 ### 4. Record & automate
 Record what you do on a tab → distill it into a **generalized workflow**
 (literals become parameters, repeated blocks become one loop step) → store it as
 a single brain node (`origin: 'workflow'`) → replay it later through subsystem 3,
 re-grounding each step against the live page.
+
+### 5. Coding agent (File System Access)
+Attach a real project folder from the side panel (`showDirectoryPicker`, the
+gesture context; the handle persists in **IndexedDB** via `src/fsHandles.ts` —
+the one IDB module, the IDB sibling of storage.ts's chrome.storage monopoly —
+while `nb.codeProject` keeps only JSON metadata). A code-enabled run then adds
+`code_read/list/search/write/edit` to BOTH loops — the tools execute in the SW
+against the handle, so paired and BYOK work identically. Paths pass the jail
+(`src/codePath.ts`) before any FS traversal; consent is per-class
+(`src/codeGate.ts`): reads free once attached, every write pauses the run with
+a diff the user approves in the panel (Once / Always-this-run / Never — Never
+declines just that write, the run continues). Session grants live on
+`ActRunState.codeGrants`, read fresh at each decision so the panel's
+auto-approve toggle works mid-run; nothing persists beyond the run. Files:
+`src/codeTools.ts` (specs/executors/steering/diff), `src/codeFs.ts` (fs ops,
+exclusion list, caps). In-browser compile/exec (a WebContainer workbench and
+`code_exec`) is a later milestone — see the plan.
 
 ---
 
@@ -94,8 +120,8 @@ Three deliberately separate channels (`src/protocol.ts` holds the unions):
   `PopupToSw` → reply `SwToPopup` (the union keeps its original name; the
   toolbar popup that named it is gone — the side panel is the only surface
   left speaking it, opened directly via `chrome.sidePanel.setPanelBehavior`).
-  Dispatched in `sw.ts handleMessage()`. In standalone mode
-  `handleStandaloneMessage()` intercepts first.
+  Dispatched in `sw.ts handleMessage()`; the mode-routed cases (`actStart`,
+  `chatAsk`, `traceStop`, clip delivery) call `resolveBrainMode()` inline.
 - **SW → content script**: `chrome.tabs.sendMessage` (the LinkedIn agent's two
   verbs). Closed union `SwToContent`.
 - **content script → SW**: fire-and-forget `chrome.runtime.sendMessage`, and
@@ -116,7 +142,7 @@ The CDP web agent's loop is a held-open async chain in the SW; UI surfaces poll
 | `manifest.json` | MV3 manifest. Permissions: storage, alarms, activeTab, contextMenus, scripting, **debugger**, **tabs**, **sidePanel**. `debugger`/`tabs` carry the only install warnings (the web agent). |
 | `src/sw.ts` | **Service worker entry.** Listener registration + `handleMessage()` dispatch. |
 | `devtools/` | The **Brain / MCP / Graph** DevTools panel (subsystem 2 + brain browsing). `devtools.ts` registers the panel; `panel.ts` logic, `panelPaint.ts` pure renderers, `panel.html/css`. |
-| `sidepanel/` | The consolidated UI (Settings · Agent · MCP · Brain · Graph — Settings is still `setup` in ids/JS identifiers, only its visible label changed) — this is now also the toolbar icon's default click target (no more separate popup; see `chrome.sidePanel.setPanelBehavior` in `src/sw.ts`). Settings carries what the old popup owned (pairing, capture toggle, allowlist, recorders, **Record a task**) plus, in a collapsible `#setup-byok` section, what the old options page owned (BYOK provider/key + model slots — now a narrow fallback for the web agent's reasoning while unpaired, not a peer brain). `main.ts` targets the active tab + drives the run; `render.ts` pure renderers; `sidepanel.html/css`. |
+| `sidepanel/` | The consolidated UI (Settings · Agent · MCP · Brain · Graph — Settings is still `setup` in ids/JS identifiers, only its visible label changed) — this is now also the toolbar icon's default click target (no more separate popup; see `chrome.sidePanel.setPanelBehavior` in `src/sw.ts`). Settings carries what the old popup owned (pairing, capture toggle, allowlist, recorders, **Record a task**) plus the **AI backend** switch (`#setup-mode` — Paired server / Direct API) and, in a collapsible `#setup-byok` section, what the old options page owned (BYOK provider/key + model slots + the import-brain-from-server button — a full peer backend now, not a fallback). `main.ts` targets the active tab + drives the run; `render.ts` pure renderers; `sidepanel.html/css`. |
 
 ### Core plumbing
 | Path | What |
@@ -128,16 +154,18 @@ The CDP web agent's loop is a held-open async chain in the SW; UI surfaces poll
 | `src/connection.ts` | probe / pair / unpair orchestration + phase derivation. |
 | `src/health.ts` | Pure connection-health arithmetic (backoff, phase). |
 | `src/badge.ts` | Toolbar icon state. |
-| `src/mode.ts` | Which brain is live (paired always wins). |
+| `src/mode.ts` | Which brain drives LLM work: `deriveBrainMode(pref, pairing, provider)` — explicit `nb.brainMode` preference, legacy pairing-wins default, work-or-degrade fallback. |
 
-### Standalone / BYOK brain
+### BYOK / Direct API brain
 | Path | What |
 |---|---|
-| `src/providerClient.ts` | The ONLY place a provider request is sent. `makeProviderOneShot`, `runChatWithTools` (the generic tool-use loop). |
-| `src/brainStore.ts` | The in-browser brain's serialized write path (`mutateLocalBrain`, `runExclusive`). |
-| `src/standalone.ts` | Standalone message handlers mirroring the paired serve routes. |
-| `src/standaloneDrain.ts` | Clip queue → alarm drain → provider → nodes (browser side). |
-| `src/migrate.ts` | Standalone→paired migration (push local brain into the server on pairing). |
+| `src/providerClient.ts` | The ONLY place a provider request is sent. `makeProviderOneShot` (background slot one-shots: trace distill, clip drain), `runChatWithTools` (the generic tool-use loop: prompt caching via `system`, streaming via `onAssistantTextDelta`, mid-call abort via `signal`, snapshot compaction). |
+| `src/byokChat.ts` | Manual-mode chat over the direct API — local-brain retrieval + the navigate tool. |
+| `src/brainStore.ts` | The local brain's serialized write path (`mutateLocalBrain`, `runExclusive`) + `mergeImportedBrain` (the /v1/export import). |
+| `src/standaloneDrain.ts` | Clip queue → alarm drain → provider → nodes in the local brain (browser side). |
+| `src/standaloneTraceDistill.ts` | On traceStop in BYOK mode: distill the recording into a local workflow (background slot). |
+| `src/workflowStore.ts` | `nb.workflows` — local replayable specs; one-way import/sync from the paired server. |
+| `src/migrate.ts` | LEGACY-only sweep of a pre-upgrade local brain into the server — gated OFF whenever an explicit `nb.brainMode` is stored (the local brain is live then). |
 
 ### Passive recorder / capture (subsystem 1)
 | Path | What |
@@ -185,7 +213,7 @@ The extension side:
 |---|---|
 | `content/traceRecorder.ts` + `traceDescriptor.ts` | Capture-phase recorder + semantic target descriptors (never CSS paths; redacts passwords). |
 | `src/traceCapture.ts` | SW side: validate/stamp-url/gate/ring events (`nb.traceActive`), start/stop, cap→auto-stop. |
-| `src/standaloneTraceDistill.ts` | On stop (BYOK), distill the trace into a workflow node in the local brain. |
+| `src/standaloneTraceDistill.ts` | On stop (BYOK), distill the trace into the local workflow store (`nb.workflows`). |
 
 Server counterparts (in `packages/cli/src/serve/`): `actRoutes.ts`
 (`POST /v1/act/step` — the paired agent's `claude -p` brain step), `chatRoutes.ts`,
@@ -217,3 +245,11 @@ only `runtime.ts` sends, only `recorderEvent`/`traceEvent`), the four documented
 module vars, top-level SW listeners, the `@nff-brain/core` subpath allowlist, the
 `shouldCapture`/hostname reader call sites, and the exact `dist/` file list.
 Widening any of these means editing the test in the same commit.
+`test/injectedSource.test.ts` builds every CDP-injected program (snapshot /
+resolve / fingerprint / cursor / attention) **minified**, the way `npm run
+build` does — `minify: !watch`, so `npm run watch` cannot reproduce this — and
+fails on any identifier the page cannot resolve. A module-scope name closed
+over by a `.toString()`-stitched function becomes a bare minified name in the
+page (`ReferenceError: Fn is not defined`, then `Vo`), which kills read_page
+and with it every agent turn. Growing that test's browser-globals allowlist is
+the deliberate edit.

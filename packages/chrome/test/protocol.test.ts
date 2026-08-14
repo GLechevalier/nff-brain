@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isAgentStatusResponse,
   isClipsMapResponse,
   isGraphResponse,
   isNodesResponse,
@@ -42,6 +43,24 @@ describe('panel + feedback-loop wire guards', () => {
   it('isRetractResponse demands a removed array', () => {
     expect(isRetractResponse({ ok: true })).toBe(false);
     expect(isRetractResponse({ ok: true, removed: [] })).toBe(true);
+  });
+
+  it('isAgentStatusResponse tolerates a missing lastRun (older server) but never a malformed one', () => {
+    const run = {
+      id: 'run_1',
+      phase: 'error',
+      goal: 'g',
+      cursor: 0,
+      actionsTaken: 0,
+      maxActions: 5,
+      history: [],
+    };
+    expect(isAgentStatusResponse({ ok: true, run: null })).toBe(true);
+    expect(isAgentStatusResponse({ ok: true, run: null, lastRun: null })).toBe(true);
+    expect(isAgentStatusResponse({ ok: true, run: null, lastRun: run })).toBe(true);
+    expect(isAgentStatusResponse({ ok: true, run, lastRun: run })).toBe(true);
+    expect(isAgentStatusResponse({ ok: true, run: null, lastRun: 'garbage' })).toBe(false);
+    expect(isAgentStatusResponse({ ok: true, run: null, lastRun: { id: 'r', phase: 'not-a-phase' } })).toBe(false);
   });
 
   it('isGraphResponse demands numeric geometry on every node', () => {

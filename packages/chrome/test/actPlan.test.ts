@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dragSamples, keyDescriptor, modifierBits } from '../src/actPlan.js';
+import { dragSamples, keyDescriptor, modifierBits, wheelSteps } from '../src/actPlan.js';
 
 describe('modifierBits', () => {
   it('encodes the CDP bitmask (Alt=1 Ctrl=2 Meta=4 Shift=8)', () => {
@@ -27,6 +27,42 @@ describe('keyDescriptor', () => {
   it('rejects multi-character non-named strings', () => {
     expect(keyDescriptor('abc')).toBeNull();
     expect(keyDescriptor('')).toBeNull();
+  });
+});
+
+describe('wheelSteps', () => {
+  const sum = (steps: Array<{ dx: number; dy: number }>) =>
+    steps.reduce((a, s) => ({ dx: a.dx + s.dx, dy: a.dy + s.dy }), { dx: 0, dy: 0 });
+
+  it('sums exactly to the requested delta, including rounding-hostile values', () => {
+    for (const [dx, dy] of [
+      [0, 777],
+      [-333, 100],
+      [500, -500],
+      [1, 0],
+      [0, -3],
+      [12345, 7],
+    ] as const) {
+      expect(sum(wheelSteps(dx, dy))).toEqual({ dx, dy });
+    }
+  });
+
+  it('eases out: the first tick of a large scroll outruns the last', () => {
+    const steps = wheelSteps(0, 1200);
+    expect(steps.length).toBeGreaterThan(4);
+    expect(Math.abs(steps[0]!.dy)).toBeGreaterThan(Math.abs(steps[steps.length - 1]!.dy));
+  });
+
+  it('never emits a both-zero step and still delivers tiny nudges', () => {
+    const steps = wheelSteps(0, 3);
+    expect(steps.length).toBeGreaterThanOrEqual(1);
+    for (const s of [...steps, ...wheelSteps(-333, 100)]) {
+      expect(s.dx !== 0 || s.dy !== 0).toBe(true);
+    }
+  });
+
+  it('returns nothing for a zero scroll', () => {
+    expect(wheelSteps(0, 0)).toEqual([]);
   });
 });
 

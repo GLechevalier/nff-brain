@@ -31,6 +31,7 @@ import {
   getMcpServers,
   getMcpTools,
   getNodes,
+  getExport,
   getWorkflows as getWorkflowsFromServer,
   moveGraphNode,
   rejectAgentPlan,
@@ -65,17 +66,27 @@ import {
   getActivity,
   getAllowlist,
   getBrain,
+  getBrainModePref,
   getCapture,
   getHealth,
   getPairing,
   getProviderSettings,
   seedDefaults,
   setAllowlist,
+  setBrainModePref,
   setCapture,
   setProviderSettings,
 } from './storage.js';
+import { deriveBrainMode, resolveBrainMode } from './mode.js';
+import { byokChatAsk } from './byokChat.js';
+import { listLocalWorkflows, syncWorkflowsFromServer } from './workflowStore.js';
+import { distillPendingTrace } from './standaloneTraceDistill.js';
+import { DRAIN_ALARM, drainStandaloneClips, ensureDrainAlarm } from './standaloneDrain.js';
+import { mergeImportedBrain } from './brainStore.js';
 import { testProviderKey } from './providerClient.js';
-import { answerPendingGrant, endActionRun, startActionRun, stopActionRun } from './actRun.js';
+import { answerPendingGrant, endActionRun, setCodeAutoApprove, startActionRun, stopActionRun } from './actRun.js';
+import { clearProjectHandle, queryProjectPermission } from './fsHandles.js';
+import { getCodeProject, setCodeProject } from './storage.js';
 import { attentionHide, cursorHide } from './actEngine.js';
 import { cancelTraceRecording, onTraceEvent, startTraceRecording, stopTraceRecording } from './traceCapture.js';
 import { distillPairedTrace } from './pairedTraceDistill.js';
@@ -85,7 +96,7 @@ import { PROVIDERS } from '@nff-brain/core/provider';
 import type { PopupToSw, PublicState, SwToPopup } from './protocol.js';
 
 async function publicState(): Promise<PublicState> {
-  const [pairing, health, capture, allowlist, activity, provider, legacyBrain] = await Promise.all([
+  const [pairing, health, capture, allowlist, activity, provider, legacyBrain, brainModePref] = await Promise.all([
     getPairing(),
     getHealth(),
     getCapture(),
@@ -96,6 +107,7 @@ async function publicState(): Promise<PublicState> {
     // surviving exception, purely to detect a pre-upgrade user's leftover
     // local brain so migrateIfNeeded() (migrate.ts) has something to finish.
     getBrain(),
+    getBrainModePref(),
   ]);
   const { nextProbeAtMs, ...rest } = health;
   void nextProbeAtMs; // internal scheduling; the UI has no use for it
@@ -115,6 +127,8 @@ async function publicState(): Promise<PublicState> {
     provider: provider?.provider ?? null,
     providerModels: provider?.models ?? null,
     providerLastTest: provider?.lastTest ?? null,
+    brainMode: deriveBrainMode(brainModePref, pairing !== null, provider !== null),
+    brainModePref,
     // Non-null whether paired or not — the blocked-state UI shows the count
     // ("N notes saved from before — pair to keep them") before the user ever
     // pairs; migrateIfNeeded() clears it once the import lands.
@@ -261,8 +275,12 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       } catch (err) {
         return { type: 'error', message: err instanceof Error ? err.message : String(err) };
       }
+      // The submit is the only signal an auto-approved run ever sends (there
+      // is no approve click to kick the loop) — arm it now; pollAgent re-arms
+      // itself through the planning phase until the run starts or dies.
+      void pollAgent();
       const status = await getAgentStatus(pairing.port, pairing.token);
-      return { type: 'agentStatus', run: status.run };
+      return { type: 'agentStatus', run: status.run, lastRun: status.lastRun ?? null };
     }
 
     case 'agentApprovePlan': {
@@ -290,14 +308,14 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       await clearAgentPollAlarm();
       await stopAgentRun(pairing.port, pairing.token, msg.runId);
       const status = await getAgentStatus(pairing.port, pairing.token);
-      return { type: 'agentStatus', run: status.run };
+      return { type: 'agentStatus', run: status.run, lastRun: status.lastRun ?? null };
     }
 
     case 'getAgentStatus': {
       const pairing = await getPairing();
       if (!pairing) return { type: 'agentStatus', run: null };
       const status = await getAgentStatus(pairing.port, pairing.token);
-      return { type: 'agentStatus', run: status.run };
+      return { type: 'agentStatus', run: status.run, lastRun: status.lastRun ?? null };
     }
 
     case 'getMcpServers': {
@@ -335,8 +353,13 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     // a token per message, and the one call site that needs a longer timeout
     // than every other route (see CHAT_TIMEOUT_MS).
     case 'chatAsk': {
+      // Mode-routed like the act loop (mode.ts): paired chat answers with the
+      // server-side brain via /v1/chat, byte-identical to before; BYOK chat
+      // answers over the direct provider API with the navigate tool wired in.
+      const chatMode = await resolveBrainMode();
+      if (chatMode === 'byok') return byokChatAsk(msg.message, msg.history, msg.tabId);
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
+      if (!pairing) return { type: 'error', message: 'pair from the Settings tab, or add an API key, to chat' };
       try {
         const { answer, sources } = await askChat(pairing.port, pairing.token, msg.message, msg.history);
         return { type: 'chatAnswer', answer, sources };
@@ -383,6 +406,23 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     case 'testProvider':
       return { type: 'providerTest', result: await testProviderKey() };
 
+    case 'setBrainMode':
+      if (msg.mode !== 'paired' && msg.mode !== 'byok') return { type: 'error', message: 'unknown brain mode' };
+      await setBrainModePref(msg.mode);
+      break;
+
+    case 'importBrainFromServer': {
+      const pairing = await getPairing();
+      if (!pairing) return { type: 'error', message: 'pair with `nff-brain serve` first — there is no server to import from' };
+      try {
+        const exported = await getExport(pairing.port, pairing.token);
+        const { imported, total } = await mergeImportedBrain(exported.nodes, exported.edges);
+        return { type: 'brainImported', imported, total };
+      } catch (err) {
+        return { type: 'error', message: err instanceof Error ? err.message : 'could not reach the brain' };
+      }
+    }
+
     case 'clearActivity': {
       if (msg.alsoRemoveNodes) {
         const nodeIds = [...new Set((await getActivity()).flatMap((r) => r.nodeIds))];
@@ -408,19 +448,46 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     // uses the provider key); paired mode has no provider so the run reports
     // "add an API key" — the paired generic loop is a later milestone.
     case 'actStart': {
-      const res = await startActionRun(msg.goal, msg.tabId, msg.maxActions, msg.workflowId, msg.mode);
+      const res = await startActionRun(msg.goal, msg.tabId, msg.maxActions, msg.workflowId, msg.mode, msg.codeEnabled);
       if (!res.ok) return { type: 'error', message: res.error ?? 'could not start the run' };
       return { type: 'actStatus', run: await getActRun() };
     }
 
+    // Coding agent: project attach/detach/status + the per-run auto-approve
+    // toggle. The panel already stored (or cleared) the folder HANDLE in
+    // IndexedDB before sending these — showDirectoryPicker needs its window
+    // context — so the SW only manages the JSON metadata and answers status.
+    case 'codeAttached':
+      await setCodeProject({ name: msg.name, attachedAt: new Date().toISOString() });
+      return { type: 'codeStatus', project: await getCodeProject(), permission: await queryProjectPermission() };
+
+    case 'codeDetach':
+      await clearProjectHandle();
+      await setCodeProject(null);
+      return { type: 'codeStatus', project: null, permission: 'missing' };
+
+    case 'getCodeStatus':
+      return { type: 'codeStatus', project: await getCodeProject(), permission: await queryProjectPermission() };
+
+    case 'codeAutoApprove':
+      await setCodeAutoApprove(msg.enabled);
+      return { type: 'actStatus', run: await getActRun() };
+
     case 'getWorkflows': {
+      // Local store ∪ server list (server wins metadata on id collision), so
+      // BYOK lists its locally distilled + previously imported workflows and
+      // paired mode opportunistically refreshes the local cache as a side
+      // effect (fire-and-forget — a slow sync must not delay the reply).
+      const localItems = await listLocalWorkflows();
       const pairing = await getPairing();
-      if (!pairing) return { type: 'workflows', items: [] };
+      if (!pairing) return { type: 'workflows', items: localItems };
+      void syncWorkflowsFromServer(pairing);
       try {
         const res = await getWorkflowsFromServer(pairing.port, pairing.token);
-        return { type: 'workflows', items: res.items };
+        const merged = [...res.items, ...localItems.filter((l) => !res.items.some((s) => s.id === l.id))];
+        return { type: 'workflows', items: merged };
       } catch {
-        return { type: 'workflows', items: [] };
+        return { type: 'workflows', items: localItems };
       }
     }
 
@@ -455,15 +522,20 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'traceStop': {
       const rec = await stopTraceRecording();
-      // Distill into a workflow node server-side via /v1/trace — fire-and-
-      // forget, the panel polls tracePending, which the distiller clears on
-      // success. Unpaired: the recording stays queued in tracePending rather
-      // than being distilled anywhere; the next pairing does not retry it
-      // automatically (this is Record & automate, not the legacy migration
-      // sweep), but nothing is lost silently — it is still visible/re-startable.
+      // Distill mode-routed (mode.ts), fire-and-forget either way — the panel
+      // polls tracePending, which the distiller clears on success. Paired:
+      // server-side via /v1/trace (a brain node). BYOK: in the browser via
+      // the provider's cheap background slot, into the local workflow store.
+      // Unconfigured: the recording stays queued in tracePending rather than
+      // being distilled anywhere; nothing is lost silently.
       if (rec && rec.events.length > 0) {
-        const pairing = await getPairing();
-        if (pairing) void distillPairedTrace(pairing);
+        const traceMode = await resolveBrainMode();
+        if (traceMode === 'paired') {
+          const pairing = await getPairing();
+          if (pairing) void distillPairedTrace(pairing);
+        } else if (traceMode === 'byok') {
+          void distillPendingTrace();
+        }
       }
       return traceStatus();
     }
@@ -534,6 +606,8 @@ async function onInstalled(): Promise<void> {
   // leave it dangling.
   if ((await getTraceActive())?.recording) await stopTraceRecording();
   await ensureAlarm();
+  // Re-arm the clip drain in case an update landed with clips still queued.
+  await ensureDrainAlarm();
   await paintBadge(await currentPhase(), (await getCapture()).enabled);
 }
 
@@ -556,6 +630,10 @@ async function onAlarm(alarm: chrome.alarms.Alarm): Promise<void> {
   }
   if (alarm.name === AGENT_POLL_ALARM) {
     await pollAgent();
+    return;
+  }
+  if (alarm.name === DRAIN_ALARM) {
+    await drainStandaloneClips();
   }
 }
 

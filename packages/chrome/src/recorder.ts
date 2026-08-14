@@ -10,6 +10,8 @@ import { flashCaptured, paintBadge } from './badge.js';
 import { HttpError, postClip } from './client.js';
 import { currentPhase } from './connection.js';
 import { isAllowed, shouldCapture } from './gate.js';
+import { resolveBrainMode } from './mode.js';
+import { enqueueStandaloneClip } from './standaloneDrain.js';
 import { ADAPTERS, adapterById } from './recorderRegistry.js';
 import { formatRecorderClip, pushRecorderSeen, recorderSeenRecently, validateRecorderEvent } from './recorderFormat.js';
 import type { RecorderEventMsg } from './recorderTypes.js';
@@ -149,10 +151,10 @@ export async function deliverRecorderClip(url: string, msg: RecorderEventMsg): P
   const id = crypto.randomUUID();
   await appendActivity({ id, url, title, text, delivery: 'pending' });
 
-  if (!pairing) {
-    // Same posture as capture.ts — no local fallback store exists anymore.
-    await markDelivery(id, 'failed');
-    await flashCaptured(false);
+  if (!pairing || (await resolveBrainMode()) === 'byok') {
+    // Same routing as capture.ts — BYOK (or nothing configured) goes to the
+    // local clip pipeline; the drain distills once a key exists.
+    await enqueueStandaloneClip({ kind: 'note', text, url, title, capturedAt: msg.at }, id);
     setTimeout(() => {
       void currentPhase().then((phase) => paintBadge(phase, capture.enabled));
     }, 1200);

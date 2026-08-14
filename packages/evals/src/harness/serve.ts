@@ -26,6 +26,15 @@ export interface ServeOptions {
   evalsRoot: string;
   /** Absolute path to a fake `claude` binary (tier 2) — omitted = real claude. */
   claudeBin?: string;
+  /**
+   * Listen port (default SERVE_PORT). The act benchmark uses a NON-default
+   * port so it can coexist with the developer's real `nff-brain serve` on
+   * 7373 — pairing with an explicit port works without the hello walk. Give
+   * it its own homeDir too, or the two servers fight over serve.json.
+   */
+  port?: number;
+  /** State dir name under state/ (default 'brain-home'). */
+  homeName?: string;
 }
 
 function cliDistPath(evalsRoot: string): string {
@@ -52,10 +61,11 @@ export async function startServe(opts: ServeOptions): Promise<ServeHandle> {
   if (!fs.existsSync(dist)) {
     throw new Error(`missing ${dist} — run \`npm run build\` at the nff-brain root first`);
   }
-  const homeDir = path.join(opts.evalsRoot, 'state', 'brain-home');
+  const port = opts.port ?? SERVE_PORT;
+  const homeDir = path.join(opts.evalsRoot, 'state', opts.homeName ?? 'brain-home');
   fs.mkdirSync(homeDir, { recursive: true });
 
-  const child = spawn(process.execPath, [dist, 'serve', '--port', String(SERVE_PORT), '--target', 'global', '--quiet'], {
+  const child = spawn(process.execPath, [dist, 'serve', '--port', String(port), '--target', 'global', '--quiet'], {
     env: {
       ...process.env,
       NFF_BRAIN_HOME: homeDir,
@@ -66,7 +76,7 @@ export async function startServe(opts: ServeOptions): Promise<ServeHandle> {
   child.stderr?.on('data', (d: Buffer) => process.stderr.write(`[serve] ${d}`));
 
   try {
-    await waitForHello(SERVE_PORT, 15_000);
+    await waitForHello(port, 15_000);
   } catch (err) {
     child.kill();
     throw err;
@@ -79,7 +89,7 @@ export async function startServe(opts: ServeOptions): Promise<ServeHandle> {
   // node's fetch sends no Origin header — exactly what origin:'absent' routes demand.
   async function admin<T>(p: string, init: { method?: 'GET' | 'POST'; body?: unknown } = {}): Promise<T> {
     const method = init.method ?? (init.body !== undefined ? 'POST' : 'GET');
-    const res = await fetch(`http://127.0.0.1:${SERVE_PORT}${p}`, {
+    const res = await fetch(`http://127.0.0.1:${port}${p}`, {
       method,
       headers: {
         authorization: `Bearer ${adminToken}`,
@@ -96,7 +106,7 @@ export async function startServe(opts: ServeOptions): Promise<ServeHandle> {
   }
 
   return {
-    port: SERVE_PORT,
+    port,
     homeDir,
     adminToken,
     child,

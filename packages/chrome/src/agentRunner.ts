@@ -296,7 +296,16 @@ export async function pollAgent(depth = 0): Promise<void> {
     await scheduleAgentPoll(60_000);
     return;
   }
-  if (!run || run.phase !== 'running') return; // nothing to do — a fresh approve re-arms this
+  if (!run) return;
+  // An auto-approved run flips planning→running server-side with no approve
+  // click ever arriving, so the loop must survive the planning window itself.
+  // A packaged build's alarm clamp (~30-60s) only delays the first action —
+  // nothing next to the run's own 1-4 min/action pacing.
+  if (run.phase === 'planning') {
+    await scheduleAgentPoll(5_000);
+    return;
+  }
+  if (run.phase !== 'running') return; // awaiting_approval: the approve click re-arms this; terminal: done
 
   let next;
   try {

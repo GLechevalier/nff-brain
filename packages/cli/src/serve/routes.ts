@@ -315,6 +315,27 @@ const graph: Handler = (_req, res, ctx) => {
   );
 };
 
+/**
+ * GET /v1/export — the merged brain VERBATIM: full node content (unlike
+ * `nodes`/`search`, which excerpt to 240 chars), so the extension can seed
+ * its local BYOK retrieval store from the server's brain. Read-only, one-way;
+ * the extension applies its own cap when it merges.
+ */
+const exportBrain: Handler = (_req, res, ctx) => {
+  const merged = ctx.state.mergedBrain();
+  sendJson(
+    res,
+    200,
+    {
+      ok: true,
+      updatedAt: ctx.state.latestUpdatedAt(),
+      nodes: merged.nodes,
+      edges: merged.edges.map((e) => ({ from: e.from, to: e.to, strength: e.strength })),
+    },
+    ctx.cors,
+  );
+};
+
 // ── POST /v1/layout ──────────────────────────────────────────────────────────
 
 const LAYOUT_ID_MAX = 200;
@@ -509,6 +530,7 @@ export const ROUTES: Record<string, Route> = {
   '/v1/retract': { method: 'POST', auth: 'client', origin: 'paired', handler: retract },
   '/v1/nodes': { method: 'GET', auth: 'client', origin: 'paired', handler: nodes },
   '/v1/graph': { method: 'GET', auth: 'client', origin: 'paired', handler: graph },
+  '/v1/export': { method: 'GET', auth: 'client', origin: 'paired', handler: exportBrain },
   '/v1/layout': { method: 'POST', auth: 'client', origin: 'paired', handler: layout },
   '/v1/search': { method: 'GET', auth: 'client', origin: 'paired', handler: search },
   '/v1/admin/pair-window': { method: 'POST', auth: 'admin', origin: 'absent', handler: adminPairWindow },

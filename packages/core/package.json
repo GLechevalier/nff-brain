@@ -107,6 +107,11 @@
       "types": "./dist/browserVerbs.d.ts",
       "default": "./dist/browserVerbs.js"
     },
+    "./benchProtocol": {
+      "nff-brain-source": "./src/benchProtocol.ts",
+      "types": "./dist/benchProtocol.d.ts",
+      "default": "./dist/benchProtocol.js"
+    },
     "./pageSnapshot": {
       "nff-brain-source": "./src/pageSnapshot.ts",
       "types": "./dist/pageSnapshot.d.ts",

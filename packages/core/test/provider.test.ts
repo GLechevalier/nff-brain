@@ -4,6 +4,7 @@ import {
   PROVIDER_CHOICES,
   ProviderError,
   anthropicAdapter,
+  createAnthropicStreamParser,
 } from '../src/provider.js';
 
 // Pure adapter tests — zero network. The fetch half lives in the chrome
@@ -156,6 +157,83 @@ describe('anthropic adapter — buildChatRequest', () => {
   });
 });
 
+describe('anthropic adapter — buildChatRequest system/cache/thinking', () => {
+  const goal = { role: 'user' as const, content: 'GOAL: do the thing' };
+
+  it('renders system as a block array with a cache breakpoint when cache is on', () => {
+    const req = anthropicAdapter.buildChatRequest!(
+      { messages: [goal], model: 'claude-sonnet-5', maxTokens: 2048, system: 'steer', cache: true },
+      'k',
+    );
+    const body = JSON.parse(req.body) as Record<string, unknown>;
+    expect(body.system).toEqual([{ type: 'text', text: 'steer', cache_control: { type: 'ephemeral' } }]);
+  });
+
+  it('renders system without a breakpoint when cache is off', () => {
+    const req = anthropicAdapter.buildChatRequest!(
+      { messages: [goal], model: 'claude-sonnet-5', maxTokens: 2048, system: 'steer' },
+      'k',
+    );
+    const body = JSON.parse(req.body) as Record<string, unknown>;
+    expect(body.system).toEqual([{ type: 'text', text: 'steer' }]);
+    expect(req.body).not.toContain('cache_control');
+  });
+
+  it('stamps the moving breakpoint on the LAST content block of the LAST message, normalizing string content', () => {
+    const req = anthropicAdapter.buildChatRequest!(
+      { messages: [goal], model: 'claude-sonnet-5', maxTokens: 2048, system: 'steer', cache: true },
+      'k',
+    );
+    const body = JSON.parse(req.body) as { messages: Array<{ content: unknown }> };
+    expect(body.messages[0]!.content).toEqual([
+      { type: 'text', text: 'GOAL: do the thing', cache_control: { type: 'ephemeral' } },
+    ]);
+  });
+
+  it('stamps only the final block of a multi-block tail — exactly two breakpoints total', () => {
+    const messages = [
+      goal,
+      { role: 'assistant' as const, content: [{ type: 'tool_use' as const, id: 't1', name: 'read_page', input: {} }] },
+      {
+        role: 'user' as const,
+        content: [
+          { type: 'tool_result' as const, tool_use_id: 't1', content: 'snapshot' },
+          { type: 'text' as const, text: 'continue' },
+        ],
+      },
+    ];
+    const req = anthropicAdapter.buildChatRequest!(
+      { messages, model: 'claude-sonnet-5', maxTokens: 2048, system: 'steer', cache: true },
+      'k',
+    );
+    const body = JSON.parse(req.body) as { messages: Array<{ content: Array<Record<string, unknown>> }> };
+    const tail = body.messages[2]!.content;
+    expect(tail[0]!.cache_control).toBeUndefined();
+    expect(tail[1]!.cache_control).toEqual({ type: 'ephemeral' });
+    expect((req.body.match(/cache_control/g) ?? []).length).toBe(2);
+  });
+
+  it('NEVER mutates the caller’s messages — next turn’s prefix bytes depend on it', () => {
+    const messages = [{ role: 'user' as const, content: 'GOAL: x' }];
+    const before = JSON.stringify(messages);
+    anthropicAdapter.buildChatRequest!({ messages, model: 'claude-sonnet-5', maxTokens: 2048, system: 's', cache: true }, 'k');
+    expect(JSON.stringify(messages)).toBe(before);
+  });
+
+  it("thinking 'disabled' is sent; 'adaptive' and absent both omit the field (provider default)", () => {
+    const on = anthropicAdapter.buildChatRequest!(
+      { messages: [goal], model: 'claude-sonnet-5', maxTokens: 2048, thinking: 'disabled' },
+      'k',
+    );
+    expect((JSON.parse(on.body) as Record<string, unknown>).thinking).toEqual({ type: 'disabled' });
+    const adaptive = anthropicAdapter.buildChatRequest!(
+      { messages: [goal], model: 'claude-sonnet-5', maxTokens: 2048, thinking: 'adaptive' },
+      'k',
+    );
+    expect(adaptive.body).not.toContain('thinking');
+  });
+});
+
 describe('anthropic adapter — parseChatResponse', () => {
   it('parses a plain text-only response the same as parseResponse (regression)', () => {
     const body = JSON.stringify({ content: [{ type: 'text', text: 'hello' }], stop_reason: 'end_turn' });
@@ -201,6 +279,105 @@ describe('anthropic adapter — parseChatResponse', () => {
     const refusal = JSON.stringify({ content: [{ type: 'text', text: '' }], stop_reason: 'refusal' });
     expect(() => anthropicAdapter.parseChatResponse!(200, refusal)).toThrow();
     expect(() => anthropicAdapter.parseChatResponse!(200, 'not json')).toThrow();
+  });
+
+  it('surfaces usage incl. cache counters when present — how caching gets verified', () => {
+    const body = JSON.stringify({
+      content: [{ type: 'text', text: 'ok' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 12, output_tokens: 3, cache_read_input_tokens: 1400, cache_creation_input_tokens: 80 },
+    });
+    expect(anthropicAdapter.parseChatResponse!(200, body).usage).toEqual({
+      input_tokens: 12,
+      output_tokens: 3,
+      cache_read_input_tokens: 1400,
+      cache_creation_input_tokens: 80,
+    });
+  });
+
+  it('omits usage when the wire shape is off — never trust the wire', () => {
+    const body = JSON.stringify({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 'twelve' } });
+    expect(anthropicAdapter.parseChatResponse!(200, body).usage).toBeUndefined();
+  });
+});
+
+describe('anthropic adapter — createAnthropicStreamParser', () => {
+  const frame = (type: string, body: Record<string, unknown>) => `event: ${type}\ndata: ${JSON.stringify({ type, ...body })}\n\n`;
+
+  function fullStream(): string {
+    return [
+      frame('message_start', {
+        message: { usage: { input_tokens: 100, cache_read_input_tokens: 900, cache_creation_input_tokens: 20 } },
+      }),
+      frame('content_block_start', { index: 0, content_block: { type: 'text', text: '' } }),
+      frame('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'reading ' } }),
+      frame('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'the page' } }),
+      frame('content_block_stop', { index: 0 }),
+      frame('content_block_start', { index: 1, content_block: { type: 'tool_use', id: 't1', name: 'read_page', input: {} } }),
+      frame('content_block_delta', { index: 1, delta: { type: 'input_json_delta', partial_json: '{"mo' } }),
+      frame('content_block_delta', { index: 1, delta: { type: 'input_json_delta', partial_json: 'de":"text"}' } }),
+      frame('content_block_stop', { index: 1 }),
+      frame('message_delta', { delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 42 } }),
+      frame('message_stop', {}),
+    ].join('');
+  }
+
+  it('assembles text, tool input from JSON fragments, stop_reason, and usage', () => {
+    const parser = createAnthropicStreamParser();
+    const deltas = parser.feed(fullStream());
+    expect(deltas).toEqual(['reading ', 'the page']);
+    expect(parser.finish()).toEqual({
+      text: 'reading the page',
+      toolCalls: [{ id: 't1', name: 'read_page', input: { mode: 'text' } }],
+      stopReason: 'tool_use',
+      usage: { input_tokens: 100, output_tokens: 42, cache_read_input_tokens: 900, cache_creation_input_tokens: 20 },
+    });
+  });
+
+  it('handles frames split at ARBITRARY byte boundaries across chunks', () => {
+    const stream = fullStream();
+    for (const size of [1, 3, 7, 50]) {
+      const parser = createAnthropicStreamParser();
+      const deltas: string[] = [];
+      for (let i = 0; i < stream.length; i += size) deltas.push(...parser.feed(stream.slice(i, i + size)));
+      expect(deltas.join('')).toBe('reading the page');
+      expect(parser.finish().toolCalls).toEqual([{ id: 't1', name: 'read_page', input: { mode: 'text' } }]);
+    }
+  });
+
+  it('handles CRLF line endings', () => {
+    const parser = createAnthropicStreamParser();
+    parser.feed(fullStream().replace(/\n/g, '\r\n'));
+    expect(parser.finish().text).toBe('reading the page');
+  });
+
+  it('a tool_use with no input fragments parses as {}', () => {
+    const parser = createAnthropicStreamParser();
+    parser.feed(
+      frame('message_start', { message: {} }) +
+        frame('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 't1', name: 'read_page' } }) +
+        frame('content_block_stop', { index: 0 }) +
+        frame('message_stop', {}),
+    );
+    expect(parser.finish().toolCalls).toEqual([{ id: 't1', name: 'read_page', input: {} }]);
+  });
+
+  it('an error event maps to a ProviderError on finish', () => {
+    const parser = createAnthropicStreamParser();
+    parser.feed(frame('message_start', { message: {} }) + frame('error', { error: { type: 'overloaded_error', message: 'x' } }));
+    expect(() => parser.finish()).toThrowError(expect.objectContaining({ kind: 'overloaded' }));
+  });
+
+  it('a truncated / never-started stream is malformed, never a silent empty result', () => {
+    const parser = createAnthropicStreamParser();
+    parser.feed('data: {"type":"conten'); // no complete frame ever
+    expect(() => parser.finish()).toThrowError(expect.objectContaining({ kind: 'malformed' }));
+  });
+
+  it('a refusal stop_reason throws on finish, matching the blocking parser', () => {
+    const parser = createAnthropicStreamParser();
+    parser.feed(frame('message_start', { message: {} }) + frame('message_delta', { delta: { stop_reason: 'refusal' } }));
+    expect(() => parser.finish()).toThrowError(expect.objectContaining({ kind: 'refusal' }));
   });
 });
 

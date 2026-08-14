@@ -11,6 +11,7 @@ import type { BrainFile } from '@nff-brain/core/types';
 import type { ClipRecord } from '@nff-brain/core/clip';
 import type { ModelSlot, ProviderId } from '@nff-brain/core/provider';
 import type { TraceEvent, TraceRecord } from '@nff-brain/core/trace';
+import type { WorkflowSpec } from '@nff-brain/core/workflow';
 
 export const SCHEMA_VERSION = 1 as const;
 
@@ -37,10 +38,13 @@ export const KEYS = {
   // BYOK provider settings — LLM reasoning only (chat tool-calling, the web
   // agent's BYOK loop), never a graph store.
   provider: 'nb.provider',
-  // LEGACY, migration-only: a pre-upgrade user's local brain/clip queue, kept
-  // solely so migrate.ts's migrateIfNeeded() can finish draining it into the
-  // paired server. No live feature writes these anymore. Delete once
-  // telemetry/support confirms no legacy users remain.
+  // The user's explicit brain-mode preference ('paired' | 'byok'). Absent =
+  // legacy behavior (a stored pairing always wins). See mode.ts.
+  brainMode: 'nb.brainMode',
+  // The local brain + clip pipeline — LIVE AGAIN in BYOK mode (clip capture →
+  // queue → alarm drain → nodes; chat/agent retrieval reads nb.brain).
+  // migrate.ts still sweeps a legacy nb.brain into the paired server, but
+  // ONLY for users who never set an explicit brain-mode preference.
   brain: 'nb.brain',
   clipQueue: 'nb.clipQueue',
   clipSeen: 'nb.clipSeen',
@@ -53,6 +57,13 @@ export const KEYS = {
   // awaiting distillation (server-side via POST /v1/trace).
   traceActive: 'nb.traceActive',
   tracePending: 'nb.tracePending',
+  // Local workflow store — replayable specs, so BYOK mode can replay without
+  // a server (one-way imported from the paired server when available).
+  workflows: 'nb.workflows',
+  // Coding agent: JSON metadata about the attached project folder ONLY. The
+  // FileSystemDirectoryHandle itself is structured-cloneable but not JSON, so
+  // it lives in IndexedDB (src/fsHandles.ts — the one IDB module), never here.
+  codeProject: 'nb.codeProject',
 } as const;
 
 // ── pairing ──────────────────────────────────────────────────────────────────
@@ -178,6 +189,20 @@ export const ACTIVITY_URL_MAX = 512;
 export const ACTIVITY_TITLE_MAX = 256;
 export const ACTIVITY_TEXT_MAX = 2000;
 
+// ── brain mode (which backend drives LLM work) ──────────────────────────────
+
+/**
+ * The user's STORED preference for which brain powers LLM work (the web
+ * agent's loop, chat, distillation). Absent (null) = legacy behavior: a
+ * stored pairing always wins, else BYOK if a key is saved. The preference is
+ * work-or-degrade, never a dead end — mode.ts falls back to the other
+ * backend when the preferred one isn't configured.
+ */
+export type BrainModePref = 'paired' | 'byok';
+
+/** The RESOLVED, effective mode — what actually drives LLM work right now. */
+export type BrainMode = 'paired' | 'byok' | 'unconfigured';
+
 // ── BYOK provider settings (LLM reasoning only) ─────────────────────────────
 
 export interface ProviderTestResult {
@@ -202,12 +227,13 @@ export interface ProviderSettings {
   lastTest: ProviderTestResult | null;
 }
 
-// ── legacy, migration-only: a pre-upgrade user's local brain ────────────────
+// ── the local brain (BYOK retrieval fuel) ───────────────────────────────────
 //
-// Nothing writes these anymore — see KEYS' comment above. They exist purely
-// so migrate.ts's migrateIfNeeded() can finish draining a leftover local
-// brain into the paired server. Delete this whole section (and migrate.ts's
-// remaining storage.ts imports) once no legacy users remain.
+// LIVE AGAIN (they were briefly legacy/migration-only): in BYOK mode the clip
+// pipeline distills into this in-browser brain, and chat + the web agent
+// retrieve context from it. It is retrieval fuel, NOT a peer graph store —
+// the graph/nodes/search UI stays server-backed, and migrate.ts still sweeps
+// a legacy copy into the server for users who never chose a mode.
 
 /**
  * nb.brain holds a core BrainFile VERBATIM (same schema as .nff-brain/
@@ -218,7 +244,11 @@ export type StandaloneBrain = BrainFile;
 
 export type StandaloneClip = ClipRecord;
 
-/** Only DEFAULT_DRAIN is still written (to clear a legacy drain schedule on migration). */
+/** A full queue refuses loudly (the server's 507 mirror) — never rotates. */
+export const CLIP_QUEUE_MAX = 200;
+/** At-least-once dedupe ring for drained clip ids. */
+export const CLIP_SEEN_MAX = 500;
+
 export interface DrainState {
   nextDrainAtMs: number;
   consecutiveFailures: number;
@@ -261,7 +291,13 @@ export type ActManualCapability = 'observe' | 'interact' | 'destructive';
  */
 export type ActPendingGrant =
   | { kind: 'origin'; origin: string; verbClass: string }
-  | { kind: 'capability'; verbClass: ActManualCapability; description: string };
+  | { kind: 'capability'; verbClass: ActManualCapability; description: string }
+  // Coding-agent approvals (codeTools.ts), answered mid-run with the same
+  // Once/Always/Never buttons: Once allows just the action in flight, Always
+  // sets ActRunState.codeGrants for the rest of the run, Never declines just
+  // that one action (the run continues; the model is told).
+  | { kind: 'code-write'; path: string; preview: string; adds: number; dels: number }
+  | { kind: 'code-exec'; command: string; cwd: string };
 
 /**
  * The single active action run. One globally, same structural fact as the
@@ -284,6 +320,13 @@ export interface ActRunState {
   grantedOrigins: string[];
   /** Manual mode's "Always" answers for THIS run only — see ActManualCapability. */
   manualGrants: Partial<Record<ActManualCapability, true>>;
+  /** True when this run also carries the code tools (a project is attached and
+   *  the user left "include project tools" checked at start). */
+  codeEnabled?: boolean;
+  /** Coding-agent "Always" answers for THIS run only (write approvals now,
+   *  exec in the sandbox milestone). Optional: runs predating the coding agent
+   *  simply lack it. Never persisted beyond the run. */
+  codeGrants?: { write?: true; exec?: true };
   pendingGrant: ActPendingGrant | null;
   /**
    * The panel's answer to the current pendingGrant, or null while still
@@ -308,6 +351,19 @@ export interface ActHostAllow {
   byOrigin: Record<string, 'always' | 'never'>;
 }
 
+// ── coding agent (File System Access) ───────────────────────────────────────
+
+/**
+ * JSON metadata about the attached project folder (nb.codeProject). The
+ * FileSystemDirectoryHandle itself lives in IndexedDB (src/fsHandles.ts);
+ * this exists so UI surfaces can name the project without touching IDB.
+ */
+export interface CodeProjectMeta {
+  /** The picked folder's name (handle.name) — display only, never a path. */
+  name: string;
+  attachedAt: string;
+}
+
 // ── record-and-automate ──────────────────────────────────────────────────────
 
 /**
@@ -329,6 +385,33 @@ export interface TraceActiveState {
 
 /** A finished recording awaiting distillation (standalone/BYOK path). */
 export type TracePending = TraceRecord;
+
+// ── local workflow store (nb.workflows) ─────────────────────────────────────
+
+/**
+ * One replayable workflow, stored locally so BYOK mode can list and replay
+ * without a server. `source` records custody: 'server' entries are one-way
+ * imports (safe to evict — the server still has them), 'local' entries were
+ * distilled in the browser and may exist NOWHERE else, so the store refuses
+ * loudly rather than rotating them away at the cap.
+ */
+export interface StoredWorkflow {
+  id: string;
+  title: string;
+  intent: string;
+  site: string;
+  params: string[];
+  spec: WorkflowSpec;
+  savedAt: string;
+  source: 'server' | 'local';
+}
+
+export interface WorkflowStore {
+  byId: Record<string, StoredWorkflow>;
+}
+
+/** Specs are ≤20 steps ≈ 2–6 KB each — 50 stays far under the 10 MB quota. */
+export const WORKFLOWS_MAX = 50;
 
 export interface StoredState {
   version: typeof SCHEMA_VERSION;

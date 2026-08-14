@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>keyboard fixtures</title>
+<script src="/fixtures/bench.js"></script>
+<style>
+  body { font: 16px system-ui; margin: 24px; }
+  .row { margin: 14px 0; }
+  input, button, textarea { font-size: 16px; padding: 6px; }
+  dialog { border: 2px solid #48c; padding: 20px; }
+</style>
+
+<div class="row">
+  <input data-bench="type-box" id="type-box" placeholder="type here">
+</div>
+
+<form data-bench="enter-form" class="row">
+  <input data-bench="enter-box" placeholder="press Enter here to submit">
+  <button data-bench="enter-submit" type="submit">submit</button>
+</form>
+
+<div class="row">
+  <label><input type="checkbox" data-bench="space-check"> toggle me with Space</label>
+</div>
+
+<div class="row">
+  <input data-bench="tab-1" placeholder="tab 1">
+  <input data-bench="tab-2" placeholder="tab 2">
+  <button data-bench="tab-3">tab 3</button>
+  <input data-bench="tab-4" placeholder="tab 4">
+</div>
+
+<div class="row">
+  <button data-bench="dlg-open">open dialog</button>
+  <dialog data-bench="dlg" id="dlg">
+    <p>An HTML &lt;dialog&gt; — dismiss me with Escape.</p>
+    <button data-bench="dlg-inner">inner button</button>
+  </dialog>
+</div>
+
+<script>
+  const S = { submits: 0, dlgOpen: false };
+  const dlg = document.getElementById('dlg');
+  window.__benchState = () => ({
+    typeValue: document.getElementById('type-box').value,
+    submits: S.submits,
+    spaceChecked: document.querySelector('[data-bench=space-check]').checked,
+    focused: document.activeElement?.dataset?.bench ?? document.activeElement?.tagName?.toLowerCase() ?? 'none',
+    dlgOpen: dlg.open,
+  });
+  document.querySelector('[data-bench=enter-form]').addEventListener('submit', () => { S.submits++; });
+  document.querySelector('[data-bench=dlg-open]').addEventListener('click', () => dlg.showModal());
+</script>

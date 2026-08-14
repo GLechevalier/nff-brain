@@ -60,6 +60,7 @@ export function startBrainServer(opts: ServeOptions): Promise<BrainServer> {
         state,
         close: () =>
           new Promise<void>((done) => {
+            state.disposeActSessions();
             server.close(() => done());
             // Without this a keep-alive socket held by the extension keeps the
             // process alive well past Ctrl-C. Landed in Node 18.2 and the CI

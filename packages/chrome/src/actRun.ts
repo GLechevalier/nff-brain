@@ -15,18 +15,28 @@ import { isRestrictedUrl, originOf } from './actGate.js';
 import { detach, ensureAttached, hasDebuggerPermission } from './cdp.js';
 import { attentionConsumeStop, attentionHide, attentionShow, cursorHide } from './actEngine.js';
 import {
+  actContractTools,
+  buildActSystemPrompt,
   buildActTools,
+  buildActUserGoal,
   buildPairedActPrompt,
+  buildSessionStepMessage,
   buildSteeringPrompt,
   buildWorkflowRunPrompt,
   parseActAction,
   runActByName,
   type ActContext,
+  type ActDelta,
 } from './actTools.js';
 import { appendTranscript, clearActRun, mutateActRun, startActRun } from './actStore.js';
 import { runChatWithTools } from './providerClient.js';
-import { getWorkflow, postActStep } from './client.js';
-import { getActHostAllow, getActRun, getPairing, setActHostAllow } from './storage.js';
+import { ProviderError } from '@nff-brain/core/provider';
+import { resolveBrainMode } from './mode.js';
+import { getLocalWorkflow, upsertWorkflow } from './workflowStore.js';
+import { readLocalBrain } from './brainStore.js';
+import { fuseRanked } from '@nff-brain/core/rank';
+import { HttpError, getWorkflow, postActSessionEnd, postActSessionStep, postActStep } from './client.js';
+import { getActHostAllow, getActRun, getCodeProject, getPairing, setActHostAllow } from './storage.js';
 import type { WorkflowSpec } from '@nff-brain/core/workflow';
 
 const ACT_MAX_TURNS = 24;
@@ -56,13 +66,27 @@ function clampMax(raw: number | undefined): number {
  * the loop starts immediately; otherwise the run parks in 'awaiting_grant' and
  * the panel prompts before any action. Reads/navigation never need a grant.
  */
-/** Load a workflow spec from the paired brain by its node id. Recorded
- *  workflows require pairing — there is no local fallback store. */
+/** Load a workflow spec LOCAL-FIRST (nb.workflows — how BYOK replays with no
+ *  server, and one less network round trip on paired replay start); on a
+ *  local miss, fall back to the paired server and cache what it returns. */
 async function loadWorkflow(workflowId: string): Promise<WorkflowSpec | null> {
+  const local = await getLocalWorkflow(workflowId);
+  if (local) return local.spec;
   const pairing = await getPairing();
   if (!pairing) return null;
   try {
-    return (await getWorkflow(pairing.port, pairing.token, workflowId)).spec;
+    const full = await getWorkflow(pairing.port, pairing.token, workflowId);
+    void upsertWorkflow({
+      id: workflowId,
+      title: full.title,
+      intent: full.spec.intent,
+      site: full.spec.site,
+      params: full.spec.params.map((p) => p.name),
+      spec: full.spec,
+      savedAt: new Date().toISOString(),
+      source: 'server',
+    });
+    return full.spec;
   } catch {
     return null;
   }
@@ -74,11 +98,17 @@ export async function startActionRun(
   maxActions?: number,
   workflowId?: string,
   mode: 'manual' | 'plan' | 'auto' = 'auto',
+  codeEnabled = false,
 ): Promise<StartResult> {
   if (!goal.trim()) return { ok: false, error: 'enter a goal first' };
   if (!(await hasDebuggerPermission())) return { ok: false, error: 'the debugger permission is missing — remove and reload the extension' };
   if (workflowId && !(await loadWorkflow(workflowId))) {
-    return { ok: false, error: (await getPairing()) ? 'that workflow is no longer in your brain' : 'pair with `nff-brain serve` to replay saved workflows' };
+    return {
+      ok: false,
+      error: (await getPairing())
+        ? 'that workflow is no longer in your brain'
+        : 'that workflow is not saved locally — record a task, or pair to import your saved workflows',
+    };
   }
 
   let url: string | undefined;
@@ -107,6 +137,10 @@ export async function startActionRun(
     maxActions: clampMax(maxActions),
     grantedOrigins: grantedNow,
     manualGrants: {},
+    // codeEnabled only sticks when a project is actually attached — a stale
+    // checkbox without a folder would advertise tools that can only fail.
+    codeEnabled: codeEnabled && !!(await getCodeProject()),
+    codeGrants: {},
     pendingGrant: awaitingGrant ? { kind: 'origin', origin: origin ?? '', verbClass: 'interact' } : null,
     pendingGrantChoice: null,
     transcript: [{ at: now, kind: 'system', text: `Goal: ${goal.trim()}` }],
@@ -143,6 +177,24 @@ export async function answerPendingGrant(choice: GrantChoice): Promise<void> {
     return;
   }
 
+  // Coding-agent approvals ride the same mid-run path as 'capability': a
+  // paused codeTools executor (requestCodeGrant) is waiting on the choice —
+  // post it and let that call resume itself. Never ends the run: a declined
+  // write/command is a tool result the model narrates, not a stop.
+  if (run.pendingGrant.kind === 'code-write' || run.pendingGrant.kind === 'code-exec') {
+    const g = run.pendingGrant;
+    const label = g.kind === 'code-write' ? `write ${g.path}` : `run ${g.command}`;
+    const verb = { once: 'Allowed', always: 'Always allowed', never: 'Declined' }[choice];
+    await mutateActRun((r) => {
+      if (choice === 'always') r.codeGrants = { ...(r.codeGrants ?? {}), [g.kind === 'code-write' ? 'write' : 'exec']: true };
+      r.pendingGrant = null;
+      r.pendingGrantChoice = choice;
+      r.phase = 'running';
+      r.transcript.push({ at: new Date().toISOString(), kind: 'system', text: `${verb}: ${label}.` });
+    });
+    return;
+  }
+
   const origin = run.pendingGrant.origin;
   if (choice === 'always' || choice === 'never') {
     const state = await getActHostAllow();
@@ -166,6 +218,17 @@ export async function answerPendingGrant(choice: GrantChoice): Promise<void> {
     r.transcript.push({ at: new Date().toISOString(), kind: 'system', text: `Allowed ${origin}. Starting.` });
   });
   if (updated) void drive(updated.id, updated.tabId);
+}
+
+/**
+ * The panel's per-run auto-approve toggle for code writes/commands. Mutating
+ * nb.actRun (not a ctx mirror) is what makes it take effect on the very next
+ * action — codeTools reads the grants fresh at each gate decision.
+ */
+export async function setCodeAutoApprove(enabled: boolean): Promise<void> {
+  await mutateActRun((r) => {
+    r.codeGrants = enabled ? { write: true, exec: true } : {};
+  });
 }
 
 /** Request a graceful stop — the loop finalizes after the current turn. */
@@ -222,18 +285,31 @@ async function drive(runId: string, tabId: number): Promise<void> {
     grantedOrigins: [...run.grantedOrigins],
     manualGrants: { ...run.manualGrants },
     stopped: false,
+    codeEnabled: !!run.codeEnabled,
   };
 
-  // Replaying a workflow steers with its generalized steps; a free goal steers plainly.
-  const prompt = workflow ? buildWorkflowRunPrompt(workflow, run.goal) : buildSteeringPrompt(run.goal);
+  // Code-enabled runs steer with the project's name so the model knows whose
+  // files it is touching (codeTools.ts's steering paragraph).
+  const codeName = run.codeEnabled ? ((await getCodeProject())?.name ?? 'project') : null;
 
-  // PAIRED wins: drive the loop through the local server's `claude -p` (the
-  // user's Claude Code login — no API key). Only if unpaired do we fall back to
-  // the BYOK Anthropic tool-use loop.
-  const pairing = await getPairing();
-  const outcome = pairing
-    ? await runPairedLoop(ctx, runId, prompt, pairing.port, pairing.token)
-    : await runByokLoop(ctx, runId, prompt);
+  // Which brain drives the loop is the user's explicit choice now (mode.ts) —
+  // default preserves the old rule (a stored pairing wins). Paired routes
+  // through the local server's `claude -p`; BYOK talks straight to the
+  // provider API and needs neither a server nor Claude Code on the machine.
+  const mode = await resolveBrainMode();
+  let outcome: LoopOutcome;
+  if (mode === 'paired') {
+    const pairing = await getPairing();
+    // Replaying a workflow steers with its generalized steps; a free goal steers plainly.
+    const prompt = workflow ? buildWorkflowRunPrompt(workflow, run.goal) : buildSteeringPrompt(run.goal, codeName);
+    outcome = pairing
+      ? await runPairedLoop(ctx, runId, prompt, pairing.port, pairing.token)
+      : { ok: false, error: 'pairing is gone — re-pair from the Settings tab, or switch to your API key' };
+  } else if (mode === 'byok') {
+    outcome = await runByokLoop(ctx, runId, run.goal, workflow, codeName);
+  } else {
+    outcome = { ok: false, error: 'pair a local nff-brain server, or add an API key in Settings, to run the agent' };
+  }
 
   // detach ctx.tabId, not the closure's original `tabId` param — a tab.switch/
   // tab.open/tab.duplicate mid-run rebinds ctx.tabId to whichever tab ended up
@@ -270,14 +346,20 @@ type LoopOutcome = { ok: true; answer: string } | { ok: false; error: string };
  * up to 95s. Call cancel() once the race is decided either way, or the listener
  * leaks for the rest of the run.
  */
-function watchForStop(runId: string): { promise: Promise<void>; cancel: () => void } {
+function watchForStop(runId: string, stopPhasesOnly = false): { promise: Promise<void>; cancel: () => void } {
   let listener!: (changes: Record<string, chrome.storage.StorageChange>, area: string) => void;
   const promise = new Promise<void>((resolve) => {
     listener = (changes, area) => {
       if (area !== 'local' || !(KEYS.actRun in changes)) return;
       const v = changes[KEYS.actRun]!.newValue as ActRunState | null | undefined;
-      const stillRunning = !!v && v.id === runId && v.phase === 'running';
-      if (!stillRunning) resolve();
+      const gone = !v || v.id !== runId;
+      // stopPhasesOnly is for a watcher armed across a WHOLE run (the BYOK
+      // loop's abort signal): Manual mode legitimately parks the phase in
+      // 'awaiting_grant' mid-run while a tool waits for consent, and that
+      // must not read as Stop. The paired loop arms per server call — where
+      // any departure from 'running' is a stop — and keeps the strict check.
+      const decided = stopPhasesOnly ? gone || v.phase === 'stopping' || v.phase === 'stopped' : gone || v.phase !== 'running';
+      if (decided) resolve();
     };
     chrome.storage.onChanged.addListener(listener);
   });
@@ -303,36 +385,163 @@ async function keepGoing(ctx: ActContext, runId: string): Promise<boolean> {
   return true;
 }
 
-/** BYOK Anthropic tool-use loop (standalone / unpaired). */
-async function runByokLoop(ctx: ActContext, runId: string, prompt: string): Promise<LoopOutcome> {
-  const result = await runChatWithTools(prompt, buildActTools(ctx), {
-    maxTurns: ACT_MAX_TURNS,
-    onTurn: () => keepGoing(ctx, runId),
-    onAssistantText: (text) => void appendTranscript({ kind: 'thought', text }),
-  });
-  if (result === null) return { ok: false, error: 'pair a local nff-brain server, or add an API key in Settings, to run the agent' };
-  return { ok: true, answer: result.answer };
+/**
+ * Reasoning policy for the BYOK act loop, deliberately two constants:
+ * thinking OFF because a tightly-steered tool loop pays adaptive-thinking
+ * latency every turn for no benefit (flip to 'adaptive' if step quality
+ * regresses), and a tight max_tokens because a turn is one tool call plus a
+ * sentence — it bounds tail latency without cramping the final summary.
+ */
+const ACT_THINKING: 'disabled' | 'adaptive' = 'disabled';
+const ACT_MAX_TOKENS = 2048;
+
+/**
+ * BYOK Anthropic tool-use loop — direct provider API, no server, no Claude
+ * Code. Speed levers live in the opts: the static run prefix (steering +
+ * workflow) rides in `system` so the adapter can prompt-cache it, superseded
+ * read_page snapshots get compacted, and the whole-run abort signal makes
+ * Stop preempt an in-flight model call instead of waiting out its 45s.
+ */
+const ACT_BRAIN_CONTEXT_LIMIT = 4;
+const ACT_BRAIN_EXCERPT_MAX = 300;
+
+/**
+ * Rank the LOCAL brain against the goal, once per run — the result rides in
+ * the cached system prefix so it costs zero tokens per turn. Empty brain (or
+ * any failure) simply means no context; the run must never die on this.
+ */
+async function buildBrainContext(goal: string): Promise<string | undefined> {
+  try {
+    const brain = await readLocalBrain();
+    if (brain.nodes.length === 0) return undefined;
+    const ranked = fuseRanked(goal, brain.nodes, null, { limit: ACT_BRAIN_CONTEXT_LIMIT });
+    if (ranked.length === 0) return undefined;
+    const lines = ranked.map((r) => {
+      const text = (r.node.content ?? '').replace(/\s+/g, ' ').trim().slice(0, ACT_BRAIN_EXCERPT_MAX);
+      return `- ${r.node.title}: ${text}`;
+    });
+    return `BRAIN CONTEXT (notes the user saved earlier that may help):\n${lines.join('\n')}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Floor between live-thought transcript writes — every nb.actRun write fans
+ *  out to the panel's storage.onChanged listener, so unthrottled deltas would
+ *  thrash it. 250ms still reads as live. */
+const LIVE_THOUGHT_FLUSH_MS = 250;
+
+async function runByokLoop(ctx: ActContext, runId: string, goal: string, workflow: WorkflowSpec | null, codeName: string | null): Promise<LoopOutcome> {
+  const controller = new AbortController();
+  const watch = watchForStop(runId, true);
+  void watch.promise.then(() => controller.abort());
+
+  // Streaming: deltas accumulate into ONE mutable 'thought' transcript entry
+  // (found again by its `at` stamp) instead of appending per fragment. The
+  // turn-complete onAssistantText below is the finalize signal — it writes
+  // the settled text once more and resets for the next turn, so the streamed
+  // thought is never duplicated.
+  let liveText = '';
+  let liveAt: string | null = null;
+  let lastFlush = 0;
+  const flushLive = (): Promise<unknown> =>
+    mutateActRun((r) => {
+      if (liveAt === null) liveAt = new Date().toISOString();
+      const at = liveAt;
+      const entry = r.transcript.find((e) => e.at === at && e.kind === 'thought');
+      if (entry) entry.text = liveText;
+      else r.transcript.push({ at, kind: 'thought', text: liveText });
+    });
+
+  try {
+    const result = await runChatWithTools(buildActUserGoal(goal, workflow), buildActTools(ctx), {
+      maxTurns: ACT_MAX_TURNS,
+      system: buildActSystemPrompt(workflow, codeName, await buildBrainContext(goal)),
+      thinking: ACT_THINKING,
+      maxTokens: ACT_MAX_TOKENS,
+      signal: controller.signal,
+      compactToolNames: ['read_page'],
+      onTurn: () => keepGoing(ctx, runId),
+      onAssistantTextDelta: (t) => {
+        liveText += t;
+        const now = Date.now();
+        if (now - lastFlush >= LIVE_THOUGHT_FLUSH_MS) {
+          lastFlush = now;
+          void flushLive();
+        }
+      },
+      onAssistantText: (text) => {
+        // Finalize the streamed entry with the settled text, then reset for
+        // the next turn. If streaming never fired (adapter fallback), this
+        // still lands the thought — same one-entry-per-turn shape either way.
+        liveText = text;
+        void flushLive().then(() => {
+          liveAt = null;
+          liveText = '';
+          lastFlush = 0;
+        });
+      },
+      // SW-console only — how a dead prompt cache shows up (cache_read stuck
+      // at 0 while input_tokens climbs) instead of silently costing full price.
+      onUsage: (u) => console.debug('[nff-brain act] usage', u),
+    });
+    if (result === null) return { ok: false, error: 'pair a local nff-brain server, or add an API key in Settings, to run the agent' };
+    return { ok: true, answer: result.answer };
+  } catch (err) {
+    if (err instanceof ProviderError && err.kind === 'aborted') {
+      ctx.stopped = true;
+      return { ok: true, answer: '' };
+    }
+    return { ok: false, error: err instanceof Error ? err.message : 'the provider did not answer' };
+  } finally {
+    watch.cancel();
+  }
 }
 
 /**
- * Paired loop: each turn, send the assembled prompt (steering + contract +
- * action history) to /v1/act/step (the server runs `claude -p`), parse ONE JSON
- * action from the reply, run it through the SAME gate+engine the BYOK executors
- * use, append the result, repeat. History is bounded so the prompt stays sane.
+ * Paired loop: each turn, ask the server for ONE JSON action, run it through
+ * the SAME gate+engine the BYOK executors use, append the result, repeat.
+ *
+ * Transport, fast path first: /v1/act/session/step keeps ONE warm `claude`
+ * process per run server-side (only this turn's delta is new tokens; the full
+ * prompt rides along as respawn fuel). A 404 means an older server without
+ * that route — fall back to stateless /v1/act/step (a fresh `claude -p` per
+ * turn, the pre-session behavior) for the rest of the run.
+ * History is bounded so the bootstrap/legacy prompt stays sane.
  */
 async function runPairedLoop(ctx: ActContext, runId: string, systemPrompt: string, port: number, token: string): Promise<LoopOutcome> {
   const snapshotIdRef = { id: '' };
   const history: string[] = [];
   let answer = '';
+  let sessionMode = true;
+  let lastDelta: ActDelta = null;
 
   for (let turn = 0; turn < ACT_MAX_TURNS; turn++) {
     if (!(await keepGoing(ctx, runId))) break;
 
+    const bootstrap = buildPairedActPrompt(systemPrompt, history, actContractTools(ctx.codeEnabled));
+    const stepCall = sessionMode
+      ? postActSessionStep(port, token, runId, bootstrap, buildSessionStepMessage(lastDelta)).catch((err) => {
+          // Old server without the session route — one cheap probe miss, then
+          // this whole run stays on the legacy path. That miss arrives in TWO
+          // shapes: an honest 404 (server new enough to answer preflights on
+          // unknown routes), or status 0 'network' (older servers 404 the
+          // CORS preflight itself with no CORS headers, which Chrome reports
+          // as an opaque fetch failure). Falling back on 'network' is safe:
+          // if the server is truly down the legacy call fails identically.
+          // 'timeout' must NOT fall back — the route exists, claude is slow.
+          if (err instanceof HttpError && (err.status === 404 || (err.status === 0 && err.code === 'network'))) {
+            sessionMode = false;
+            return postActStep(port, token, bootstrap);
+          }
+          throw err;
+        })
+      : postActStep(port, token, bootstrap);
     // Never throws — a rejection settles as {kind:'error'} so the promise
     // always fulfills, even if the stop-watcher below wins the race first
     // (otherwise a later rejection with no .catch would surface as an
     // unhandled promise rejection in the service worker).
-    const stepSettled = postActStep(port, token, buildPairedActPrompt(systemPrompt, history)).then(
+    const stepSettled = stepCall.then(
       (text) => ({ kind: 'text', text }) as const,
       (err) => ({ kind: 'error', err }) as const,
     );
@@ -364,16 +573,22 @@ async function runPairedLoop(ctx: ActContext, runId: string, systemPrompt: strin
     }
     if (action.kind === 'invalid') {
       history.push('> (your last reply was not a single JSON action — reply with exactly one JSON object)');
+      lastDelta = 'invalid';
       continue;
     }
 
     const res = await runActByName(ctx, action.name, action.args, snapshotIdRef);
-    history.push(`> ${JSON.stringify({ action: action.name, args: action.args }).slice(0, 400)}`);
+    const actionStr = JSON.stringify({ action: action.name, args: action.args }).slice(0, 400);
+    history.push(`> ${actionStr}`);
     history.push(`= ${res.resultText.slice(0, 6000)}`);
+    lastDelta = { action: actionStr, result: res.resultText };
     // Keep the transcript sent to claude -p bounded — the latest read_page is
     // what carries the current refs, older entries are just breadcrumbs.
     while (history.length > 16) history.shift();
   }
 
+  // Let the server retire the warm claude process now rather than waiting out
+  // its idle timer (which remains the backstop if the SW dies mid-run).
+  if (sessionMode) void postActSessionEnd(port, token, runId);
   return { ok: true, answer };
 }

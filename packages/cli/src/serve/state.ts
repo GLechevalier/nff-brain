@@ -18,6 +18,13 @@ import {
 } from '@nff-brain/core';
 import type { BrainFile, CaptureTarget, MergedBrain, PairingWindow, ServeConfig } from '@nff-brain/core';
 
+/** A live paired-agent claude session (actRoutes) — one per act-run. */
+export interface ActSessionEntry {
+  session: { send(text: string): Promise<string>; readonly alive: boolean; end(): void };
+  idleTimer: NodeJS.Timeout;
+  startedAtMs: number;
+}
+
 export interface ServeOptions {
   port: number;
   workspaceRoot: string;
@@ -63,6 +70,9 @@ export class ServeState {
   port: number;
 
   pairing: PairingWindow | null = null;
+
+  /** Live paired-agent claude sessions, keyed by runId (see actRoutes.ts). */
+  readonly actSessions = new Map<string, ActSessionEntry>();
 
   private cfg: ServeConfig;
   private cfgSig = '';
@@ -191,5 +201,14 @@ export class ServeState {
     // The reported path is the QUEUE file, not the brain beside it — this is
     // what the banner, /v1/status and doctor all show the user.
     return { path: clipsPath(brainPath), ...clipQueueStats(brainPath) };
+  }
+
+  /** End every live agent claude session — server shutdown must not leak children. */
+  disposeActSessions(): void {
+    for (const entry of this.actSessions.values()) {
+      clearTimeout(entry.idleTimer);
+      entry.session.end();
+    }
+    this.actSessions.clear();
   }
 }

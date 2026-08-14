@@ -73,11 +73,14 @@ export function nameFromParts(parts: Array<string | null | undefined>, max: numb
 // the stitched IIFE, so a minified build's build.mjs step can (and does)
 // rename references to them in this function body — e.g. to `Fn`/`Wn` — with
 // nothing left to resolve that name inside the injected page context,
-// producing "ReferenceError: Fn is not defined" from read_page. Passing them
+// producing "ReferenceError: Fn is not defined" from read_page — and again,
+// after a later refactor, "ReferenceError: Vo is not defined". Passing them
 // as call arguments (see buildSnapshotSource) reads the CURRENT real string
 // value at call time instead of relying on inlineGlobals' text-substitution
-// trick, which only works against un-minified .toString() output. Never
-// called directly in the SW.
+// trick, which only works against un-minified .toString() output. Since it
+// shipped twice, the invariant is no longer a convention: test/injectedSource
+// .test.ts builds this module MINIFIED and fails on any identifier the page
+// cannot resolve. Never called directly in the SW.
 function walkPage(snapshotId: string, mode: string, elsKey: string, snapKey: string): unknown {
   var MAX_NAME = 80;
   var MAX_VALUE = 120;

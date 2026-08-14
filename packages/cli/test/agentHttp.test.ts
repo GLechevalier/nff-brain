@@ -379,3 +379,113 @@ describe('auto mode — autoApprove skips the review step', () => {
   });
 });
 
+// Terminal phases are archived out of `active` in the same write that lands
+// them, so `run` alone can never carry a finished run's phase or error text —
+// `lastRun` is the only wire a client learns WHY its run vanished.
+describe('GET /v1/agent/status — lastRun', () => {
+  it('surfaces the archived run after a stop, scoped to its own client', async () => {
+    const token = await pairAs(ORIGIN_A);
+    const runId = await submitGoal(ORIGIN_A, token);
+    await request(port, {
+      path: '/v1/agent/stop',
+      method: 'POST',
+      headers: auth(ORIGIN_A, token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ runId }),
+    });
+
+    const status = await request(port, { path: '/v1/agent/status', headers: auth(ORIGIN_A, token) });
+    const body = status.json<{ run: unknown; lastRun: { id: string; phase: string } | null }>();
+    expect(body.run).toBeNull();
+    expect(body.lastRun?.id).toBe(runId);
+    expect(body.lastRun?.phase).toBe('stopped');
+
+    // Another paired client never sees it — same scoping as `run` itself.
+    const tokenB = await pairAs(ORIGIN_B);
+    const statusB = await request(port, { path: '/v1/agent/status', headers: auth(ORIGIN_B, tokenB) });
+    expect(statusB.json<{ lastRun: unknown }>().lastRun).toBeNull();
+  });
+});
+
+describe('stale-planning sweep + cross-client supersede', () => {
+  const stateFile = (): string => path.join(homeDir, '.nff-brain', 'web-agent.json');
+
+  function seedPlanningRun(updatedAt: string): void {
+    const run = {
+      id: 'run_seed_stale',
+      phase: 'planning',
+      clientId: 'cl_orphaned_by_repair',
+      goal: 'find robotics engineers',
+      autoApprove: false,
+      plan: null,
+      listTarget: null,
+      cursor: 0,
+      pendingConnects: [],
+      pendingConnectsStepId: null,
+      actionsTaken: 0,
+      maxActions: 1,
+      nextAllowedAtMs: 0,
+      createdAt: updatedAt,
+      updatedAt,
+      history: [],
+    };
+    fs.writeFileSync(stateFile(), JSON.stringify({ version: 1, active: run, recent: [] }, null, 2));
+  }
+
+  it('a planning run orphaned by a dead server stops 409-blocking once stale', async () => {
+    const token = await pairAs(ORIGIN_A);
+    seedPlanningRun(new Date(Date.now() - 5 * 60_000).toISOString());
+
+    const res = await request(port, {
+      path: '/v1/agent/goal',
+      method: 'POST',
+      headers: auth(ORIGIN_A, token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ goal: 'find robotics engineers', maxActions: 1, listTarget: null }),
+    });
+    expect(res.status).toBe(201);
+
+    // The sweep (not the supersede) is what cleared it — the archived error says so.
+    const state = JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
+    const swept = state.recent.find((r: { id: string }) => r.id === 'run_seed_stale');
+    expect(swept.phase).toBe('error');
+    expect(swept.error).toBe('planning timed out — stale run swept');
+  });
+
+  it('a FRESH planning run still 409-blocks the same client', async () => {
+    const token = await pairAs(ORIGIN_A);
+    await submitGoal(ORIGIN_A, token);
+    const res = await request(port, {
+      path: '/v1/agent/goal',
+      method: 'POST',
+      headers: auth(ORIGIN_A, token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ goal: 'another goal', maxActions: 1, listTarget: null }),
+    });
+    expect(res.status).toBe(409);
+  });
+
+  it("a different client's fresh run is superseded, not 409-blocked (re-pair unblock)", async () => {
+    const tokenA = await pairAs(ORIGIN_A);
+    const runIdA = await submitGoal(ORIGIN_A, tokenA);
+
+    // A re-pair mints a new client id; A's run would otherwise block B forever
+    // (every control route is owner-scoped, so B could never stop it).
+    const tokenB = await pairAs(ORIGIN_B);
+    const res = await request(port, {
+      path: '/v1/agent/goal',
+      method: 'POST',
+      headers: auth(ORIGIN_B, tokenB, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ goal: 'find robotics engineers', maxActions: 1, listTarget: null }),
+    });
+    expect(res.status).toBe(201);
+
+    // B owns the active slot now; A's run is archived with the supersede error.
+    const statusB = await request(port, { path: '/v1/agent/status', headers: auth(ORIGIN_B, tokenB) });
+    expect(statusB.json<{ run: { clientId?: string } | null }>().run).not.toBeNull();
+    const statusA = await request(port, { path: '/v1/agent/status', headers: auth(ORIGIN_A, tokenA) });
+    const bodyA = statusA.json<{ run: unknown; lastRun: { id: string; phase: string; error?: string } | null }>();
+    expect(bodyA.run).toBeNull();
+    expect(bodyA.lastRun?.id).toBe(runIdA);
+    expect(bodyA.lastRun?.phase).toBe('error');
+    expect(bodyA.lastRun?.error).toBe('superseded — the browser re-paired');
+  });
+});
+

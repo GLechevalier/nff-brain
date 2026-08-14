@@ -1,0 +1,106 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>form fixtures</title>
+<script src="/fixtures/bench.js"></script>
+<style>
+  body { font: 16px system-ui; margin: 24px; }
+  .row { margin: 14px 0; }
+  input, select, textarea, button { font-size: 16px; padding: 6px; }
+  #combo-list { border: 1px solid #888; width: 220px; display: none; position: absolute; background: #fff; }
+  #combo-list[data-open] { display: block; }
+  #combo-list div { padding: 6px; cursor: pointer; }
+  #combo-list div:hover, #combo-list div[data-hi] { background: #cdf; }
+</style>
+
+<form data-bench="the-form">
+  <div class="row"><input data-bench="f-name" name="name" placeholder="name"></div>
+  <div class="row"><textarea data-bench="f-notes" name="notes" rows="3" cols="40" placeholder="notes"></textarea></div>
+  <div class="row"><label><input type="checkbox" data-bench="f-check-a" name="a"> option A</label>
+    <label><input type="checkbox" data-bench="f-check-b" name="b"> option B</label></div>
+  <div class="row">
+    <label><input type="radio" data-bench="f-radio-red" name="color" value="red"> red</label>
+    <label><input type="radio" data-bench="f-radio-green" name="color" value="green"> green</label>
+    <label><input type="radio" data-bench="f-radio-blue" name="color" value="blue"> blue</label>
+  </div>
+  <div class="row">
+    <select data-bench="f-select" name="fruit" aria-label="fruit select">
+      <option value="">choose…</option>
+      <option value="apple">apple</option>
+      <option value="banana">banana</option>
+      <option value="cherry">cherry</option>
+    </select>
+    <select data-bench="f-multi" name="langs" multiple size="4" aria-label="langs multi">
+      <option value="c">C</option><option value="py">Python</option>
+      <option value="rs">Rust</option><option value="ts">TypeScript</option>
+    </select>
+  </div>
+  <div class="row" style="position:relative">
+    <input data-bench="combo-input" id="combo-input" placeholder="city (custom combobox)" role="combobox" aria-expanded="false" autocomplete="off">
+    <div id="combo-list" role="listbox" data-bench="combo-list"></div>
+  </div>
+  <div class="row"><input type="range" data-bench="f-range" name="level" min="0" max="100" value="20" aria-label="level range">
+    <span data-bench="f-range-out">20</span></div>
+  <div class="row"><input type="date" data-bench="f-date" name="when" aria-label="date field"></div>
+  <div class="row"><input type="color" data-bench="f-color" name="tint" value="#000000" aria-label="tint color"></div>
+  <div class="row"><input type="file" data-bench="f-file" name="doc" aria-label="doc file"></div>
+  <div class="row">
+    <button type="submit" data-bench="f-submit">Submit</button>
+    <button type="reset" data-bench="f-reset">Reset</button>
+  </div>
+</form>
+
+<script>
+  const CITIES = ['Amsterdam', 'Athens', 'Berlin', 'Bordeaux', 'Boston', 'Paris', 'Prague', 'Porto'];
+  const S = { submits: 0, resets: 0, comboChosen: '' };
+  const form = document.querySelector('[data-bench=the-form]');
+  window.__benchState = () => {
+    const fd = new FormData(form);
+    return {
+      name: fd.get('name') || '', notes: fd.get('notes') || '',
+      checkA: !!fd.get('a'), checkB: !!fd.get('b'),
+      color: fd.get('color') || '', fruit: fd.get('fruit') || '',
+      langs: fd.getAll('langs'),
+      combo: document.getElementById('combo-input').value, comboChosen: S.comboChosen,
+      range: Number(fd.get('level')), date: fd.get('when') || '', tint: fd.get('tint') || '',
+      fileCount: document.querySelector('[data-bench=f-file]').files.length,
+      submits: S.submits, resets: S.resets,
+    };
+  };
+  form.addEventListener('submit', () => { S.submits++; });
+  form.addEventListener('reset', () => { S.resets++; });
+  document.querySelector('[data-bench=f-range]').addEventListener('input', (e) => {
+    document.querySelector('[data-bench=f-range-out]').textContent = e.target.value;
+  });
+
+  // Custom combobox: type to filter, click (or Enter) to pick.
+  const input = document.getElementById('combo-input');
+  const listEl = document.getElementById('combo-list');
+  function renderList() {
+    const q = input.value.toLowerCase();
+    const hits = q ? CITIES.filter((c) => c.toLowerCase().includes(q)) : [];
+    listEl.innerHTML = '';
+    for (const c of hits) {
+      const d = document.createElement('div');
+      d.textContent = c;
+      d.setAttribute('role', 'option');
+      d.setAttribute('data-bench', 'combo-opt-' + c.toLowerCase());
+      d.addEventListener('mousedown', (e) => { e.preventDefault(); pick(c); });
+      listEl.appendChild(d);
+    }
+    const open = hits.length > 0;
+    if (open) listEl.setAttribute('data-open', '');
+    else listEl.removeAttribute('data-open');
+    input.setAttribute('aria-expanded', String(open));
+  }
+  function pick(c) {
+    input.value = c;
+    S.comboChosen = c;
+    listEl.removeAttribute('data-open');
+    input.setAttribute('aria-expanded', 'false');
+  }
+  input.addEventListener('input', renderList);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && listEl.firstChild) { e.preventDefault(); pick(listEl.firstChild.textContent); }
+    if (e.key === 'Escape') { listEl.removeAttribute('data-open'); input.setAttribute('aria-expanded', 'false'); }
+  });
+</script>

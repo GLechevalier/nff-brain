@@ -81,6 +81,8 @@ describe('browser-safe core modules', () => {
     // (future) replay/recorder pipeline; must stay node-free like the rest.
     'browserVerbs.ts',
     'pageSnapshot.ts',
+    // Act-benchmark wire contract (evals fixture server ↔ bench-build driver).
+    'benchProtocol.ts',
     'trace.ts',
     'traceCompact.ts',
     'workflow.ts',

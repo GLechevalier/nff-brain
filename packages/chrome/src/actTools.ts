@@ -15,6 +15,7 @@ import type { WorkflowSpec } from '@nff-brain/core/workflow';
 import type { ToolSpec } from '@nff-brain/core/provider';
 import type { ToolExecutor } from './providerClient.js';
 import { decideAct, originOf } from './actGate.js';
+import { buildCodeSteering, buildCodeTools, codeJsonTools, runCodeByName } from './codeTools.js';
 import { executeVerb } from './actEngine.js';
 import { appendTranscript, mutateActRun } from './actStore.js';
 import { getActHostAllow, getActRun } from './storage.js';
@@ -36,6 +37,10 @@ export interface ActContext {
   manualGrants: Partial<Record<ActManualCapability, true>>;
   /** Latched true by Stop / budget so in-flight executors short-circuit. */
   stopped: boolean;
+  /** True when this run also carries the code tools (codeTools.ts). The
+   *  per-run write/exec grants are NOT mirrored here — codeTools reads them
+   *  fresh from nb.actRun so the panel's auto-approve toggle works mid-run. */
+  codeEnabled?: boolean;
 }
 
 /** Short, human description of a verb for the manual-mode capability prompt. Pre-execution, so it names the ACTION, not the resolved element (the transcript line fills that in afterward). */
@@ -131,8 +136,11 @@ export const ACT_STEERING = [
   'When the goal is done (or you are blocked and need the user), stop calling tools and reply with a short plain summary of what you did.',
 ].join(' ');
 
-export function buildSteeringPrompt(goal: string): string {
-  return `${ACT_STEERING}\n\nGOAL: ${goal}`;
+/** codeProjectName present = the run is code-enabled: append the code-tool
+ *  steering (codeTools.ts) between the browser steering and the goal. */
+export function buildSteeringPrompt(goal: string, codeProjectName?: string | null): string {
+  const steering = codeProjectName ? `${ACT_STEERING} ${buildCodeSteering(codeProjectName)}` : ACT_STEERING;
+  return `${steering}\n\nGOAL: ${goal}`;
 }
 
 /**
@@ -173,6 +181,57 @@ export function buildWorkflowRunPrompt(spec: WorkflowSpec, goal: string): string
   ]
     .filter(Boolean)
     .join('\n');
+}
+
+/**
+ * BYOK loop's system/goal split: everything STATIC for the whole run (the
+ * steering rules and, for a replay, the workflow's generalized steps) goes in
+ * the system prompt — which the provider adapter marks as a prompt-cache
+ * prefix — while the per-run goal rides in the first user message. The
+ * paired builders above stay fused (claude -p is a single text prompt).
+ */
+export function buildActSystemPrompt(workflow?: WorkflowSpec | null, codeProjectName?: string | null, brainContext?: string): string {
+  let steering = codeProjectName ? `${ACT_STEERING} ${buildCodeSteering(codeProjectName)}` : ACT_STEERING;
+  // Brain context is computed ONCE per run (from the goal) so it lives inside
+  // the cached system prefix — relevant notes at zero per-turn token cost.
+  if (brainContext) steering = `${steering}\n\n${brainContext}`;
+  if (!workflow) return steering;
+  const params = workflow.params.length
+    ? workflow.params.map((p) => `- ${p.name}: ${p.description} (recorded example: ${p.example})`).join('\n')
+    : '(none)';
+  const stepLines: string[] = [];
+  let n = 1;
+  for (const s of workflow.steps) {
+    stepLines.push(`${n}. ${s.intent}`);
+    if (s.loop) {
+      const times = s.loop.countParam ? `{${s.loop.countParam}} times` : `for each ${s.loop.over}`;
+      stepLines.push(`   repeat ${times}:`);
+      for (const b of s.loop.body) stepLines.push(`     - ${b.intent}`);
+    }
+    n++;
+  }
+  return [
+    steering,
+    '',
+    'You are REPLAYING a saved workflow. Follow its steps in order, but re-find every target on the LIVE page — never assume a position from the recording. Infer the parameter values from the USER REQUEST.',
+    '',
+    `WORKFLOW: ${workflow.intent || 'recorded task'}`,
+    `Site: ${workflow.site}`,
+    `Parameters:\n${params}`,
+    `Steps:\n${stepLines.join('\n')}`,
+    workflow.successCriteria ? `Done when: ${workflow.successCriteria}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+export function buildActUserGoal(goal: string, workflow?: WorkflowSpec | null): string {
+  if (!workflow) return `GOAL: ${goal}\n\nStart by reading the page.`;
+  return [
+    `USER REQUEST: ${goal}`,
+    '',
+    `If you are not already on ${workflow.site}, navigate there first, then read_page and work through the steps. Stop and summarize when done or blocked.`,
+  ].join('\n');
 }
 
 // ── tool specs ───────────────────────────────────────────────────────────────
@@ -437,7 +496,8 @@ export function buildActTools(ctx: ActContext): ToolExecutor[] {
       return runVerb(ctx, verb, snapshotIdRef);
     },
   });
-  return [READ_PAGE, POINTER, KEYBOARD, SCROLL, NAVIGATE, TABS].map(make);
+  const browser = [READ_PAGE, POINTER, KEYBOARD, SCROLL, NAVIGATE, TABS].map(make);
+  return ctx.codeEnabled ? [...browser, ...buildCodeTools(ctx)] : browser;
 }
 
 function rawUsesRef(raw: unknown): boolean {
@@ -461,9 +521,15 @@ export async function hasActiveRun(): Promise<boolean> {
 
 const ACT_JSON_TOOLS = [READ_PAGE, POINTER, KEYBOARD, SCROLL, NAVIGATE, TABS];
 
+/** The specs a run's JSON contract advertises — browser verbs, plus the code
+ *  vocabulary when the run is code-enabled. */
+export function actContractTools(codeEnabled?: boolean): ToolSpec[] {
+  return codeEnabled ? [...ACT_JSON_TOOLS, ...codeJsonTools()] : ACT_JSON_TOOLS;
+}
+
 /** The tool contract, rendered as text for the claude -p prompt. */
-export function renderActContract(): string {
-  const tools = ACT_JSON_TOOLS.map((t) => `  ${t.name} — ${t.description}`).join('\n');
+export function renderActContract(specs: ToolSpec[] = ACT_JSON_TOOLS): string {
+  const tools = specs.map((t) => `  ${t.name} — ${t.description}`).join('\n');
   return [
     'Control the browser by replying with EXACTLY ONE JSON object and NOTHING else:',
     '  {"action":"<tool>","args":{...}}  to act',
@@ -490,10 +556,50 @@ export function parseActAction(text: string): ActAction {
   return { kind: 'invalid' };
 }
 
-/** Build the per-turn prompt for the paired loop: steering + goal + contract + history. */
-export function buildPairedActPrompt(systemPrompt: string, history: string[]): string {
-  const hist = history.length ? history.join('\n') : '(nothing yet — start by reading the page)';
-  return [systemPrompt, '', renderActContract(), '', 'History so far:', hist, '', 'Reply with the next single JSON object now:'].join('\n');
+/**
+ * The bootstrap must stay well under the server's 128 KB act-route body cap
+ * (packages/cli/src/serve/actRoutes.ts's ACT_BODY_MAX) with headroom for the
+ * JSON envelope around it — long code-tool results (file reads, build logs)
+ * are what can push it there.
+ */
+export const PAIRED_BOOTSTRAP_MAX = 110_000;
+
+/** Build the per-turn prompt for the paired loop: steering + goal + contract + history.
+ *  History is dropped oldest-first (in `> action` / `= result` pairs) until
+ *  the rendered prompt fits PAIRED_BOOTSTRAP_MAX. */
+export function buildPairedActPrompt(systemPrompt: string, history: string[], specs?: ToolSpec[]): string {
+  const render = (h: string[]): string => {
+    const hist = h.length ? h.join('\n') : '(nothing yet — start by reading the page)';
+    return [systemPrompt, '', renderActContract(specs), '', 'History so far:', hist, '', 'Reply with the next single JSON object now:'].join('\n');
+  };
+  let hist = history;
+  let prompt = render(hist);
+  while (prompt.length > PAIRED_BOOTSTRAP_MAX && hist.length > 1) {
+    hist = hist.slice(2);
+    prompt = render(hist);
+  }
+  return prompt;
+}
+
+/** What the last executed action looked like, for the session-mode delta turn.
+ *  `action` is the same serialized `{"action":...}` string the history keeps. */
+export type ActDelta = { action: string; result: string } | 'invalid' | null;
+
+/**
+ * The per-turn DELTA message for session mode (postActSessionStep): the server
+ * holds the conversation, so each turn sends only what changed since the last
+ * reply. The wording mirrors the history lines buildPairedActPrompt would send
+ * (`> action` / `= result`), so a mid-run respawn from the bootstrap reads as
+ * the same conversation the live session was having.
+ */
+export function buildSessionStepMessage(last: ActDelta): string {
+  const lines =
+    last === null
+      ? ['(nothing yet — start by reading the page)']
+      : last === 'invalid'
+        ? ['(your last reply was not a single JSON action — reply with exactly one JSON object)']
+        : [`> ${last.action}`, `= ${last.result.slice(0, 6000)}`];
+  return [...lines, '', 'Reply with the next single JSON object now:'].join('\n');
 }
 
 /**
@@ -506,6 +612,9 @@ export async function runActByName(
   args: Record<string, unknown>,
   snapshotIdRef: { id: string },
 ): Promise<{ ok: boolean; resultText: string }> {
+  // Code tools are not browser verbs — they route through their own module
+  // (jail + codeGate + FS Access) instead of validate/decideAct/executeVerb.
+  if (name.startsWith('code_')) return runCodeByName(ctx, name, args);
   const raw = toVerbInput(name, args, snapshotIdRef.id);
   const verb = validateBrowserVerb(raw);
   if (!verb) return { ok: false, resultText: `invalid ${name} arguments` };

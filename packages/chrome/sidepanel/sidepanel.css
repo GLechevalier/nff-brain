@@ -156,6 +156,22 @@ label.small { min-width: 84px; }
 
 .grant { margin-top: 10px; padding: 8px; border: 1px dashed #00ffcc55; border-radius: 6px; background: #00ffcc0f; }
 
+/* Coding agent — the approval card's diff preview and the project block. */
+.grant-preview {
+  margin: 6px 0 0;
+  padding: 6px;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre;
+  border: 1px solid #00ffcc33;
+  border-radius: 4px;
+  background: #0008;
+}
+.code-project { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.code-project label { display: flex; align-items: center; gap: 6px; }
+
 /* ── transcript (shared by Agent's act log and Brain's chat) ──────────────── */
 
 .transcript {
@@ -203,7 +219,9 @@ label.small { min-width: 84px; }
 .entry-run .list li > span:last-child { align-self: flex-end; }
 
 .entry-pending { background: #242424; border: 1px solid #333; color: #999; }
-.entry-pending .pending-word { animation: brain-pulse 1.2s ease-in-out infinite; }
+/* Unscoped on purpose: the same pulse rides the run-entry phase label and the
+   act status word, not just the pending bubble. */
+.pending-word { animation: brain-pulse 1.2s ease-in-out infinite; }
 @keyframes brain-pulse {
   0%, 100% { opacity: 0.35; }
   50% { opacity: 1; }

@@ -188,14 +188,16 @@ describe('e2e (mocked claude)', () => {
     expect(r.stdout).toContain('haiku (default)');
   });
 
-  it('--version prints the package version', () => {
+  it('--version prints the package version with a build stamp', () => {
     const pkg = JSON.parse(
       fs.readFileSync(path.resolve(here, '..', 'package.json'), 'utf8'),
     ) as { version: string };
     for (const flag of ['--version', '-v']) {
       const r = runCli([flag]);
       expect(r.status).toBe(0);
-      expect(r.stdout.trim()).toBe(pkg.version);
+      // The bundle bakes "version+YYYYMMDD.HHmm" in at build time (tsup
+      // `define`) so a stale dist is distinguishable from a fresh one.
+      expect(r.stdout.trim()).toMatch(new RegExp(`^${pkg.version.replace(/\./g, '\\.')}\\+\\d{8}\\.\\d{4}$`));
     }
   });
 

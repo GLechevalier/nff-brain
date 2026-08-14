@@ -116,6 +116,28 @@ export async function runPlanningStep(runId: string, goal: string, maxActions: n
   }
 }
 
+/** Grace beyond the planner's own timeout before a 'planning' run is presumed orphaned. */
+const PLAN_STALE_GRACE_MS = 30_000;
+
+/**
+ * Sweeps a 'planning' run whose server died mid-plan: runPlanningStep's
+ * pending updater lives only in that process's memory, so a crash leaves
+ * active.phase === 'planning' on disk with nothing left that could ever
+ * resolve it — 409-blocking every future goal. A run still 'planning' well
+ * past the planner's own timeout is expired to 'error', and
+ * updateActiveRun's terminal auto-archive clears the active slot.
+ */
+export function expireStalePlanning(now: number = Date.now()): void {
+  const active = readWebAgentState().active;
+  if (!active || active.phase !== 'planning') return;
+  if (now - Date.parse(active.updatedAt) <= WEB_AGENT_PLAN_TIMEOUT_MS + PLAN_STALE_GRACE_MS) return;
+  updateActiveRun(active.id, (run) =>
+    run.phase !== 'planning'
+      ? run
+      : { ...run, phase: 'error', error: 'planning timed out — stale run swept', updatedAt: nowIso() },
+  );
+}
+
 /** No cross-client control: a run only ever answers to the client that started it. */
 function owns(run: WebAgentRun, clientId: string): boolean {
   return run.clientId === clientId;

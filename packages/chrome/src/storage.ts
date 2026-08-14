@@ -14,6 +14,8 @@ import type {
   ActHostAllow,
   ActivityRecord,
   ActRunState,
+  BrainModePref,
+  CodeProjectMeta,
   TraceActiveState,
   TracePending,
   Allowlist,
@@ -27,6 +29,7 @@ import type {
   StandaloneBrain,
   StandaloneClip,
   StoredState,
+  WorkflowStore,
 } from './schema.js';
 import type { RecorderSeenEntry, RecorderState } from './recorderTypes.js';
 import type { AgentActionAllowState, AgentAdapterState, AgentTabRef, NavigateHostAllowState } from './agentTypes.js';
@@ -149,6 +152,16 @@ export async function setAgentTab(ref: AgentTabRef | null): Promise<void> {
   await chrome.storage.local.set({ [KEYS.agentTab]: ref });
 }
 
+// ── brain mode preference ────────────────────────────────────────────────────
+
+export function getBrainModePref(): Promise<BrainModePref | null> {
+  return raw<BrainModePref | null>(KEYS.brainMode, null, (v) => v === null || v === 'paired' || v === 'byok');
+}
+
+export async function setBrainModePref(pref: BrainModePref | null): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.brainMode]: pref });
+}
+
 // ── BYOK provider settings (LLM reasoning only — never a graph store) ───────
 
 export function getProviderSettings(): Promise<ProviderSettings | null> {
@@ -165,10 +178,10 @@ export async function setProviderSettings(p: ProviderSettings | null): Promise<v
   await chrome.storage.local.set({ [KEYS.provider]: p });
 }
 
-// ── legacy, migration-only ───────────────────────────────────────────────────
-// Reads/writes a pre-upgrade user's leftover local brain — see KEYS' and
-// schema.ts's comments. The ONLY caller is migrate.ts's migrateIfNeeded();
-// nothing else may read or write these again.
+// ── the local brain + clip pipeline (BYOK) ──────────────────────────────────
+// Live again — see KEYS' and schema.ts's comments. Writers: brainStore.ts
+// (serialized mutations), standaloneDrain.ts (via commitDrain), migrate.ts
+// (the legacy sweep, gated on no explicit brain-mode preference).
 
 export function getBrain(): Promise<StandaloneBrain | null> {
   return raw<StandaloneBrain | null>(
@@ -190,12 +203,41 @@ export async function setClipQueue(queue: StandaloneClip[]): Promise<void> {
   await chrome.storage.local.set({ [KEYS.clipQueue]: queue });
 }
 
+export function getClipSeen(): Promise<string[]> {
+  return raw<string[]>(KEYS.clipSeen, [], (v) => Array.isArray(v));
+}
+
 export async function setClipSeen(ids: string[]): Promise<void> {
   await chrome.storage.local.set({ [KEYS.clipSeen]: ids });
 }
 
+export function getDrainState(): Promise<DrainState> {
+  return raw<DrainState>(KEYS.drain, DEFAULT_DRAIN, (v) => isObj(v) && typeof v.nextDrainAtMs === 'number');
+}
+
 export async function setDrainState(state: DrainState): Promise<void> {
   await chrome.storage.local.set({ [KEYS.drain]: state });
+}
+
+/**
+ * The drain's single multi-key commit — one storage.set so a worker kill
+ * loses the entire drain result or none of it (clips redeliver, deduped by
+ * the seen ring). Callers schedule this on the brainStore chain.
+ */
+export async function commitDrain(w: {
+  brain: StandaloneBrain;
+  queue: StandaloneClip[];
+  seen: string[];
+  activity: ActivityRecord[];
+  drain: DrainState;
+}): Promise<void> {
+  await chrome.storage.local.set({
+    [KEYS.brain]: w.brain,
+    [KEYS.clipQueue]: w.queue,
+    [KEYS.clipSeen]: w.seen,
+    [KEYS.activity]: w.activity,
+    [KEYS.drain]: w.drain,
+  });
 }
 
 export async function setMigrationBackup(backup: MigrationBackup | null): Promise<void> {
@@ -222,6 +264,30 @@ export function getActHostAllow(): Promise<ActHostAllow> {
 
 export async function setActHostAllow(state: ActHostAllow): Promise<void> {
   await chrome.storage.local.set({ [KEYS.actHostAllow]: state });
+}
+
+// ── coding agent ─────────────────────────────────────────────────────────────
+
+export function getCodeProject(): Promise<CodeProjectMeta | null> {
+  return raw<CodeProjectMeta | null>(
+    KEYS.codeProject,
+    null,
+    (v) => v === null || (isObj(v) && typeof v.name === 'string'),
+  );
+}
+
+export async function setCodeProject(meta: CodeProjectMeta | null): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.codeProject]: meta });
+}
+
+// ── local workflow store ─────────────────────────────────────────────────────
+
+export function getWorkflowStore(): Promise<WorkflowStore> {
+  return raw<WorkflowStore>(KEYS.workflows, { byId: {} }, (v) => isObj(v) && isObj(v.byId));
+}
+
+export async function setWorkflowStore(store: WorkflowStore): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.workflows]: store });
 }
 
 // ── record-and-automate ──────────────────────────────────────────────────────

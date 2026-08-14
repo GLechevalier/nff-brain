@@ -48,7 +48,8 @@ export type ProviderErrorKind =
   | 'overloaded' //  529/5xx/network-shaped — retryable on a later tick
   | 'bad_request' // other 4xx — never retry; a bug or a bad model id
   | 'refusal' //     HTTP 200 with stop_reason 'refusal'
-  | 'malformed'; //  unparseable body — treat like a disconnect, never trust the wire
+  | 'malformed' //   unparseable body — treat like a disconnect, never trust the wire
+  | 'aborted'; //    caller-initiated stop (the user clicked Stop) — never retry
 
 /** Messages are short and user-showable by construction — never the key, never a stack. */
 export class ProviderError extends Error {
@@ -87,6 +88,19 @@ export interface ProviderAdapter {
   buildChatRequest?(p: ProviderChatCallParams, apiKey: string): ProviderRequest;
   /** Unlike parseResponse, does NOT throw on empty text — a pure tool_use turn has none. */
   parseChatResponse?(status: number, bodyText: string): ProviderChatResult;
+  /**
+   * Streaming counterpart of parseChatResponse: a pure state machine fed the
+   * SSE body chunk by chunk. Optional like the other chat methods — a
+   * provider without one simply can't stream; callers fall back to blocking.
+   */
+  createStreamParser?(): ProviderStreamParser;
+}
+
+export interface ProviderStreamParser {
+  /** Feed one decoded chunk; returns the text deltas it revealed (often []). */
+  feed(chunk: string): string[];
+  /** Stream ended. Throws ProviderError (refusal/malformed/…) or returns the assembled result. */
+  finish(): ProviderChatResult;
 }
 
 // ── tool-calling (chat slot only) ───────────────────────────────────────────
@@ -112,6 +126,32 @@ export interface ProviderChatCallParams {
   model: string;
   maxTokens: number;
   tools?: ToolSpec[];
+  /** Top-level system prompt, sent as a text block (not a messages[0] hack). */
+  system?: string;
+  /**
+   * Place prompt-cache breakpoints: one on the system block (which caches
+   * tools+system together — providers render tools → system → messages) and
+   * one on the newest message's last content block, so each turn re-reads the
+   * previous turn as cached prefix and writes one incremental entry. The
+   * caller's `messages` array is NEVER mutated — breakpoints are stamped on a
+   * copy — because next turn's cache hit depends on this turn's exact bytes.
+   */
+  cache?: boolean;
+  /**
+   * 'disabled' cuts adaptive-thinking latency on models that reason by
+   * default (sonnet-5-class) — the web agent's tightly-steered tool loop
+   * pays that tax every turn for no benefit. Omit to keep provider default.
+   */
+  thinking?: 'disabled' | 'adaptive';
+  /** SSE streaming — pair the request with createStreamParser() to consume. */
+  stream?: boolean;
+}
+
+export interface ProviderChatUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
 }
 
 export interface ProviderChatResult {
@@ -119,6 +159,8 @@ export interface ProviderChatResult {
   text: string;
   toolCalls: Array<{ id: string; name: string; input: unknown }>;
   stopReason: string | null;
+  /** Token accounting when the provider reports it — how caching is verified. */
+  usage?: ProviderChatUsage;
 }
 
 // ── Anthropic ────────────────────────────────────────────────────────────────
@@ -154,6 +196,12 @@ interface AnthropicContentBlock {
 interface AnthropicMessageBody {
   content?: AnthropicContentBlock[];
   stop_reason?: unknown;
+  usage?: {
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+    cache_read_input_tokens?: unknown;
+    cache_creation_input_tokens?: unknown;
+  };
 }
 
 function parseBody<T>(bodyText: string): T | null {
@@ -162,6 +210,27 @@ function parseBody<T>(bodyText: string): T | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Copy `messages` and stamp a cache_control breakpoint on the LAST content
+ * block of the LAST message — the moving end of the cached prefix. String
+ * content is normalized to a single text block first (a breakpoint needs a
+ * block to sit on). Only the last message is deep-copied; earlier messages
+ * are shared by reference, which is safe because nothing here mutates them —
+ * and the caller's array is never touched, so next turn's request rebuilds
+ * the exact same prefix bytes and hits the cache.
+ */
+function stampTailBreakpoint(messages: ChatMessage[]): ChatMessage[] {
+  if (messages.length === 0) return messages;
+  const out = messages.slice();
+  const last = out[out.length - 1]!;
+  const blocks: ChatContentBlock[] =
+    typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : last.content.map((b) => ({ ...b }));
+  if (blocks.length === 0) return messages;
+  (blocks[blocks.length - 1] as Record<string, unknown>).cache_control = { type: 'ephemeral' };
+  out[out.length - 1] = { role: last.role, content: blocks };
+  return out;
 }
 
 /** The envelope every /v1/messages request shares — only the body differs between buildRequest and buildChatRequest. */
@@ -226,9 +295,28 @@ export const anthropicAdapter: ProviderAdapter = {
   },
 
   buildChatRequest(p: ProviderChatCallParams, apiKey: string): ProviderRequest {
-    const body: Record<string, unknown> = { model: p.model, max_tokens: p.maxTokens, messages: p.messages };
+    const cacheOn = p.cache === true;
+    const body: Record<string, unknown> = {
+      model: p.model,
+      max_tokens: p.maxTokens,
+      messages: cacheOn ? stampTailBreakpoint(p.messages) : p.messages,
+    };
     if (p.tools && p.tools.length > 0) body.tools = p.tools;
+    if (p.system !== undefined) {
+      // Block form (not a bare string) so the cache breakpoint has somewhere
+      // to live. Anthropic renders tools → system → messages, so this one
+      // breakpoint caches the tool schemas AND the system prompt together.
+      const block: Record<string, unknown> = { type: 'text', text: p.system };
+      if (cacheOn) block.cache_control = { type: 'ephemeral' };
+      body.system = [block];
+    }
+    if (p.thinking === 'disabled') body.thinking = { type: 'disabled' };
+    if (p.stream) body.stream = true;
     return anthropicMessagesRequest(body, apiKey);
+  },
+
+  createStreamParser(): ProviderStreamParser {
+    return createAnthropicStreamParser();
   },
 
   parseChatResponse(status: number, bodyText: string): ProviderChatResult {
@@ -245,9 +333,160 @@ export const anthropicAdapter: ProviderAdapter = {
     const toolCalls = parsed.content
       .filter((b) => b?.type === 'tool_use' && typeof b.id === 'string' && typeof b.name === 'string')
       .map((b) => ({ id: b.id as string, name: b.name as string, input: b.input }));
-    return { text, toolCalls, stopReason: typeof parsed.stop_reason === 'string' ? parsed.stop_reason : null };
+    const u = parsed.usage;
+    const usage: ProviderChatUsage | undefined =
+      u && typeof u.input_tokens === 'number' && typeof u.output_tokens === 'number'
+        ? {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            ...(typeof u.cache_read_input_tokens === 'number' ? { cache_read_input_tokens: u.cache_read_input_tokens } : {}),
+            ...(typeof u.cache_creation_input_tokens === 'number'
+              ? { cache_creation_input_tokens: u.cache_creation_input_tokens }
+              : {}),
+          }
+        : undefined;
+    return { text, toolCalls, stopReason: typeof parsed.stop_reason === 'string' ? parsed.stop_reason : null, usage };
   },
 };
+
+// ── Anthropic SSE stream parser ─────────────────────────────────────────────
+//
+// Hand-rolled (no SDK, same rule as the rest of this module): a pure state
+// machine over the /v1/messages event stream. Events arrive as SSE frames
+// ("event: X\ndata: {json}\n\n") that can be split ANYWHERE across network
+// chunks — feed() buffers until a complete frame is available. The shapes it
+// must handle: message_start (input-side usage), content_block_start (text /
+// tool_use), content_block_delta (text_delta streamed out as it lands;
+// input_json_delta accumulated as raw fragments), content_block_stop (the
+// accumulated JSON parses HERE, not per-fragment), message_delta (stop_reason
+// + output usage), error (mapped to ProviderError), ping (ignored).
+
+interface AnthropicStreamEventBody {
+  type?: unknown;
+  message?: { usage?: { input_tokens?: unknown; cache_read_input_tokens?: unknown; cache_creation_input_tokens?: unknown } };
+  index?: unknown;
+  content_block?: { type?: unknown; id?: unknown; name?: unknown };
+  delta?: { type?: unknown; text?: unknown; partial_json?: unknown; stop_reason?: unknown };
+  usage?: { output_tokens?: unknown };
+  error?: { type?: unknown; message?: unknown };
+}
+
+export function createAnthropicStreamParser(): ProviderStreamParser {
+  let buffer = '';
+  let text = '';
+  let stopReason: string | null = null;
+  let started = false;
+  let error: ProviderError | null = null;
+  const usage: ProviderChatUsage = { input_tokens: 0, output_tokens: 0 };
+  let sawUsage = false;
+  const toolCalls: ProviderChatResult['toolCalls'] = [];
+  const openBlocks = new Map<number, { kind: 'text' } | { kind: 'tool_use'; id: string; name: string; json: string }>();
+
+  function handle(body: AnthropicStreamEventBody): string | null {
+    switch (body.type) {
+      case 'message_start': {
+        started = true;
+        const u = body.message?.usage;
+        if (u && typeof u.input_tokens === 'number') {
+          sawUsage = true;
+          usage.input_tokens = u.input_tokens;
+          if (typeof u.cache_read_input_tokens === 'number') usage.cache_read_input_tokens = u.cache_read_input_tokens;
+          if (typeof u.cache_creation_input_tokens === 'number') usage.cache_creation_input_tokens = u.cache_creation_input_tokens;
+        }
+        return null;
+      }
+      case 'content_block_start': {
+        const idx = typeof body.index === 'number' ? body.index : -1;
+        const block = body.content_block;
+        if (block?.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+          openBlocks.set(idx, { kind: 'tool_use', id: block.id, name: block.name, json: '' });
+        } else if (block?.type === 'text') {
+          openBlocks.set(idx, { kind: 'text' });
+        }
+        return null;
+      }
+      case 'content_block_delta': {
+        const idx = typeof body.index === 'number' ? body.index : -1;
+        const delta = body.delta;
+        if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+          text += delta.text;
+          return delta.text;
+        }
+        if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+          const open = openBlocks.get(idx);
+          if (open?.kind === 'tool_use') open.json += delta.partial_json;
+        }
+        return null; // thinking_delta etc.: not surfaced
+      }
+      case 'content_block_stop': {
+        const idx = typeof body.index === 'number' ? body.index : -1;
+        const open = openBlocks.get(idx);
+        openBlocks.delete(idx);
+        if (open?.kind === 'tool_use') {
+          // The accumulated fragments parse only now, as one document. An
+          // empty accumulation is a legal no-argument call ({}).
+          const parsed = parseBody<unknown>(open.json || '{}');
+          if (parsed === null) error ??= new ProviderError('malformed', 'provider streamed unreadable tool input');
+          else toolCalls.push({ id: open.id, name: open.name, input: parsed });
+        }
+        return null;
+      }
+      case 'message_delta': {
+        if (typeof body.delta?.stop_reason === 'string') stopReason = body.delta.stop_reason;
+        if (typeof body.usage?.output_tokens === 'number') usage.output_tokens = body.usage.output_tokens;
+        return null;
+      }
+      case 'error': {
+        const errType = typeof body.error?.type === 'string' ? body.error.type : '';
+        const message =
+          typeof body.error?.message === 'string' && body.error.message
+            ? body.error.message.slice(0, 200)
+            : 'provider stream error';
+        error ??=
+          errType === 'overloaded_error'
+            ? new ProviderError('overloaded', 'provider overloaded or unavailable')
+            : new ProviderError('bad_request', message);
+        return null;
+      }
+      default:
+        return null; // message_stop, ping, unknown future events
+    }
+  }
+
+  return {
+    feed(chunk: string): string[] {
+      buffer += chunk;
+      const deltas: string[] = [];
+      for (;;) {
+        const m = /\r?\n\r?\n/.exec(buffer);
+        if (!m) break;
+        const frame = buffer.slice(0, m.index);
+        buffer = buffer.slice(m.index + m[0].length);
+        const data = frame
+          .split(/\r?\n/)
+          .filter((l) => l.startsWith('data:'))
+          .map((l) => l.slice(5).trim())
+          .join('\n');
+        if (!data) continue;
+        const body = parseBody<AnthropicStreamEventBody>(data);
+        if (!body) {
+          error ??= new ProviderError('malformed', 'provider streamed an unreadable event');
+          continue;
+        }
+        const delta = handle(body);
+        if (delta) deltas.push(delta);
+      }
+      return deltas;
+    },
+
+    finish(): ProviderChatResult {
+      if (error) throw error;
+      if (!started) throw new ProviderError('malformed', 'provider returned an unreadable response');
+      if (stopReason === 'refusal') throw new ProviderError('refusal', 'the model declined to answer this request');
+      return { text, toolCalls, stopReason, ...(sawUsage ? { usage } : {}) };
+    },
+  };
+}
 
 // ── registry ─────────────────────────────────────────────────────────────────
 

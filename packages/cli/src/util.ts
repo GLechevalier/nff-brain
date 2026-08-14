@@ -128,8 +128,21 @@ export function fail(message: string): never {
   process.exit(1);
 }
 
-/** CLI version from package.json — one level above the bundled dist/index.js. */
+/**
+ * Baked in by tsup at build time (`define` in tsup.config.ts): the package
+ * version PLUS a build stamp, e.g. "0.1.0+20260814.1042". Undefined when the
+ * code runs unbundled (tsx, vitest) — `typeof` keeps that safe.
+ */
+declare const __NFF_BRAIN_VERSION__: string | undefined;
+
+/**
+ * The version of the code that is actually running. Prefer the build-time
+ * constant: a runtime package.json read reports the SOURCE TREE's version even
+ * when dist/ is stale, which is how version skew hid before. The read remains
+ * only as the unbundled-dev fallback.
+ */
 export function cliVersion(): string {
+  if (typeof __NFF_BRAIN_VERSION__ === 'string') return __NFF_BRAIN_VERSION__;
   try {
     const raw = fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8');
     return (JSON.parse(raw) as { version?: string }).version ?? 'unknown';

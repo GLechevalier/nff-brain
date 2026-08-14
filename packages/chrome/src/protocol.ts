@@ -6,7 +6,10 @@
 import type {
   ActRunState,
   AllowRule,
+  BrainMode,
+  BrainModePref,
   Capture,
+  CodeProjectMeta,
   ConnectionPhase,
   Health,
   ModelSlots,
@@ -14,6 +17,7 @@ import type {
 } from './schema.js';
 import type { ProviderId } from '@nff-brain/core/provider';
 import type { WorkflowSpec } from '@nff-brain/core/workflow';
+import type { BrainEdge, BrainNode } from '@nff-brain/core/types';
 
 /**
  * Owned by item 0 (packages/core/src/serveConfig.ts). This is the ONLY place
@@ -222,6 +226,28 @@ export function isGraphResponse(v: unknown): v is GraphResponse {
   );
 }
 
+/**
+ * GET /v1/export — the paired server's merged brain, full content (unlike
+ * `nodes`/`search` excerpts), for seeding the local BYOK retrieval store.
+ */
+export interface ExportResponse {
+  ok: true;
+  updatedAt: string | null;
+  nodes: BrainNode[];
+  edges: BrainEdge[];
+}
+
+export function isExportResponse(v: unknown): v is ExportResponse {
+  return (
+    isObj(v) &&
+    v.ok === true &&
+    Array.isArray(v.nodes) &&
+    v.nodes.every((n) => isObj(n) && typeof n.id === 'string' && typeof n.title === 'string') &&
+    Array.isArray(v.edges) &&
+    v.edges.every((e) => isObj(e) && typeof e.from === 'string' && typeof e.to === 'string')
+  );
+}
+
 /** A node the reader dragged and dropped in the Graph tab, sent to persist. */
 export interface LayoutResponse {
   ok: true;
@@ -372,6 +398,13 @@ export interface AgentGoalResponse {
 export interface AgentStatusResponse {
   ok: true;
   run: WebAgentRun | null;
+  /**
+   * The requesting client's most recent ARCHIVED run. Terminal phases are
+   * archived out of `run` in the same server-side write that lands them, so
+   * this is the only place a finished run's phase/error is still observable.
+   * Optional: an older server simply doesn't send it.
+   */
+  lastRun?: WebAgentRun | null;
 }
 
 export interface AgentNextActionResponse {
@@ -406,7 +439,12 @@ export function isAgentGoalResponse(v: unknown): v is AgentGoalResponse {
 }
 
 export function isAgentStatusResponse(v: unknown): v is AgentStatusResponse {
-  return isObj(v) && v.ok === true && (v.run === null || isWebAgentRun(v.run));
+  return (
+    isObj(v) &&
+    v.ok === true &&
+    (v.run === null || isWebAgentRun(v.run)) &&
+    (v.lastRun === undefined || v.lastRun === null || isWebAgentRun(v.lastRun))
+  );
 }
 
 export function isAgentNextActionResponse(v: unknown): v is AgentNextActionResponse {
@@ -628,15 +666,30 @@ export type PopupToSw =
   | { type: 'setProviderModels'; models: ModelSlots }
   | { type: 'clearProvider' }
   | { type: 'testProvider' }
+  // Explicit brain-mode preference (Settings segmented control) — which
+  // backend drives LLM work when both are configured. See mode.ts.
+  | { type: 'setBrainMode'; mode: BrainModePref }
+  // One-way, on-demand seed of the local BYOK retrieval store from the paired
+  // server's brain (GET /v1/export → capped merge). Never automatic.
+  | { type: 'importBrainFromServer' }
   // Web-agent action engine (CDP). The panel requests the optional `debugger`
   // permission itself (a user gesture is required in the calling page); these
   // messages only start/steer/stop the run and answer its origin-grant prompt.
-  | { type: 'actStart'; goal: string; tabId: number; maxActions?: number; workflowId?: string; mode?: 'manual' | 'plan' | 'auto' }
+  | { type: 'actStart'; goal: string; tabId: number; maxActions?: number; workflowId?: string; mode?: 'manual' | 'plan' | 'auto'; codeEnabled?: boolean }
   | { type: 'getWorkflows' }
   | { type: 'actStop' }
   | { type: 'actEnd' }
   | { type: 'actGrant'; choice: 'once' | 'always' | 'never' }
   | { type: 'getActStatus' }
+  // Coding agent: the panel picked a project folder (the handle is already in
+  // IndexedDB — fsHandles.ts — because showDirectoryPicker must run in the
+  // panel's window context; this message only records the JSON metadata), or
+  // detached it, or wants the current status, or flipped the per-run
+  // auto-approve toggle for writes/commands.
+  | { type: 'codeAttached'; name: string }
+  | { type: 'codeDetach' }
+  | { type: 'getCodeStatus' }
+  | { type: 'codeAutoApprove'; enabled: boolean }
   // Revoke a persisted per-origin action grant (from the popup).
   | { type: 'revokeActOrigin'; origin: string }
   // Record-and-automate. The popup starts/stops a per-tab recording; the finished
@@ -695,6 +748,12 @@ export interface PublicState {
   provider: ProviderId | null;
   providerModels: ModelSlots | null;
   providerLastTest: ProviderTestResult | null;
+  /** RESOLVED brain mode — which backend drives LLM work right now (mode.ts).
+   *  Distinct from `phase`: the connection dot keeps reporting server health
+   *  even while the BYOK backend is the one answering. */
+  brainMode: BrainMode;
+  /** The user's stored preference, null when never set (legacy rule applies). */
+  brainModePref: BrainModePref | null;
   /** A pre-upgrade user's leftover local brain, awaiting the one-time
    *  migration sweep into the paired brain; null once none remains. */
   migrationPending: number | null;
@@ -707,13 +766,17 @@ export type SwToPopup =
   | { type: 'search'; data: SearchResponse }
   | { type: 'graph'; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: 'layout'; moved: boolean }
-  | { type: 'agentStatus'; run: WebAgentRun | null }
+  | { type: 'agentStatus'; run: WebAgentRun | null; lastRun?: WebAgentRun | null }
   | { type: 'chatAnswer'; answer: string; sources: ChatSource[] }
   | { type: 'mcpServers'; servers: McpServerSummary[] }
   | { type: 'mcpTools'; tools: McpToolDef[] }
   | { type: 'providerTest'; result: ProviderTestResult }
   | { type: 'actStatus'; run: ActRunState | null }
+  // permission mirrors fsHandles.ts's ProjectPermission — inlined so this
+  // file keeps its zero-value-import discipline.
+  | { type: 'codeStatus'; project: CodeProjectMeta | null; permission: 'granted' | 'prompt' | 'denied' | 'missing' }
   | { type: 'traceStatus'; recording: boolean; eventCount: number; pending: { id: string; events: number; startUrl: string; title?: string } | null }
-  | { type: 'workflows'; items: WorkflowSummary[] };
+  | { type: 'workflows'; items: WorkflowSummary[] }
+  | { type: 'brainImported'; imported: number; total: number };
 
 export type SwToPanel = SwToPopup;

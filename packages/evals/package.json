@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "evals": "tsx src/runner.ts",
+    "evals:act": "tsx src/actRunner.ts",
     "setup:login": "tsx setup/login.ts",
     "setup:google": "tsx setup/authGoogle.ts"
   },

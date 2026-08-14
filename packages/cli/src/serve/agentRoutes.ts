@@ -8,6 +8,7 @@ import {
   isTerminalPhase,
   loadMcpServers,
   readWebAgentState,
+  updateActiveRun,
   type AgentCardResult,
   type McpToolDef,
   type WebAgentListTarget,
@@ -15,6 +16,7 @@ import {
 } from '@nff-brain/core';
 import {
   approvePlan,
+  expireStalePlanning,
   peekNextAction,
   rejectPlan,
   reportActionResult,
@@ -70,10 +72,23 @@ const agentGoal: Handler = async (req, res, ctx) => {
     return;
   }
 
+  expireStalePlanning();
   const active = readWebAgentState().active;
   if (active && !isTerminalPhase(active.phase)) {
-    sendError(res, 409, 'run_active', 'a web agent run is already active — stop it first', ctx.cors);
-    return;
+    if (active.clientId === ctx.client!.id) {
+      sendError(res, 409, 'run_active', 'a web agent run is already active — stop it first', ctx.cors);
+      return;
+    }
+    // A different client's run can never be stopped by this one (every control
+    // route is owner-scoped), so after a re-pair the orphaned run would
+    // 409-block goals forever. Single local user by design: supersede it —
+    // the terminal phase auto-archives, freeing the active slot.
+    updateActiveRun(active.id, (run) => ({
+      ...run,
+      phase: 'error',
+      error: 'superseded — the browser re-paired',
+      updatedAt: new Date().toISOString(),
+    }));
   }
 
   const maxActions =
@@ -87,11 +102,20 @@ const agentGoal: Handler = async (req, res, ctx) => {
   sendJson(res, 201, { ok: true, runId: run.id }, ctx.cors);
 };
 
-/** Scoped to the requesting client — a run never leaks another paired browser's goal text. */
+/**
+ * Scoped to the requesting client — a run never leaks another paired browser's
+ * goal text. `lastRun` is this client's most recent archived run: terminal
+ * phases are archived out of `active` in the same write that lands them
+ * (updateActiveRun), so without it an error's text would be unobservable here
+ * and a client could only ever see its run vanish, not why.
+ */
 const agentStatus: Handler = (_req, res, ctx) => {
-  const active = readWebAgentState().active;
+  expireStalePlanning();
+  const state = readWebAgentState();
+  const active = state.active;
   const run = active && active.clientId === ctx.client!.id ? active : null;
-  sendJson(res, 200, { ok: true, run }, ctx.cors);
+  const lastRun = state.recent.find((r) => r.clientId === ctx.client!.id) ?? null;
+  sendJson(res, 200, { ok: true, run, lastRun }, ctx.cors);
 };
 
 function readRunId(body: unknown): string {

@@ -89,7 +89,14 @@ const CONTENT = [
   ['content/traceRecorder.ts', 'rec-trace.js'],
 ];
 
-const swCtx = await esbuild.context({ ...common, entryPoints: ['src/sw.ts'], outfile: `${OUT}/sw.js` });
+// NFF_BRAIN_BENCH=1 — the act-benchmark build. Swaps the sw entry for
+// src/swBench.ts (production worker + the evals bench driver) while still
+// emitting dist/sw.js, so the dist file list stays pinned. The driver embeds
+// BENCH_SENTINEL, which zip.mjs refuses to package — this variant can never
+// reach the store. Pair it with NFF_BRAIN_TEST_MANIFEST=1 for eval runs.
+const BENCH = process.env.NFF_BRAIN_BENCH === '1';
+if (BENCH) console.log('NFF_BRAIN_BENCH=1 — dist/sw.js contains the bench driver (DO NOT SHIP)');
+const swCtx = await esbuild.context({ ...common, entryPoints: [BENCH ? 'src/swBench.ts' : 'src/sw.ts'], outfile: `${OUT}/sw.js` });
 // sidepanel/main.ts pulls in sidepanel/render.ts through its imports, so esbuild
 // bundles the whole side-panel UI (Setup · Agent · MCP · Brain · Graph · Settings)
 // here — the toolbar icon opens this panel directly; there is no popup bundle.

@@ -22,6 +22,7 @@ import type { ImportPayload } from './client.js';
 import {
   getActivity,
   getBrain,
+  getBrainModePref,
   getClipQueue,
   setActivity,
   setBrain,
@@ -78,9 +79,16 @@ export function applyRemap(
 /**
  * Best-effort, called only while paired and the server is healthy. Never
  * throws — a failure leaves all local state intact for the next probe.
+ *
+ * GATED on the user never having chosen a brain mode: with an explicit
+ * nb.brainMode preference set, the local brain is a LIVE store (the BYOK clip
+ * drain writes it, chat/agent retrieval reads it) and sweeping it into the
+ * server here would destroy it behind the user's back. Only a true legacy
+ * leftover — pre-upgrade data with no preference ever stored — migrates.
  */
 export async function migrateIfNeeded(pairing: Pairing): Promise<void> {
   try {
+    if ((await getBrainModePref()) !== null) return;
     const brain = await getBrain();
     const hasNodes = brain !== null && brain.nodes.length > 0;
 

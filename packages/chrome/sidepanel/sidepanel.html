@@ -21,6 +21,10 @@
       <img class="mascot" src="icons/32.png" alt="" aria-hidden="true" />
       <span class="wordmark">nff-brain</span>
       <span id="dot" class="dot"></span>
+      <!-- Which brain drives LLM work right now (mode.ts) — the dot beside it
+           stays pure server health, so the pair answers "connected to what,
+           reasoning with what" at a glance. -->
+      <span id="brain-mode-chip" class="chip hidden"></span>
       <span id="workspace" class="muted ellipsis"></span>
       <span id="counts" class="muted push small"></span>
       <span id="updated" class="muted small"></span>
@@ -80,20 +84,36 @@
         <div id="setup-pair-error" class="small error hidden"></div>
       </div>
 
-      <!-- Fallback AI key: a narrow, subordinate path — it only powers the CDP
-           web agent's reasoning loop, and only while unpaired (src/actRun.ts).
-           Collapsed by default; render.ts opens/closes it as the phase
-           requires, without stomping a manual toggle (see byokAutoOpen). -->
+      <!-- Which brain drives LLM work: the paired server (claude -p) or the
+           direct provider API (BYOK). The segmented control only renders
+           enabled when BOTH are configured; otherwise the status line simply
+           reports what the resolver picked (mode.ts is work-or-degrade). -->
+      <div id="setup-mode" class="panel">
+        <div class="row">
+          <span class="strong">AI backend</span>
+          <span id="setup-mode-status" class="muted small push"></span>
+        </div>
+        <div id="setup-mode-switch" class="row mode-switch hidden">
+          <button id="setup-mode-paired" class="mode-btn" type="button">Paired server</button>
+          <button id="setup-mode-byok" class="mode-btn" type="button">Direct API</button>
+        </div>
+      </div>
+
+      <!-- Direct AI key (BYOK): powers the web agent's reasoning with no
+           server and no Claude Code — a full peer of the paired backend now,
+           selected with the AI-backend control above. Collapsed by default;
+           render.ts opens/closes it as the resolved mode requires, without
+           stomping a manual toggle (see byokAutoOpen). -->
       <details id="setup-byok" class="panel">
         <summary class="row">
-          <span class="strong">Fallback AI key</span>
+          <span class="strong">Direct AI key</span>
           <span id="setup-byok-status" class="muted small push"></span>
         </summary>
 
         <p class="muted small">
-          Optional. Powers the web agent's reasoning when there's no paired server to run it —
-          nothing else uses this. A paired server always takes over, and any notes saved locally
-          from before migrate into it automatically.
+          Your own provider API key. Powers the web agent's reasoning directly — no local server
+          and no Claude Code needed. When a server is also paired, pick which backend drives the
+          agent with the AI-backend control above.
         </p>
 
         <div class="row gap">
@@ -113,8 +133,8 @@
 
         <h2>Models</h2>
         <p class="muted small">
-          Two slots: a cheap background model, and the model that answers the web agent's
-          reasoning while unpaired. Pick from the list or type any model id.
+          Two slots: a cheap background model, and the model that drives the web agent and chat
+          in Direct API mode. Pick from the list or type any model id.
         </p>
         <div class="row gap">
           <label class="small" for="model-background">Background</label>
@@ -132,6 +152,13 @@
         </div>
         <div id="test-result" class="small hidden"></div>
         <div id="models-error" class="small error hidden"></div>
+
+        <!-- One-way seed of the local retrieval store from the paired
+             server's brain — shown only while a server is actually paired. -->
+        <div class="row gap">
+          <button id="setup-brain-import" class="btn hidden">Import brain from server</button>
+        </div>
+        <div id="setup-brain-import-status" class="small muted"></div>
       </details>
 
       <div class="label group-heading">Capture</div>
@@ -227,17 +254,11 @@
     </section>
 
     <!--
-      Brain: one prompt, three Claude-Code-style modes. Manual answers from your
-      notes and, on a "navigate to X" request, opens the page after asking you.
-      Plan/Auto are the LinkedIn recruiting flow (paired only).
+      Brain: one prompt, three Claude-Code-style autonomy modes. Send always
+      chats; the mode only sets how much the agent asks before acting on a page
+      (navigate prompts + the CDP agent's per-capability layer, src/actGate.ts).
     -->
     <section id="brain-view" class="view">
-      <div id="adapter-row" class="row">
-        <span class="small strong">LinkedIn agent</span>
-        <button id="adapter-toggle" class="btn small push">Enable</button>
-      </div>
-      <div id="adapter-error" class="small error hidden"></div>
-
       <div class="row gap mode-switch" role="radiogroup" aria-label="Mode">
         <button id="mode-manual" class="mode-btn active" data-mode="manual" type="button">Manual</button>
         <button id="mode-plan" class="mode-btn" data-mode="plan" type="button">Plan</button>
@@ -245,15 +266,25 @@
       </div>
       <p id="mode-hint" class="muted small"></p>
 
-      <div id="transcript" class="transcript"></div>
-
-      <!-- Only shown in Plan/Auto mode — a recruiting goal with a cap + list target. -->
-      <div id="goal-options" class="row gap hidden">
-        <label class="small" for="max-actions">Max connects</label>
-        <input id="max-actions" class="input narrow" type="number" min="1" max="25" value="5" />
-        <select id="list-server" class="input"></select>
-        <select id="list-tool" class="input"></select>
+      <!--
+        Coding agent: attach a real project folder (File System Access API —
+        the picker MUST run here, the user-gesture window context; the handle
+        lands in IndexedDB via src/fsHandles.ts and the SW only sees metadata).
+        With a folder attached, agent runs can carry code_read/…/code_edit.
+      -->
+      <div id="code-project" class="code-project">
+        <div class="row gap">
+          <button id="code-attach" class="btn small">Attach project folder…</button>
+          <span id="code-chip" class="muted small hidden"></span>
+          <button id="code-regrant" class="btn small hidden">Re-grant access</button>
+          <button id="code-detach" class="btn small hidden" title="Detach this folder">✕</button>
+        </div>
+        <label id="code-enable-row" class="small row hidden"><input type="checkbox" id="code-enabled" checked /> Include project code tools in runs</label>
+        <label id="code-auto-row" class="small row hidden"><input type="checkbox" id="code-auto" /> Auto-approve writes for this run</label>
+        <div id="code-error" class="small error hidden"></div>
       </div>
+
+      <div id="transcript" class="transcript"></div>
 
       <div class="row gap prompt-row">
         <textarea id="prompt-input" class="input grow" rows="2" placeholder="Ask your brain, or say navigate to…"></textarea>
@@ -275,6 +306,8 @@
         <div id="act-run" class="hidden">
           <div id="act-grant" class="grant hidden">
             <p id="act-grant-text" class="small"></p>
+            <!-- Coding-agent approvals: the write's diff (textContent only). -->
+            <pre id="act-grant-preview" class="grant-preview hidden"></pre>
             <div class="row gap">
               <button id="act-grant-once" class="btn small">Once</button>
               <button id="act-grant-always" class="btn small">Always</button>

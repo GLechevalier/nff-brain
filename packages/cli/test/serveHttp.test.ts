@@ -185,6 +185,44 @@ describe('CORS preflight', () => {
     const res = await request(port, { path: '/v1/pair', method: 'OPTIONS', headers: { origin: ORIGIN } });
     expect(res.headers['access-control-allow-private-network']).toBeUndefined();
   });
+
+  it('answers a preflight for an UNKNOWN route — the version-skew guard', async () => {
+    // A newer extension probing a route this server predates must see the
+    // honest 404 on its actual request, which means the preflight before it
+    // has to succeed. A blocked preflight surfaces in Chrome as a network
+    // error indistinguishable from "server not running", and the extension's
+    // 404-triggered fallback to the older route can then never fire.
+    const res = await request(port, {
+      path: '/v1/some/future/route',
+      method: 'OPTIONS',
+      headers: { origin: ORIGIN, 'access-control-request-method': 'POST', 'access-control-request-headers': 'authorization' },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe(ORIGIN);
+  });
+
+  it('sends CORS headers on the unknown-route 404 itself', async () => {
+    const token = await pair();
+    const res = await request(port, {
+      path: '/v1/some/future/route',
+      method: 'POST',
+      headers: { ...auth(token), 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(res.status).toBe(404);
+    expect(res.json<{ error: string }>().error).toBe('not_found');
+    expect(res.headers['access-control-allow-origin']).toBe(ORIGIN);
+  });
+
+  it('still gives a hostile page origin the bare 404 — no CORS headers', async () => {
+    const res = await request(port, {
+      path: '/v1/some/future/route',
+      method: 'OPTIONS',
+      headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST' },
+    });
+    expect(res.status).toBe(404);
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
+  });
 });
 
 describe('pairing', () => {
@@ -756,6 +794,31 @@ describe('DevTools panel routes (/v1/nodes + /v1/search)', () => {
     expect(res.status).toBe(200);
     const body = res.json<any>();
     expect(body.nodes).toHaveLength(2); // the global side still serves
+  });
+
+  it('export: the merged brain VERBATIM — full content, not the 240-char excerpt', async () => {
+    const token = await pair();
+    seedPanelBrains();
+    const res = await request(port, { path: '/v1/export', headers: auth(token) });
+    expect(res.status).toBe(200);
+    const body = res.json<any>();
+    expect(body.ok).toBe(true);
+    expect(body.nodes).toHaveLength(4); // same merge/dedupe as /v1/graph
+    // Full node payloads — content and lastUpdated survive, unlike nodes/search.
+    for (const n of body.nodes) {
+      expect(typeof n.id).toBe('string');
+      expect(typeof n.title).toBe('string');
+      expect(typeof n.lastUpdated).toBe('string');
+      expect('content' in n).toBe(true);
+    }
+    const edgeIds = body.edges.map((e: any) => `${e.from}->${e.to}`);
+    expect(edgeIds).toContain('docker-dns-wedge->compose-env');
+  });
+
+  it('export demands auth + the paired origin like every client route', async () => {
+    const token = await pair();
+    expect((await request(port, { path: '/v1/export', headers: { origin: ORIGIN } })).status).toBe(401);
+    expect((await request(port, { path: '/v1/export', headers: auth(token, { origin: OTHER_ORIGIN }) })).status).toBe(403);
   });
 
   describe('POST /v1/layout', () => {

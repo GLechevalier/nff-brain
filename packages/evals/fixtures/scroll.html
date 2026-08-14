@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>scroll fixtures</title>
+<script src="/fixtures/bench.js"></script>
+<style>
+  body { font: 16px system-ui; margin: 24px; }
+  #nested { width: 320px; height: 180px; overflow: auto; border: 2px solid #48c; }
+  #nested-inner { height: 1600px; background: linear-gradient(#fff, #adf); padding: 8px; }
+  #hstrip { width: 320px; height: 90px; overflow-x: auto; overflow-y: hidden; border: 2px solid #c84; white-space: nowrap; }
+  #hstrip-inner { width: 2400px; height: 60px; background: linear-gradient(90deg, #fff, #fda); }
+  #spacer { height: 2600px; background: linear-gradient(#fff, #cef); }
+  #deep-target { margin: 10px 0; }
+</style>
+
+<div id="nested" data-bench="nested" data-bench-scroll>
+  <div id="nested-inner">nested scroll container top
+    <div style="margin-top:1400px" data-bench="nested-bottom">nested bottom marker</div>
+  </div>
+</div>
+
+<div id="hstrip" data-bench="hstrip" data-bench-scroll>
+  <div id="hstrip-inner">horizontal strip</div>
+</div>
+
+<div id="spacer">page top — scroll down for the target</div>
+<button data-bench="deep-target" id="deep-target">deep target button</button>
+<div style="height:400px"></div>
+
+<script>
+  window.__benchState = () => ({
+    pageY: Math.round(scrollY),
+    nestedTop: Math.round(document.getElementById('nested').scrollTop),
+    hstripLeft: Math.round(document.getElementById('hstrip').scrollLeft),
+    deepClicked: window.__deepClicked || 0,
+  });
+  document.getElementById('deep-target').addEventListener('click', () => { window.__deepClicked = (window.__deepClicked || 0) + 1; });
+</script>

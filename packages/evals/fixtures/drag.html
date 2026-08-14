@@ -1,0 +1,119 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>drag fixtures</title>
+<script src="/fixtures/bench.js"></script>
+<style>
+  body { font: 16px system-ui; margin: 24px; }
+  .row { margin: 18px 0; }
+  #reorder li { padding: 8px 12px; margin: 4px 0; background: #eef; border: 1px solid #99b; width: 200px; cursor: grab; user-select: none; }
+  #reorder li.dragging { opacity: 0.5; }
+  #h5-src { width: 90px; height: 44px; background: #fc8; text-align: center; line-height: 44px; }
+  #h5-drop { width: 220px; height: 70px; border: 2px dashed #888; margin-top: 8px; line-height: 70px; text-align: center; }
+  #panes { display: flex; width: 480px; height: 120px; border: 1px solid #888; }
+  #pane-left { background: #def; width: 200px; }
+  #pane-divider { width: 8px; background: #888; cursor: col-resize; }
+  #pane-right { background: #fed; flex: 1; }
+  #strip { position: relative; width: 300px; height: 24px; background: #ddd; }
+  #knob { position: absolute; top: 0; left: 0; width: 24px; height: 24px; background: #48c; cursor: grab; }
+  #tall-inner { height: 2200px; background: linear-gradient(#fff, #cef); }
+</style>
+
+<div class="row">
+  <ul id="reorder" data-bench="reorder" style="list-style:none;padding:0">
+    <li data-bench="reorder-a">alpha</li>
+    <li data-bench="reorder-b">bravo</li>
+    <li data-bench="reorder-c">charlie</li>
+    <li data-bench="reorder-d">delta</li>
+  </ul>
+</div>
+
+<div class="row">
+  <div id="h5-src" data-bench="h5-src" draggable="true">drag me</div>
+  <div id="h5-drop" data-bench="h5-drop">HTML5 drop zone</div>
+</div>
+
+<div class="row">
+  <div id="panes">
+    <div id="pane-left" data-bench="pane-left"></div>
+    <div id="pane-divider" data-bench="pane-divider"></div>
+    <div id="pane-right" data-bench="pane-right"></div>
+  </div>
+</div>
+
+<div class="row">
+  <div id="strip" data-bench="slider-strip"><div id="knob" data-bench="slider-knob"></div></div>
+  <span data-bench="slider-value">0</span>
+</div>
+
+<div class="row">
+  <p data-bench="select-para" style="max-width:420px;user-select:text">Select from HERE all the way to THERE by dragging across this sentence.</p>
+</div>
+
+<script>
+  const S = { h5Dropped: false, paneLeftWidth: 200, slider: 0 };
+  window.__benchState = () => ({
+    order: [...document.querySelectorAll('#reorder li')].map((li) => li.dataset.bench),
+    h5Dropped: S.h5Dropped,
+    paneLeftWidth: Math.round(document.getElementById('pane-left').getBoundingClientRect().width),
+    slider: S.slider,
+  });
+
+  // Mouse-event reorder (no HTML5 DnD): the pattern mouse-based DnD libs use.
+  const list = document.getElementById('reorder');
+  let dragging = null;
+  list.addEventListener('mousedown', (e) => {
+    const li = e.target.closest('li');
+    if (!li) return;
+    dragging = li;
+    li.classList.add('dragging');
+    e.preventDefault();
+  });
+  addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const over = document.elementFromPoint(e.clientX, e.clientY)?.closest('#reorder li');
+    if (over && over !== dragging) {
+      const items = [...list.children];
+      if (items.indexOf(over) < items.indexOf(dragging)) list.insertBefore(dragging, over);
+      else list.insertBefore(dragging, over.nextSibling);
+    }
+  });
+  addEventListener('mouseup', () => {
+    if (dragging) { dragging.classList.remove('dragging'); dragging = null; }
+  });
+
+  // HTML5 native DnD (the known-gap case: CDP mouse events never synthesize it).
+  const drop = document.getElementById('h5-drop');
+  drop.addEventListener('dragover', (e) => e.preventDefault());
+  drop.addEventListener('drop', (e) => { e.preventDefault(); S.h5Dropped = true; drop.textContent = 'dropped!'; });
+
+  // Pane resize.
+  const divider = document.getElementById('pane-divider');
+  const left = document.getElementById('pane-left');
+  let resizing = null;
+  divider.addEventListener('mousedown', (e) => { resizing = { x: e.clientX, w: left.getBoundingClientRect().width }; e.preventDefault(); });
+  addEventListener('mousemove', (e) => {
+    if (!resizing) return;
+    left.style.width = Math.max(40, Math.min(400, resizing.w + (e.clientX - resizing.x))) + 'px';
+  });
+  addEventListener('mouseup', () => { resizing = null; });
+
+  // Custom mouse-driven slider, 0..100.
+  const strip = document.getElementById('strip');
+  const knob = document.getElementById('knob');
+  const valEl = document.querySelector('[data-bench=slider-value]');
+  let sliding = false;
+  function setSlider(clientX) {
+    const r = strip.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (clientX - r.left - 12) / (r.width - 24)));
+    S.slider = Math.round(frac * 100);
+    knob.style.left = frac * (r.width - 24) + 'px';
+    valEl.textContent = String(S.slider);
+  }
+  knob.addEventListener('mousedown', (e) => { sliding = true; e.preventDefault(); });
+  strip.addEventListener('mousedown', (e) => { sliding = true; setSlider(e.clientX); e.preventDefault(); });
+  addEventListener('mousemove', (e) => { if (sliding) setSlider(e.clientX); });
+  addEventListener('mouseup', () => { sliding = false; });
+</script>
+
+<!-- Tall tail so the page has a real native scrollbar for the thumb-drag case. -->
+<div id="tall-inner" data-bench="tall-inner"></div>

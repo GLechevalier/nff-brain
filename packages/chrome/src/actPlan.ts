@@ -58,6 +58,40 @@ export function keyDescriptor(key: string): KeyDescriptor | null {
   return { key: ch, code, vk, text: ch };
 }
 
+export interface WheelStep {
+  dx: number;
+  dy: number;
+}
+
+/**
+ * Split a total wheel delta into eased per-tick deltas so an agent scroll
+ * glides like a human flick instead of teleporting. Ease-out cubic
+ * (f(t) = 1 − (1−t)³) — fast start, decelerating tail; step count scales
+ * with magnitude, clamped 4..16. Cumulative rounding — step i carries
+ * round(total·f(i/n)) − round(total·f((i−1)/n)) — so the steps always sum
+ * EXACTLY to (dx, dy). Steps where both axes round to 0 are dropped.
+ */
+export function wheelSteps(dx: number, dy: number): WheelStep[] {
+  const mag = Math.max(Math.abs(dx), Math.abs(dy));
+  if (mag === 0) return [];
+  const n = Math.max(4, Math.min(16, Math.round(mag / 80)));
+  const ease = (t: number) => 1 - (1 - t) ** 3;
+  const steps: WheelStep[] = [];
+  let sentX = 0;
+  let sentY = 0;
+  for (let i = 1; i <= n; i++) {
+    const f = ease(i / n);
+    const cx = Math.round(dx * f);
+    const cy = Math.round(dy * f);
+    const sx = cx - sentX;
+    const sy = cy - sentY;
+    sentX = cx;
+    sentY = cy;
+    if (sx !== 0 || sy !== 0) steps.push({ dx: sx, dy: sy });
+  }
+  return steps;
+}
+
 /**
  * Interpolate a drag path from → to as `steps` intermediate samples PLUS both
  * endpoints, so a slider/DnD gets realistic movement rather than a teleport.

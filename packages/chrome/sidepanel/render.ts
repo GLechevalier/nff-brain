@@ -16,13 +16,12 @@ import type {
   GraphEdge,
   GraphNode,
   McpServerSummary,
-  McpToolDef,
   NodesResponse,
   PlanStep,
   PublicState,
   WebAgentRun,
 } from '../src/protocol.js';
-import type { ActRunState, ConnectionPhase } from '../src/schema.js';
+import type { ActRunState, BrainMode, ConnectionPhase } from '../src/schema.js';
 
 const $ = (id: string): HTMLElement => document.getElementById(id)!;
 
@@ -45,12 +44,25 @@ const HEADER_BANNER_TEXT: Partial<Record<ConnectionPhase, string>> = {
   workspace_mismatch: 'This server is now serving a different project — re-pair from the Settings tab to continue.',
 };
 
-export function paintHeader(nodes: NodesResponse | null, phase: ConnectionPhase): void {
+const BRAIN_MODE_CHIP_TEXT: Record<BrainMode, string> = {
+  paired: 'Paired',
+  byok: 'Direct API',
+  unconfigured: '',
+};
+
+export function paintHeader(nodes: NodesResponse | null, phase: ConnectionPhase, brainMode: BrainMode = 'unconfigured'): void {
   const dot = $('dot');
   for (const p of ['connected', 'disconnected', 'rejected', 'workspace_mismatch', 'unpaired'] as ConnectionPhase[]) {
     dot.classList.toggle(p, p === phase);
   }
-  const bannerText = HEADER_BANNER_TEXT[phase];
+  // The chip answers "which brain is reasoning", the dot "is the server up" —
+  // deliberately separate facts now that BYOK is a peer backend.
+  const chipText = BRAIN_MODE_CHIP_TEXT[brainMode];
+  $('brain-mode-chip').textContent = chipText;
+  $('brain-mode-chip').classList.toggle('hidden', !chipText);
+  // While the Direct API backend is doing the reasoning, an unreachable server
+  // only degrades the server-backed tabs — don't scream the full-width banner.
+  const bannerText = brainMode === 'byok' ? undefined : HEADER_BANNER_TEXT[phase];
   $('disconnected').classList.toggle('hidden', !bannerText);
   if (bannerText) $('disconnected').textContent = bannerText;
   if (!nodes) return;
@@ -84,7 +96,7 @@ const ACT_PHASE_LABEL: Record<string, string> = {
   error: 'Error',
 };
 
-export function paintActRun(run: ActRunState | null): void {
+export function paintActRun(run: ActRunState | null, workingWord?: string): void {
   const idle = run === null;
   const phase = run?.phase ?? null;
   const running = phase === 'running' || phase === 'stopping' || phase === 'awaiting_grant';
@@ -102,16 +114,40 @@ export function paintActRun(run: ActRunState | null): void {
   $('act-clear').classList.toggle('hidden', idle || phase === 'running' || phase === 'awaiting_grant');
 
   const status = $('act-status');
-  status.textContent = idle
-    ? ''
-    : `${ACT_PHASE_LABEL[phase ?? ''] ?? phase} · ${run!.actionsTaken}/${run!.maxActions} actions` +
-      (run!.error ? ` · ${run!.error}` : '');
+  status.replaceChildren();
+  if (!idle) {
+    // While actually running, the label is the rotating working word
+    // ("Fulminating…", "Reading the page…", …) with the pending pulse;
+    // every other phase keeps its static label.
+    const rotating = phase === 'running' && !!workingWord;
+    const label = document.createElement('span');
+    label.textContent = rotating ? workingWord! : String(ACT_PHASE_LABEL[phase ?? ''] ?? phase);
+    if (rotating) label.className = 'pending-word';
+    status.append(
+      label,
+      document.createTextNode(
+        ` · ${run!.actionsTaken}/${run!.maxActions} actions` + (run!.error ? ` · ${run!.error}` : ''),
+      ),
+    );
+  }
   status.classList.toggle('error', phase === 'error');
 
   if (phase === 'awaiting_grant' && run?.pendingGrant) {
     const g = run.pendingGrant;
     $('act-grant-text').textContent =
-      g.kind === 'capability' ? `Let the agent ${g.description}?` : `Let the agent act on ${g.origin || 'this site'}?`;
+      g.kind === 'capability'
+        ? `Let the agent ${g.description}?`
+        : g.kind === 'code-write'
+          ? `Write ${g.path}? (+${g.adds} −${g.dels})`
+          : g.kind === 'code-exec'
+            ? `Run in the sandbox: ${g.command}?`
+            : `Let the agent act on ${g.origin || 'this site'}?`;
+    // The coding agent's approval card carries a diff preview (textContent
+    // only — the diff is model/file text and must never parse as HTML).
+    const pre = $('act-grant-preview');
+    const preview = g.kind === 'code-write' ? g.preview : '';
+    pre.textContent = preview;
+    pre.classList.toggle('hidden', !preview);
   }
 
   const log = $('act-log');
@@ -168,21 +204,16 @@ export function showActError(msg: string | null): void {
 
 // ── Brain tab: mode switch ───────────────────────────────────────────────────
 
-// Claude-Code-style modes. 'manual' answers from your notes AND executes an
-// action intent ("navigate to X") after asking permission — fast, in-tab.
-// 'plan'/'auto' are the LinkedIn recruiting flow (paired only).
+// Claude-Code-style autonomy modes. Send always chats (or executes a detected
+// action intent); the mode only sets how much the agent asks before acting —
+// 'manual' adds the per-capability prompt layer to CDP runs (src/actGate.ts)
+// and a "navigate to X" intent asks first unless 'auto'.
 export type ChatMode = 'manual' | 'plan' | 'auto';
 
 const MODE_HINT: Record<ChatMode, string> = {
-  manual: 'Chat answers from your notes. A "navigate to X" request opens the page after asking you.',
-  plan: 'Type a goal. A plan is generated and shown for your approval before anything runs. A "navigate to X" request still asks first.',
-  auto: 'Type a goal. The plan is approved automatically the moment it is ready — no review step. A "navigate to X" request opens immediately too, no asking.',
-};
-
-const PLACEHOLDER: Record<ChatMode, string> = {
-  manual: 'Ask your brain, or say "navigate to linkedin.com"',
-  plan: 'Describe a goal…',
-  auto: 'Describe a goal…',
+  manual: 'Chat answers from your notes. "Navigate to X" asks first, and an agent run prompts before each new capability (read, click, type…).',
+  plan: '"Navigate to X" still asks first. Agent runs skip the per-capability prompts — only per-site grants apply.',
+  auto: 'No asking: "navigate to X" opens immediately, and agent runs skip the per-capability prompts.',
 };
 
 export function paintMode(mode: ChatMode): void {
@@ -190,23 +221,6 @@ export function paintMode(mode: ChatMode): void {
     $(`mode-${m}`).classList.toggle('active', m === mode);
   }
   $('mode-hint').textContent = MODE_HINT[mode];
-  $('goal-options').classList.toggle('hidden', mode === 'manual');
-  ($('prompt-input') as HTMLTextAreaElement).placeholder = PLACEHOLDER[mode];
-}
-
-// ── LinkedIn agent adapter toggle (Brain tab) ───────────────────────────────
-
-export function paintAdapter(state: PublicState): void {
-  const linkedin = state.agentAdapters.find((a) => a.id === 'linkedin');
-  const btn = $('adapter-toggle') as HTMLButtonElement;
-  if (!linkedin) {
-    btn.disabled = true;
-    return;
-  }
-  btn.textContent = linkedin.enabled ? 'Disable' : 'Enable';
-  btn.title = linkedin.enabled
-    ? `Stop the agent acting on ${linkedin.hosts.join(', ')}`
-    : `Ask Chrome for ${linkedin.hosts.join(', ')}`;
 }
 
 // ── the Brain transcript — one unified log, entries typed and rendered apart ──
@@ -395,15 +409,19 @@ function historyLine(record: ActionRecord): HTMLLIElement {
   return li;
 }
 
-function runEntryEl(run: WebAgentRun, handlers: TranscriptHandlers): HTMLDivElement {
+function runEntryEl(run: WebAgentRun, handlers: TranscriptHandlers, workingWord?: string): HTMLDivElement {
   const div = document.createElement('div');
   div.className = 'entry entry-run';
 
   const head = document.createElement('div');
   head.className = 'row';
   const phase = document.createElement('span');
-  phase.className = 'strong small';
-  phase.textContent = AGENT_PHASE_TEXT[run.phase];
+  // Planning/running phases show the rotating working word with the pending
+  // pulse instead of a static label; terminal phases (and 'stopping', which is
+  // feedback for the user's own Stop click) keep their static text.
+  const rotating = (run.phase === 'planning' || run.phase === 'running') && !!workingWord;
+  phase.className = rotating ? 'strong small pending-word' : 'strong small';
+  phase.textContent = rotating ? workingWord! : AGENT_PHASE_TEXT[run.phase];
   const progress = document.createElement('span');
   progress.className = 'muted small push';
   progress.textContent = `${run.actionsTaken}/${run.maxActions} connected`;
@@ -434,7 +452,7 @@ function runEntryEl(run: WebAgentRun, handlers: TranscriptHandlers): HTMLDivElem
   return div;
 }
 
-function entryEl(entry: TranscriptEntry, handlers: TranscriptHandlers): HTMLElement {
+function entryEl(entry: TranscriptEntry, handlers: TranscriptHandlers, workingWord?: string): HTMLElement {
   switch (entry.kind) {
     case 'user':
       return userEntryEl(entry.text);
@@ -443,7 +461,7 @@ function entryEl(entry: TranscriptEntry, handlers: TranscriptHandlers): HTMLElem
     case 'plan':
       return planEntryEl(entry.run, handlers);
     case 'run':
-      return runEntryEl(entry.run, handlers);
+      return runEntryEl(entry.run, handlers, workingWord);
     case 'pending':
       return pendingEntryEl(entry.word);
     case 'permission':
@@ -452,40 +470,10 @@ function entryEl(entry: TranscriptEntry, handlers: TranscriptHandlers): HTMLElem
 }
 
 /** Full rebuild, same "replaceChildren" discipline as every other list here. */
-export function renderTranscript(entries: readonly TranscriptEntry[], handlers: TranscriptHandlers): void {
+export function renderTranscript(entries: readonly TranscriptEntry[], handlers: TranscriptHandlers, workingWord?: string): void {
   const el = $('transcript');
-  el.replaceChildren(...entries.map((e) => entryEl(e, handlers)));
+  el.replaceChildren(...entries.map((e) => entryEl(e, handlers, workingWord)));
   el.scrollTop = el.scrollHeight;
-}
-
-// ── goal-options selects (Plan/Auto mode's "add matches to") ────────────────
-
-export function paintMcpServerOptions(servers: McpServerSummary[], selected: string | null): void {
-  const select = $('list-server') as HTMLSelectElement;
-  select.replaceChildren(
-    ...[{ id: '', name: '(none — skip the list step)', enabled: true }, ...servers].map((s) => {
-      const opt = document.createElement('option');
-      opt.value = s.id;
-      opt.textContent = s.enabled ? s.name : `${s.name} (disabled)`;
-      opt.disabled = s.id !== '' && !s.enabled;
-      return opt;
-    }),
-  );
-  if (selected !== null) select.value = selected;
-}
-
-export function paintMcpToolOptions(tools: McpToolDef[], selected: string | null): void {
-  const select = $('list-tool') as HTMLSelectElement;
-  select.disabled = tools.length === 0;
-  select.replaceChildren(
-    ...tools.map((t) => {
-      const opt = document.createElement('option');
-      opt.value = t.name;
-      opt.textContent = t.description ? `${t.name} — ${t.description}` : t.name;
-      return opt;
-    }),
-  );
-  if (selected !== null) select.value = selected;
 }
 
 // ── the MCP tab's server list ────────────────────────────────────────────────
@@ -796,7 +784,12 @@ export function paintSetup(state: PublicState, deps: SetupDeps, nowMs = Date.now
   $('setup-dot').className = `dot ${phase}`;
   $('setup-phase').textContent = SETUP_PHASE_TEXT[phase];
   $('setup-endpoint').textContent = state.port ? `127.0.0.1:${state.port}` : '';
-  $('setup-version').textContent = health.serverVersion ? `v${health.serverVersion}` : '';
+  // Server version (build-stamped by tsup, e.g. "0.1.0+20260814.1042") next to
+  // this extension's own per-build manifest version — the pair makes a stale
+  // dist or a stale extension load visible at a glance.
+  const extVersion = chrome.runtime.getManifest().version;
+  $('setup-version').textContent =
+    (health.serverVersion ? `server v${health.serverVersion} · ` : '') + `extension v${extVersion}`;
 
   const counts = health.projectNodes === null ? '' : `${health.projectNodes} project · ${health.globalNodes ?? 0} global nodes`;
   const age = relativeAge(health.lastOkAt, nowMs);
@@ -826,22 +819,42 @@ export function paintSetup(state: PublicState, deps: SetupDeps, nowMs = Date.now
   ($('setup-connect') as HTMLButtonElement).textContent =
     phase === 'rejected' || phase === 'workspace_mismatch' ? 'Re-pair' : 'Connect';
 
-  // ── fallback AI key (#setup-byok) ──────────────────────────────────────
-  // Only relevant while unpaired — src/actRun.ts falls back to it exclusively
-  // when getPairing() === null, i.e. exactly phase === 'unpaired'; every other
-  // phase still tries the paired loop first and never reaches it.
-  const byokRelevant = phase === 'unpaired';
+  // ── AI backend switch (#setup-mode) ────────────────────────────────────
+  // The segmented control only renders when BOTH backends are configured —
+  // with one (or none) there is nothing to choose, so the status line just
+  // reports what mode.ts resolved.
+  const pairedConfigured = phase !== 'unpaired';
+  const bothConfigured = pairedConfigured && state.providerConfigured;
+  $('setup-mode-switch').classList.toggle('hidden', !bothConfigured);
+  $('setup-mode-paired').classList.toggle('active', state.brainMode === 'paired');
+  $('setup-mode-byok').classList.toggle('active', state.brainMode === 'byok');
+  $('setup-mode-status').textContent = bothConfigured
+    ? state.brainMode === 'byok'
+      ? 'Direct API — no server needed'
+      : 'Paired server (claude -p)'
+    : state.brainMode === 'byok'
+      ? 'Direct API — pair a server to enable switching'
+      : state.brainMode === 'paired'
+        ? 'Paired server — add an API key to enable switching'
+        : 'Not configured — pair a server or add an API key';
+
+  // ── direct AI key (#setup-byok) ────────────────────────────────────────
+  // Relevance is mode-driven now: the key is ACTIVE whenever the resolver
+  // picked byok, standby when the paired backend is selected over it.
+  const byokRelevant = state.brainMode === 'byok';
   $('setup-byok-status').textContent = state.providerConfigured
     ? byokRelevant
-      ? 'Saved — powering the web agent'
-      : 'Saved — inactive while paired'
-    : byokRelevant
+      ? 'Active — powering the web agent and chat'
+      : 'Saved — standby (Paired server selected)'
+    : byokRelevant || !pairedConfigured
       ? 'Not set — add a key to power the web agent'
       : 'Not set';
   if (byokAutoOpen !== byokRelevant) {
     ($('setup-byok') as HTMLDetailsElement).open = byokRelevant;
     byokAutoOpen = byokRelevant;
   }
+  // Import needs a live paired server to read from — hidden otherwise.
+  $('setup-brain-import').classList.toggle('hidden', !pairedConfigured);
 
   // ── capture ─────────────────────────────────────────────────────────────
   const toggle = $('setup-capture-toggle');

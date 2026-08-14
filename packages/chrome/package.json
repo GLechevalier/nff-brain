@@ -17,6 +17,7 @@
   "devDependencies": {
     "@nff-brain/core": "*",
     "@types/chrome": "^0.0.287",
+    "acorn": "^8.14.0",
     "esbuild": "^0.24.2"
   }
 }

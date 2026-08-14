@@ -1,0 +1,129 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pointer fixtures</title>
+<script src="/fixtures/bench.js"></script>
+<style>
+  body { font: 16px system-ui; margin: 24px; }
+  .row { margin: 14px 0; }
+  button { font-size: 16px; padding: 8px 14px; }
+  #hover-menu { display: none; position: absolute; background: #eef; border: 1px solid #88a; padding: 8px; }
+  #hover-zone:hover + #hover-menu, #hover-menu:hover { display: block; }
+  #banner { position: fixed; left: 0; right: 0; bottom: 0; background: #333; color: #fff; padding: 18px; z-index: 10; }
+  #covered-wrap { position: relative; height: 70px; }
+  #range-list li.selected { background: #cdf; }
+  #hold-meter { display: inline-block; width: 120px; height: 12px; background: #ddd; }
+  #hold-meter > i { display: block; height: 100%; width: 0; background: #48c; }
+</style>
+
+<div class="row">
+  <span id="hover-zone" data-bench="hover-zone" style="border:1px dashed #888;padding:8px">hover me</span>
+  <div id="hover-menu" data-bench="hover-menu"><button data-bench="hover-menu-item">menu item</button></div>
+</div>
+
+<div class="row">
+  <button data-bench="btn-left">left</button>
+  <button data-bench="btn-right" oncontextmenu="return false">right (context menu suppressed)</button>
+  <a data-bench="link-middle" href="/fixtures/nav-b.html" onclick="return false">middle-click me</a>
+  <button data-bench="btn-dbl">double-click (dblclick handler)</button>
+  <button data-bench="btn-dbl-count">double-click (click counter)</button>
+</div>
+
+<div class="row">
+  <p data-bench="para-triple" style="max-width:420px">The quick brown fox jumps over the lazy dog and keeps on running through the field.</p>
+</div>
+
+<div class="row">
+  <a data-bench="link-ctrl" href="/fixtures/nav-b.html">ctrl-click opens me in a new tab</a>
+</div>
+
+<div class="row">
+  <ul id="range-list" data-bench="range-list" style="list-style:none;padding:0;width:220px">
+    <li data-bench="range-item-0">item 0</li>
+    <li data-bench="range-item-1">item 1</li>
+    <li data-bench="range-item-2">item 2</li>
+    <li data-bench="range-item-3">item 3</li>
+    <li data-bench="range-item-4">item 4</li>
+  </ul>
+</div>
+
+<div class="row">
+  <button data-bench="btn-hold">press &amp; hold</button>
+  <span id="hold-meter"><i></i></span>
+</div>
+
+<div id="covered-wrap" class="row" style="position:relative;width:320px;height:60px">
+  <button data-bench="btn-covered">covered until the banner is dismissed</button>
+  <div id="cover" data-bench="cover"
+       style="position:absolute;inset:0;background:rgba(120,120,120,.85);z-index:5;color:#fff;padding:4px">
+    overlay — dismiss via the banner below
+  </div>
+</div>
+
+<div id="banner" data-bench="banner">
+  We use cookies. <button data-bench="banner-dismiss">Accept &amp; close</button>
+</div>
+
+<script>
+  const S = { dblHandler: 0, dblCount: 0, clicksOnDblCount: 0, holdMs: 0, bannerDismissed: false, rangeSelected: [] };
+  window.__benchState = () => ({
+    dblHandler: S.dblHandler, clicksOnDblCount: S.clicksOnDblCount, dblCountFired: S.dblCount,
+    holdMs: Math.round(S.holdMs), bannerDismissed: S.bannerDismissed,
+    rangeSelected: [...document.querySelectorAll('#range-list li.selected')].map((li) => li.dataset.bench),
+  });
+
+  document.querySelector('[data-bench=btn-dbl]').addEventListener('dblclick', () => { S.dblHandler++; });
+  // The "count discrete clicks" widget: fires only when it SEES two separate
+  // click events within 400ms — detail-agnostic on purpose (the known-gap case).
+  document.querySelector('[data-bench=btn-dbl-count]').addEventListener('click', () => {
+    const now = performance.now();
+    S.clicksOnDblCount++;
+    if (S._lastClick && now - S._lastClick < 400) S.dblCount++;
+    S._lastClick = now;
+  });
+
+  // Shift-click range selection over the list.
+  let anchor = null;
+  document.getElementById('range-list').addEventListener('click', (e) => {
+    const li = e.target.closest('li');
+    if (!li) return;
+    const items = [...document.querySelectorAll('#range-list li')];
+    const idx = items.indexOf(li);
+    if (e.shiftKey && anchor !== null) {
+      items.forEach((el, i) => el.classList.toggle('selected', i >= Math.min(anchor, idx) && i <= Math.max(anchor, idx)));
+    } else {
+      items.forEach((el) => el.classList.remove('selected'));
+      li.classList.add('selected');
+      anchor = idx;
+    }
+  });
+
+  // Press-and-hold meter (pointer.down … pointer.up).
+  const hold = document.querySelector('[data-bench=btn-hold]');
+  const meter = document.querySelector('#hold-meter > i');
+  let downAt = null, raf = null;
+  function tick() {
+    if (downAt === null) return;
+    S.holdMs = performance.now() - downAt;
+    meter.style.width = Math.min(120, S.holdMs / 10) + 'px';
+    raf = requestAnimationFrame(tick);
+  }
+  hold.addEventListener('mousedown', () => { downAt = performance.now(); tick(); });
+  addEventListener('mouseup', () => { if (downAt !== null) { S.holdMs = performance.now() - downAt; downAt = null; cancelAnimationFrame(raf); } });
+
+  document.querySelector('[data-bench=banner-dismiss]').addEventListener('click', () => {
+    S.bannerDismissed = true;
+    document.getElementById('banner').remove();
+    document.getElementById('cover')?.remove();
+  });
+
+  // Propagate the run nonce through fixture links (ctrl-click / middle-click
+  // targets) so the opened page reports under this case's nonce.
+  const run = new URLSearchParams(location.search).get('run') || '';
+  if (run) {
+    for (const a of document.querySelectorAll('a[href^="/fixtures/"]')) {
+      const u = new URL(a.href);
+      u.searchParams.set('run', run);
+      a.href = u.toString();
+    }
+  }
+</script>

@@ -1,7 +1,51 @@
 // Mock `claude` binary for e2e tests: reads the prompt from stdin and answers
 // with canned JSON depending on which nff-brain prompt it recognizes.
 // SHIM_MODE=hang sleeps forever (for the fail-open timeout test).
+//
+// With `--input-format stream-json` in argv it instead mimics the persistent
+// stream-json conversation (ClaudeSession): one `result` line per stdin user
+// line, embedding process.pid and a turn counter so tests can PROVE the same
+// process answered successive turns. SHIM_MODE=hang never answers;
+// SHIM_MODE=die-after-1 exits after the first result (the respawn test).
 
+if (process.argv.includes('--input-format')) {
+  let turn = 0;
+  let buf = '';
+  process.stdin.setEncoding('utf8');
+  process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'shim' }) + '\n');
+  process.stdin.on('data', (d) => {
+    buf += d;
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (!line.trim()) continue;
+      if (process.env.SHIM_MODE === 'hang') continue; // swallow the turn, never answer
+      turn += 1;
+      let userText = '';
+      try {
+        userText = JSON.parse(line).message.content[0].text ?? '';
+      } catch {
+        /* result still answers, with an empty echo */
+      }
+      // Echo a slice of the user text so tests can tell bootstrap from delta turns.
+      const result = `pid:${process.pid} turn:${turn} saw:${userText.slice(0, 60)}`;
+      process.stdout.write(
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: result }] } }) + '\n',
+      );
+      process.stdout.write(
+        JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result, session_id: 'shim' }) + '\n',
+      );
+      if (process.env.SHIM_MODE === 'die-after-1') process.exit(0);
+    }
+  });
+  // Keep running until stdin closes (the parent owns our lifetime).
+  process.stdin.on('end', () => process.exit(0));
+} else {
+  legacyOneShot();
+}
+
+function legacyOneShot() {
 let prompt = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => (prompt += d));
@@ -136,3 +180,4 @@ process.stdin.on('end', () => {
     process.stdout.write('{"nodes":[],"edges":[]}');
   }
 });
+}

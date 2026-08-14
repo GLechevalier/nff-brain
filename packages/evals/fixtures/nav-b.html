@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>page B</title>
+<script src="/fixtures/bench.js"></script>
+<style> body { font: 16px system-ui; margin: 24px; } </style>
+<h1 data-bench="b-marker">This is page B</h1>
+<p><a data-bench="link-back-a" href="/fixtures/nav.html">back to page A</a></p>
+<script>
+  const params = new URLSearchParams(location.search);
+  const run = params.get('run') || '';
+  if (run) {
+    for (const a of document.querySelectorAll('a[href^="/fixtures/"]')) {
+      const u = new URL(a.href);
+      u.searchParams.set('run', run);
+      a.href = u.toString();
+    }
+  }
+  window.__benchState = () => ({ page: 'B' });
+</script>

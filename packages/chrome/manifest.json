@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "nff-brain",
-  "version": "0.1.0.45",
-  "description": "Local-first memory for Claude Code. Talks to a brain you run yourself on 127.0.0.1. An optional API key lets it reason with your own AI provider instead of your Claude Code login — the brain itself always lives on your paired local server.",
+  "version": "0.1.0.63",
+  "description": "Local-first memory and a web agent that drives your browser. Reasons through a local nff-brain server (Claude Code) or directly with your own AI API key — no server or Claude Code required in Direct API mode.",
   "minimum_chrome_version": "116",
   "incognito": "not_allowed",
   "permissions": [

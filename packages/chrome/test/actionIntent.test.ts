@@ -98,6 +98,35 @@ describe('detectActionIntent — generic host fallback (any other site)', () => 
   });
 });
 
+describe('detectActionIntent — explicitly typed URLs (used verbatim)', () => {
+  it.each([
+    ['navigate to https://wikipedia.org/', 'wikipedia.org', 'https://wikipedia.org/'],
+    ['go to https://en.wikipedia.org/wiki/Chrome', 'en.wikipedia.org', 'https://en.wikipedia.org/wiki/Chrome'],
+    ['open http://example.com/a?b=c', 'example.com', 'http://example.com/a?b=c'],
+    ['go to https://example.org please', 'example.org', 'https://example.org/'],
+    ['open wikipedia.org/wiki/Chrome', 'wikipedia.org', 'https://wikipedia.org/wiki/Chrome'],
+  ])('matches %j — full URL preserved, not collapsed to a hostname guess', (message, host, url) => {
+    expect(detectActionIntent(message, [LINKEDIN])).toEqual({ kind: 'host', host, label: host, url });
+  });
+
+  it('an explicit URL outranks the adapter-alias tier — the typed path wins over the alias site root', () => {
+    expect(detectActionIntent('go to https://www.linkedin.com/jobs/', [LINKEDIN])).toEqual({
+      kind: 'host',
+      host: 'www.linkedin.com',
+      label: 'www.linkedin.com',
+      url: 'https://www.linkedin.com/jobs/',
+    });
+  });
+
+  it.each([
+    'navigate to ftp://example.com/file',
+    'go to settings/profile',
+    'open https://not a url',
+  ])('does not match %j — non-http scheme, dotless host, or a multi-word tail', (message) => {
+    expect(detectActionIntent(message, [LINKEDIN])).toBeNull();
+  });
+});
+
 describe('detectActionIntent — browser history (back/forward)', () => {
   it.each([
     ['navigate back to the previous page', 'back'],

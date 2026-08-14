@@ -46,7 +46,9 @@ describe('scenario registry', () => {
 
   it('capabilities.json lists only known tags, and baseline scenarios are live', () => {
     const caps = JSON.parse(fs.readFileSync(path.join(evalsRoot, 'capabilities.json'), 'utf8')) as { live: string[] };
-    const known = /^(baseline|P0-harness|P1-engine|P2-loop|P3-adapter:[a-z]+|P4-confirm|P4-downloads|P5-crosssite)$/;
+    // ACT-* tags belong to the act benchmark (src/act/actScenario.ts), which
+    // shares this capabilities.json — deliberate same-commit widening.
+    const known = /^(baseline|P0-harness|P1-engine|P2-loop|P3-adapter:[a-z]+|P4-confirm|P4-downloads|P5-crosssite|ACT-[a-z0-9]+(?:-[a-z0-9]+)*)$/;
     for (const tag of caps.live) expect(tag).toMatch(known);
     // The P0 exit-criterion scenario must be runnable the moment the harness exists.
     const smoke = SCENARIOS.find((s) => s.id === 'linkedin.connect.L1');

@@ -85,6 +85,36 @@ function extractGenericSite(message: string): { host: string; url: string } | nu
   return { host, url: `https://${host}/` };
 }
 
+/**
+ * An explicitly typed URL after the verb — "navigate to https:// + host + /",
+ * or scheme-less "host.tld/path" — used VERBATIM (path, query and all)
+ * instead of being collapsed to a bare-hostname guess. HOSTNAME_RE alone
+ * rejects these (the scheme's "://" and any "/path" are not hostname
+ * characters), which used to drop the whole message through to plain chat —
+ * and paired-mode chat has no navigate tool, so the request silently became
+ * a text answer. Scheme-less input needs BOTH a dotted hostname and a "/"
+ * path ("settings/profile" has no dot and stays rejected); with a scheme,
+ * only http/https are accepted.
+ */
+function extractExplicitUrl(message: string): { host: string; url: string } | null {
+  const m = GENERIC_TAIL_RE.exec(message.trim());
+  if (!m) return null;
+  let rest = m[1].trim().replace(/[.?!]+$/, '').trim();
+  rest = stripFillers(rest);
+  if (!rest || /\s/.test(rest)) return null;
+  const hasScheme = /^https?:\/\//i.test(rest);
+  if (!hasScheme && !(rest.includes('/') && rest.slice(0, rest.indexOf('/')).includes('.'))) return null;
+  let u: URL;
+  try {
+    u = new URL(hasScheme ? rest : `https://${rest}`);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  if (!HOSTNAME_RE.test(u.hostname) || !u.hostname.includes('.')) return null;
+  return { host: u.hostname, url: u.toString() };
+}
+
 // Independent of ACTION_VERBS/GENERIC_TAIL_RE above — "go back"/"head back"
 // don't contain "go to", and the destination is history, not a site. Same
 // "entire remainder must collapse to nothing" discipline as
@@ -117,6 +147,12 @@ export function detectActionIntent(
 
   const lower = message.toLowerCase();
   if (!ACTION_VERBS.some((v) => lower.includes(v))) return null;
+
+  // An explicitly typed URL is the strongest possible statement of intent, so
+  // it outranks the adapter-alias tier: "go to https://www.linkedin.com/jobs/"
+  // must open THAT page, not the alias's hardcoded site root.
+  const explicit = extractExplicitUrl(message);
+  if (explicit) return { kind: 'host', host: explicit.host, label: explicit.host, url: explicit.url };
 
   for (const adapter of adapters) {
     const alias = adapterAlias(adapter);

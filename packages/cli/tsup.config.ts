@@ -1,7 +1,25 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'tsup';
+
+// The version baked into the bundle AT BUILD TIME, with a build stamp — so
+// `nff-brain serve`, /v1/hello, /v1/status and the Chrome extension's Settings
+// panel all report the version of the code that is actually running. A runtime
+// package.json read cannot do that: the bare "0.1.0" never changes between
+// rebuilds, which is exactly how a stale dist/ once masqueraded as current
+// (the "no brain listening" version-skew incident). Same idea as the chrome
+// package's per-build manifest bump.
+const pkgVersion = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string })
+  .version;
+const stamp = new Date()
+  .toISOString()
+  .replace(/[-:]/g, '')
+  .replace('T', '.')
+  .slice(0, 13); // 20260814.1042 — minute granularity is enough to tell builds apart
+const buildVersion = `${pkgVersion}+${stamp}`;
 
 export default defineConfig({
   entry: { index: 'src/index.ts' },
+  define: { __NFF_BRAIN_VERSION__: JSON.stringify(buildVersion) },
   format: ['esm'],
   target: 'node18',
   platform: 'node',

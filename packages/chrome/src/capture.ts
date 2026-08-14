@@ -14,6 +14,8 @@ import { HttpError, postClip } from './client.js';
 import type { ClipPayload } from './client.js';
 import { currentPhase } from './connection.js';
 import { shouldCapture } from './gate.js';
+import { resolveBrainMode } from './mode.js';
+import { enqueueStandaloneClip } from './standaloneDrain.js';
 import { getAllowlist, getCapture, getPairing, getRecent, setRecent } from './storage.js';
 
 export const MENU_ID = 'nb.remember';
@@ -100,12 +102,12 @@ export async function onMenuClicked(
     delivery: 'pending',
   });
 
-  if (!pairing) {
-    // No local fallback store exists anymore — capture requires a paired
-    // `nff-brain serve`. Fail loudly (same signal as a paired network error)
-    // rather than silently landing this note somewhere unsynced.
-    await markDelivery(id, 'failed');
-    await flashCaptured(false);
+  if (!pairing || (await resolveBrainMode()) === 'byok') {
+    // BYOK (or nothing configured): the clip goes to the LOCAL pipeline —
+    // enqueueStandaloneClip queues even in 'unconfigured' mode so a note
+    // captured before the user picked a setup path is never lost, and the
+    // drain distills it once a key exists.
+    await enqueueStandaloneClip(payload, id);
     setTimeout(() => {
       void currentPhase().then((phase) => paintBadge(phase, capture.enabled));
     }, 1200);

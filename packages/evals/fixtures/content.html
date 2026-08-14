@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>content fixtures</title>
+<script src="/fixtures/bench.js"></script>
+<style> body { font: 16px system-ui; margin: 24px; max-width: 560px; } </style>
+
+<h1 data-bench="content-title">The Voyage of the Beagle</h1>
+<p data-bench="para-1">The distinctive codeword for this benchmark run is XYLOPHONE-EIGHTY-ONE and it appears exactly once.</p>
+<p data-bench="para-2">A second paragraph exists purely so selection has somewhere to extend across
+paragraph boundaries without leaving the article body.</p>
+<img data-bench="the-image" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FAP5FDvcfRYWgAAAAAElFTkSuQmCC" width="80" height="80" alt="test image">
+
+<script>
+  window.__benchState = () => ({ zoomProbe: Math.round(devicePixelRatio * 100) / 100 });
+</script>

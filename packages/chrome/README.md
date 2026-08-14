@@ -1,17 +1,21 @@
 # nff-brain — Chrome extension
 
-Local-first memory for Claude Code, in the browser. Right-click any selected
-text → **Remember this**, and it lands in a queue the next Claude Code session
-distills into your brain. Two modes:
+Local-first memory and a CDP web agent, in the browser. Right-click any
+selected text → **Remember this**; give the Agent tab a goal and it drives the
+page with a visible cursor. Two peer AI backends, switched explicitly in
+Settings ("AI backend", `nb.brainMode` — see `src/mode.ts`):
 
-- **Paired** (preferred): the extension talks only to `nff-brain serve` on
-  `127.0.0.1`. Nothing leaves your machine.
-- **Standalone** (no CLI, no Claude Code): save your own AI API key on the
-  options page and the brain lives in `chrome.storage.local` — captures
-  distill on a background model via a direct provider call from the service
-  worker, and the DevTools Brain tab chats over them with a stronger one. A
-  stored pairing always wins; pairing later migrates the local brain into the
-  server automatically (`POST /v1/import`).
+- **Paired server**: the extension talks only to `nff-brain serve` on
+  `127.0.0.1`; reasoning runs through `claude -p` (your Claude Code login).
+  Nothing leaves your machine.
+- **Direct API / BYOK** (no CLI, no Claude Code): save your own AI API key in
+  Settings. The web agent's tool-use loop (prompt-cached, streamed, abortable
+  mid-call), chat, workflow record/replay, and clip distillation all run in
+  the browser; captures distill on the cheap background model and land in the
+  local brain (`nb.brain`), which feeds retrieval for chat and agent runs.
+  With both configured, the switch decides; with no stored preference a
+  pairing wins (legacy rule), and a leftover pre-upgrade local brain still
+  migrates into the server automatically (`POST /v1/import`).
 
 The CSP enumerates exactly two reachable hosts (loopback + the shipped
 provider's API); nothing is sent anywhere until you pair or save a key.
@@ -57,13 +61,14 @@ published `key` to `manifest.json` so unpacked and store builds share one id.
 | `popup/` | static skeleton + `paint(state)`; plain DOM, no framework |
 | `devtools/` | the Brain panel (F12 → Brain), two tabs: **Brain** — one chat transcript with a Manual/Plan/Auto mode switch (Manual = LLM-synthesized chat over retrieved nodes; Plan/Auto = the item-7 web agent, with/without a review step) — and **MCP** — list/test/enable/disable/remove registered MCP servers, browser-mutable but never able to register a new one with a secret. Both tabs go through the worker, token never in the panel |
 | `content/` | recorder + web-agent content scripts — no token, no fetch, no storage (CI-enforced); `linkedinAgent.ts` is the one exception that RECEIVES commands (`sendResponse` only, never `sendMessage`); `virtualCursor.ts` is the thin element-based wrapper over the shared overlay in `src/cursorScript.ts` — a brand-colored pointer + label the agent glides to a target right before it clicks, so a real click is never invisible. The same `cursorScript.ts` is injected via CDP by `src/actEngine.ts` so the full web agent (Act tab) draws the identical cursor |
-| `src/mode.ts` | paired / standalone / unconfigured resolution — a stored pairing always wins |
-| `src/providerClient.ts` | the ONLY module that sends a provider request (adapters are pure, in `@nff-brain/core/provider`); key read from storage at call time |
-| `src/brainStore.ts` | the standalone brain's serialized write path (the second documented module-level variable) |
+| `src/mode.ts` | paired / byok / unconfigured resolution — explicit `nb.brainMode` preference, legacy pairing-wins default, work-or-degrade fallback |
+| `src/providerClient.ts` | the ONLY module that sends a provider request (adapters are pure, in `@nff-brain/core/provider`); key read from storage at call time; blocking + SSE streaming paths, prompt caching, mid-call abort |
+| `src/byokChat.ts` | Manual-mode chat over the direct API — local-brain retrieval + the navigate tool |
+| `src/brainStore.ts` | the local brain's serialized write path + `mergeImportedBrain` (seed from `GET /v1/export`) |
 | `src/standaloneDrain.ts` | capture tail → `nb.clipQueue` → alarm-driven drain → local nodes; one atomic `commitDrain` |
-| `src/standalone.ts` | local-brain siblings of getNodes/search/graph/chat/clear — same response shapes as serve |
-| `src/migrate.ts` | standalone→paired migration, piggybacked on the healthy probe; idempotent |
-| `options/` | the settings page (BYOK key, provider, two model slots); key never rendered back |
+| `src/standaloneTraceDistill.ts` | BYOK trace → workflow distillation (background model slot) |
+| `src/workflowStore.ts` | `nb.workflows` local replayable specs; one-way import from the paired server |
+| `src/migrate.ts` | LEGACY local-brain→server sweep, piggybacked on the healthy probe; skipped whenever an explicit `nb.brainMode` is stored |
 | `store/` | Web Store assets: privacy policy, permission justifications, listing copy, submission runbook |
 
 Two invariants are enforced by `test/bundlePurity.test.ts` rather than by

@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>caret-editing fixtures</title>
+<script src="/fixtures/bench.js"></script>
+<style>
+  body { font: 16px system-ui; margin: 24px; }
+  .row { margin: 14px 0; }
+  input, textarea { font-size: 16px; padding: 6px; width: 420px; }
+</style>
+
+<div class="row">
+  <input data-bench="edit-box" id="edit-box" aria-label="edit-box" value="the quick brown fox">
+</div>
+
+<div class="row">
+  <textarea data-bench="edit-area" id="edit-area" aria-label="edit-area" rows="4">line one
+line two
+line three</textarea>
+</div>
+
+<script>
+  window.__benchState = () => {
+    const box = document.getElementById('edit-box');
+    const area = document.getElementById('edit-area');
+    const active = document.activeElement;
+    return {
+      boxValue: box.value,
+      areaValue: area.value,
+      selStart: active && 'selectionStart' in active ? active.selectionStart : null,
+      selEnd: active && 'selectionEnd' in active ? active.selectionEnd : null,
+      focused: active?.dataset?.bench ?? 'none',
+    };
+  };
+</script>

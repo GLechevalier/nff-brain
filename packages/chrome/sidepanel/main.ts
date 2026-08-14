@@ -21,7 +21,6 @@
 // A side panel lives as long as it is open (like the old devtools/popup docs and
 // unlike the MV3 service worker), so this document MAY hold module state.
 
-import { agentAdapterById } from '../src/agentRegistry.js';
 import { detectActionIntent, type ActionIntent } from '../src/actionIntent.js';
 import { detectPageActionIntent } from '../src/pageActionIntent.js';
 import { DEFAULT_PORT, PANEL_POLL_MS } from '../src/protocol.js';
@@ -30,25 +29,22 @@ import type {
   GraphEdge,
   GraphNode,
   McpServerSummary,
-  McpToolDef,
   NodesResponse,
   PopupToSw,
   PublicState,
   SwToPopup,
-  WebAgentListTarget,
   WebAgentRun,
 } from '../src/protocol.js';
 import { adapterById } from '../src/recorderRegistry.js';
+import { getProjectHandle, putProjectHandle } from '../src/fsHandles.js';
+import type { ActRunState } from '../src/schema.js';
 import type { ProviderId } from '@nff-brain/core/provider';
 import {
   fillModelDatalists,
   hideClearConfirm,
   paintActRun,
-  paintAdapter,
   paintClearConfirm,
   paintHeader,
-  paintMcpServerOptions,
-  paintMcpToolOptions,
   paintMode,
   paintSettings,
   paintSetup,
@@ -91,6 +87,34 @@ const PENDING_WORDS = [
 ];
 const PENDING_TICK_MS = 2000;
 
+// Action-flavored counterpart to PENDING_WORDS, cycled while the WEB AGENT is
+// actually working — in the transcript's run entries, the act status line, and
+// (for chat-launched page actions) the pending bubble, which stays alive for
+// the WHOLE run rather than just the dispatch round-trip.
+const WORKING_WORDS = [
+  'Fulminating…',
+  'Working on it…',
+  'Scheming…',
+  'Plotting the next move…',
+  'Peering at the page…',
+  'Lining things up…',
+  'Nudging pixels…',
+  'Double-checking…',
+];
+
+// When the act run's latest transcript line tells us what the agent just did,
+// alternate that in with the whimsy ("Reading the page…" beats "Fulminating…"
+// for half the ticks). Patterns match executeVerb()'s resultText strings.
+const ACTIVITY_WORDS: readonly (readonly [RegExp, string])[] = [
+  [/read \d+ interactive/, 'Reading the page…'],
+  [/click/i, 'Clicking…'],
+  [/\btyped\b|\bpressed\b/, 'Typing…'],
+  [/scroll/i, 'Scrolling…'],
+  [/\bloaded\b|navigating|went back|went forward|reloaded/, 'Navigating…'],
+  [/dragged|moved to/, 'Moving the mouse…'],
+  [/\btab\b/i, 'Juggling tabs…'],
+];
+
 // ── shared module state ───────────────────────────────────────────────────────
 
 let currentTab: SidePanelTab = 'setup';
@@ -107,10 +131,18 @@ let actPollTimer: ReturnType<typeof setTimeout> | null = null;
 let mode: ChatMode = 'manual';
 let transcript: TranscriptEntry[] = [];
 let chatHistory: ChatTurn[] = [];
-const mcpToolsByServer = new Map<string, McpToolDef[]>();
 let agentPollTimer: ReturnType<typeof setTimeout> | null = null;
-let pendingTimer: ReturnType<typeof setInterval> | null = null;
 let submitting = false;
+// The ONE 2s word ticker behind every rotating status word (pending bubble,
+// run-entry phase label, act status line). Self-stops when nothing is live.
+let workingTimer: ReturnType<typeof setInterval> | null = null;
+let workingWordIndex = Math.floor(Math.random() * WORKING_WORDS.length);
+// Last act-run state seen, so the ticker can repaint the act status line
+// between polls and workingWord() can sniff the latest activity.
+let lastActRun: ActRunState | null = null;
+// Set when the chat's pending bubble should outlive submitPrompt() and track
+// a page-action act run instead — cleared by pollActStatus() on a terminal run.
+let pendingFollowsActRun = false;
 
 // MCP tab
 let mcpListItems: McpListItem[] = [];
@@ -188,9 +220,8 @@ async function refreshState(): Promise<void> {
   const reply = await send({ type: 'getState' });
   if (reply.type !== 'state') return;
   latestState = reply.state;
-  paintHeader(latestNodes, reply.state.phase);
-  paintAdapter(reply.state);
-  paintUnpairedGate(reply.state.phase !== 'connected');
+  paintHeader(latestNodes, reply.state.phase, reply.state.brainMode);
+  paintCapabilityGate(reply.state);
   paintSettings(reply.state);
   paintSetup(reply.state, {
     currentHost,
@@ -221,20 +252,22 @@ async function dispatchSetup(msg: PopupToSw, errorField?: string): Promise<boole
 }
 
 /**
- * The brain graph always lives on a paired `nff-brain serve` now — there is
- * no local fallback. Plan/Auto and the MCP tab are intrinsically server-backed
- * (web-agent state and MCP registry live in nff-brain serve), so they hide
- * rather than error while not connected. Manual-mode chat still answers a
- * plain "navigate to X" through the BYOK tool-use loop even unpaired (that's
- * LLM reasoning, not brain data), so it stays reachable.
+ * Two separate gates, because they answer different questions. The MCP tab is
+ * intrinsically server-backed (the registry lives in nff-brain serve), so it
+ * hides while the server isn't connected. The Plan/Auto autonomy modes only
+ * need SOME reasoning backend — paired server OR a direct API key (mode.ts) —
+ * so they unlock whenever one is configured; per-origin action grants
+ * (actGate) still apply in every mode. Only with no backend at all does the
+ * panel force Manual.
  */
-function paintUnpairedGate(gated: boolean): void {
-  $('sp-tab-mcp').classList.toggle('hidden', gated);
-  $('mode-plan').classList.toggle('hidden', gated);
-  $('mode-auto').classList.toggle('hidden', gated);
-  $('adapter-row').classList.toggle('hidden', gated);
-  if (gated && mode !== 'manual') setMode('manual');
-  if (gated && currentTab === 'mcp') {
+function paintCapabilityGate(state: PublicState): void {
+  const mcpGated = state.phase !== 'connected';
+  const modesGated = state.brainMode === 'unconfigured';
+  $('sp-tab-mcp').classList.toggle('hidden', mcpGated);
+  $('mode-plan').classList.toggle('hidden', modesGated);
+  $('mode-auto').classList.toggle('hidden', modesGated);
+  if (modesGated && mode !== 'manual') setMode('manual');
+  if (mcpGated && currentTab === 'mcp') {
     currentTab = 'brain';
     switchTab('brain');
   }
@@ -337,48 +370,131 @@ function scheduleActPoll(ms: number): void {
 async function pollActStatus(): Promise<void> {
   const reply = await send({ type: 'getActStatus' });
   if (reply.type !== 'actStatus') return;
-  paintActRun(reply.run);
+  paintAct(reply.run);
   const live =
     reply.run && (reply.run.phase === 'running' || reply.run.phase === 'stopping' || reply.run.phase === 'awaiting_grant');
+  // A chat-launched page action keeps its pending bubble rotating for the
+  // whole run; land the closing answer when the run reaches a terminal phase.
+  if (pendingFollowsActRun && !live) {
+    pendingFollowsActRun = false;
+    clearPending();
+    const r = reply.run;
+    const text =
+      r?.phase === 'error'
+        ? `That didn't work: ${r.error ?? 'unknown error'} — details in the run log below.`
+        : r?.phase === 'stopped'
+          ? 'Stopped — see the run log below.'
+          : 'Done — see the run log below.';
+    transcript.push({ kind: 'answer', text, sources: [] });
+    paintTranscript();
+  }
   if (live) scheduleActPoll(1000);
 }
 
-async function startActRun(goal: string, workflowId?: string, maxActionsOverride?: number): Promise<void> {
+async function startActRun(goal: string, workflowId?: string, maxActionsOverride?: number): Promise<boolean> {
   showActError(null);
   if (!goal) {
     showActError('Describe a task first.');
-    return;
+    return false;
   }
   const tabId = await activeTabId();
   if (tabId === undefined) {
     showActError('Could not find the active tab in this window.');
-    return;
+    return false;
   }
   const maxActions = maxActionsOverride ?? (Number(($('act-budget') as HTMLInputElement).value) || undefined);
-  const reply = await send({ type: 'actStart', goal, tabId, maxActions, workflowId, mode });
+  const reply = await send({ type: 'actStart', goal, tabId, maxActions, workflowId, mode, codeEnabled: codeToolsEnabled() });
   if (reply.type === 'error') {
     showActError(reply.message);
-    return;
+    return false;
   }
-  if (reply.type === 'actStatus') paintActRun(reply.run);
+  if (reply.type === 'actStatus') paintAct(reply.run);
+  // The auto-approve toggle is per run — arm the fresh run when it's checked.
+  if (codeToolsEnabled() && ($('code-auto') as HTMLInputElement).checked) void send({ type: 'codeAutoApprove', enabled: true });
   scheduleActPoll(600);
+  return true;
 }
 
 async function grantAct(choice: 'once' | 'always' | 'never'): Promise<void> {
   const reply = await send({ type: 'actGrant', choice });
-  if (reply.type === 'actStatus') paintActRun(reply.run);
+  if (reply.type === 'actStatus') paintAct(reply.run);
   scheduleActPoll(600);
 }
 
 async function stopActRun(): Promise<void> {
   const reply = await send({ type: 'actStop' });
-  if (reply.type === 'actStatus') paintActRun(reply.run);
+  if (reply.type === 'actStatus') paintAct(reply.run);
   scheduleActPoll(600);
 }
 
 async function clearActRun(): Promise<void> {
   const reply = await send({ type: 'actEnd' });
-  if (reply.type === 'actStatus') paintActRun(reply.run);
+  if (reply.type === 'actStatus') paintAct(reply.run);
+}
+
+// ── coding agent: project folder attach + approvals ──────────────────────────
+//
+// The picker and the permission re-request MUST run in this document (user
+// gesture in a window context); the handle goes straight to IndexedDB
+// (src/fsHandles.ts) and the SW is only told the JSON metadata.
+
+function paintCodeProject(project: { name: string } | null, permission: string): void {
+  const attached = !!project;
+  $('code-attach').classList.toggle('hidden', attached);
+  $('code-chip').classList.toggle('hidden', !attached);
+  $('code-detach').classList.toggle('hidden', !attached);
+  $('code-regrant').classList.toggle('hidden', !attached || permission === 'granted');
+  $('code-enable-row').classList.toggle('hidden', !attached);
+  $('code-auto-row').classList.toggle('hidden', !attached);
+  if (project) {
+    $('code-chip').textContent =
+      permission === 'granted' ? `📁 ${project.name}` : `📁 ${project.name} (access needed)`;
+  }
+}
+
+async function refreshCodeStatus(): Promise<void> {
+  const reply = await send({ type: 'getCodeStatus' });
+  if (reply.type === 'codeStatus') paintCodeProject(reply.project, reply.permission);
+}
+
+async function attachProject(): Promise<void> {
+  $('code-error').classList.add('hidden');
+  let handle: FileSystemDirectoryHandle;
+  try {
+    handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+  } catch {
+    return; // user cancelled the picker — not an error
+  }
+  try {
+    await putProjectHandle(handle);
+  } catch {
+    $('code-error').textContent = 'could not store the folder handle';
+    $('code-error').classList.remove('hidden');
+    return;
+  }
+  const reply = await send({ type: 'codeAttached', name: handle.name });
+  if (reply.type === 'codeStatus') paintCodeProject(reply.project, reply.permission);
+}
+
+async function regrantProject(): Promise<void> {
+  const handle = await getProjectHandle();
+  if (!handle) return refreshCodeStatus();
+  try {
+    await handle.requestPermission({ mode: 'readwrite' });
+  } catch {
+    // fall through — the status refresh below shows whatever state we're in
+  }
+  await refreshCodeStatus();
+}
+
+async function detachProject(): Promise<void> {
+  const reply = await send({ type: 'codeDetach' });
+  if (reply.type === 'codeStatus') paintCodeProject(reply.project, reply.permission);
+}
+
+/** Whether the next act run should carry the code tools. */
+function codeToolsEnabled(): boolean {
+  return !$('code-enable-row').classList.contains('hidden') && ($('code-enabled') as HTMLInputElement).checked;
 }
 
 async function loadWorkflows(): Promise<void> {
@@ -391,77 +507,11 @@ async function loadWorkflows(): Promise<void> {
   });
 }
 
-// ── Brain tab: LinkedIn adapter toggle ───────────────────────────────────────
-
-/**
- * Enable runs HERE, not in the SW: chrome.permissions.request needs a user
- * gesture, and this click is that gesture. A denied prompt leaves the agent off.
- */
-async function toggleAdapter(): Promise<void> {
-  const adapter = agentAdapterById('linkedin');
-  if (!adapter) return;
-
-  const stateReply = await send({ type: 'getState' });
-  const enabled =
-    stateReply.type === 'state' && stateReply.state.agentAdapters.find((a) => a.id === 'linkedin')?.enabled === true;
-
-  if (enabled) {
-    await send({ type: 'setAgentAdapterEnabled', id: 'linkedin', enabled: false });
-    await refreshState();
-    return;
-  }
-
-  let granted = false;
-  try {
-    granted = await chrome.permissions.request({ origins: adapter.originPatterns });
-  } catch {
-    granted = false;
-  }
-  if (!granted) {
-    showFieldError('adapter-error', `Chrome permission for ${adapter.hosts.join(', ')} was not granted — the agent stays off.`);
-    return;
-  }
-  showFieldError('adapter-error', null);
-  await send({ type: 'setAgentAdapterEnabled', id: 'linkedin', enabled: true });
-  await refreshState();
-}
-
 // ── Brain tab: mode switch ────────────────────────────────────────────────────
 
 function setMode(next: ChatMode): void {
   mode = next;
   paintMode(mode);
-}
-
-// ── Brain tab: goal-options selects (Plan/Auto mode's "add matches to") ──────
-
-async function loadGoalOptionServers(): Promise<void> {
-  const reply = await send({ type: 'getMcpServers' });
-  if (reply.type !== 'mcpServers') return;
-  paintMcpServerOptions(reply.servers, '');
-  paintMcpToolOptions([], null);
-}
-
-async function loadGoalOptionTools(serverId: string): Promise<void> {
-  if (!serverId) {
-    paintMcpToolOptions([], null);
-    return;
-  }
-  if (!mcpToolsByServer.has(serverId)) {
-    const reply = await send({ type: 'getMcpTools', server: serverId });
-    if (reply.type !== 'mcpTools') return;
-    mcpToolsByServer.set(serverId, reply.tools);
-  }
-  paintMcpToolOptions(mcpToolsByServer.get(serverId) ?? [], null);
-}
-
-function selectedListTarget(): WebAgentListTarget | null {
-  const serverId = ($('list-server') as HTMLSelectElement).value;
-  if (!serverId) return null;
-  const toolName = ($('list-tool') as HTMLSelectElement).value;
-  const toolDef = mcpToolsByServer.get(serverId)?.find((t) => t.name === toolName);
-  if (!toolDef) return null;
-  return { server: serverId, tool: toolName, toolDef };
 }
 
 // ── Brain tab: the transcript's run/plan entries ─────────────────────────────
@@ -483,25 +533,83 @@ const transcriptHandlers = {
 };
 
 function paintTranscript(): void {
-  renderTranscript(transcript, transcriptHandlers);
+  renderTranscript(transcript, transcriptHandlers, workingWord());
 }
 
-function pushPending(): void {
-  let i = Math.floor(Math.random() * PENDING_WORDS.length);
-  transcript.push({ kind: 'pending', word: PENDING_WORDS[i] });
-  paintTranscript();
-  pendingTimer = setInterval(() => {
+/** What the agent is (most recently) up to, sniffed from the freshest signal
+ *  available, or null when we can't tell and pure whimsy should rotate. */
+function currentActivityLabel(): string | null {
+  // CDP act run: the newest action/result transcript line describes it.
+  if (lastActRun && (lastActRun.phase === 'running' || lastActRun.phase === 'stopping')) {
+    for (let i = lastActRun.transcript.length - 1; i >= 0; i--) {
+      const e = lastActRun.transcript[i];
+      if (e.kind !== 'action' && e.kind !== 'result') continue;
+      for (const [re, label] of ACTIVITY_WORDS) if (re.test(e.text)) return label;
+      break;
+    }
+  }
+  // Brain-tab web-agent run: the newest history record names its verb.
+  const runEntry = transcript.find(
+    (e): e is Extract<TranscriptEntry, { kind: 'run' }> => e.kind === 'run' && !isTerminalAgentPhase(e.run.phase),
+  );
+  const verb = runEntry?.run.history[runEntry.run.history.length - 1]?.verb;
+  if (verb) {
+    if (/read/i.test(verb)) return 'Reading the page…';
+    if (/click|connect/i.test(verb)) return 'Clicking…';
+    if (/navigate/i.test(verb)) return 'Navigating…';
+  }
+  return null;
+}
+
+/** The rotating status word for THIS tick — activity-aware on even ticks. */
+function workingWord(): string {
+  const activity = workingWordIndex % 2 === 0 ? currentActivityLabel() : null;
+  return activity ?? WORKING_WORDS[workingWordIndex % WORKING_WORDS.length];
+}
+
+function workingTickerNeeded(): boolean {
+  const pendingExists = transcript.some((e) => e.kind === 'pending');
+  const liveRunEntry = transcript.some(
+    (e) => (e.kind === 'run' || e.kind === 'plan') && !isTerminalAgentPhase(e.run.phase) && e.run.phase !== 'awaiting_approval',
+  );
+  const liveAct = !!lastActRun && (lastActRun.phase === 'running' || lastActRun.phase === 'stopping');
+  return pendingExists || liveRunEntry || liveAct;
+}
+
+function ensureWorkingTicker(): void {
+  if (workingTimer) return;
+  workingTimer = setInterval(() => {
+    if (!workingTickerNeeded()) {
+      if (workingTimer) clearInterval(workingTimer);
+      workingTimer = null;
+      return;
+    }
+    workingWordIndex++;
     const entry = transcript.find((e): e is Extract<TranscriptEntry, { kind: 'pending' }> => e.kind === 'pending');
-    if (!entry) return;
-    i = (i + 1) % PENDING_WORDS.length;
-    entry.word = PENDING_WORDS[i];
+    // While the bubble tracks a live act run it speaks agent (WORKING_WORDS /
+    // activity); while waiting on a chat reply it keeps the brain flavor.
+    if (entry) entry.word = pendingFollowsActRun ? workingWord() : PENDING_WORDS[workingWordIndex % PENDING_WORDS.length];
     paintTranscript();
+    paintAct(lastActRun);
   }, PENDING_TICK_MS);
 }
 
+/** The one act-run paint path: remembers the run for the ticker, threads the
+ *  rotating word into the status line, and keeps the ticker alive. */
+function paintAct(run: ActRunState | null): void {
+  lastActRun = run;
+  paintActRun(run, workingWord());
+  if (run && (run.phase === 'running' || run.phase === 'stopping')) ensureWorkingTicker();
+}
+
+function pushPending(): void {
+  clearPending();
+  transcript.push({ kind: 'pending', word: PENDING_WORDS[workingWordIndex % PENDING_WORDS.length] });
+  paintTranscript();
+  ensureWorkingTicker();
+}
+
 function clearPending(): void {
-  if (pendingTimer) clearInterval(pendingTimer);
-  pendingTimer = null;
   transcript = transcript.filter((e) => e.kind !== 'pending');
 }
 
@@ -519,6 +627,8 @@ function applyRunUpdate(run: WebAgentRun): void {
     transcript.push({ kind, runId: run.id, run });
   }
   paintTranscript();
+  // Keep the phase label's rotating word ticking between the 4s polls.
+  if (!isTerminalAgentPhase(run.phase) && run.phase !== 'awaiting_approval') ensureWorkingTicker();
 }
 
 async function pollAgentStatus(): Promise<void> {
@@ -572,7 +682,7 @@ async function resolvePermission(requestId: string, decision: 'yes' | 'no' | 'al
   }
 }
 
-// ── Brain tab: submitting the prompt — branches on mode ──────────────────────
+// ── Brain tab: submitting the prompt — Send always chats ─────────────────────
 
 function pushChatTurn(turn: ChatTurn): void {
   chatHistory.push(turn);
@@ -598,9 +708,8 @@ async function submitChat(message: string): Promise<void> {
 }
 
 /**
- * The action-intent shortcut — checked BEFORE mode branching, in EVERY mode, so
- * "navigate to linkedin" never gets misread as a recruiting goal. A match skips
- * chatAsk/agentSubmitGoal entirely. Auto mode opens immediately; Manual and Plan
+ * The action-intent shortcut — checked before anything else, in EVERY mode.
+ * A match skips chatAsk entirely. Auto mode opens immediately; Manual and Plan
  * still ask.
  */
 async function submitActionIntent(intent: ActionIntent): Promise<void> {
@@ -659,12 +768,12 @@ async function submitActionIntent(intent: ActionIntent): Promise<void> {
 }
 
 // A one-off click/scroll/type instruction from chat needs far less budget
-// than a multi-step recruiting goal or workflow replay (whose #act-budget
-// field defaults to 40) — read_page + one interact + maybe a re-check.
+// than a workflow replay (whose #act-budget field defaults to 40) —
+// read_page + one interact + maybe a re-check.
 const MANUAL_PAGE_ACTION_MAX_ACTIONS = 6;
 
 /**
- * Manual-mode chat's "click the X button" shortcut. Reuses the CDP web
+ * Chat's "click the X button" shortcut. Reuses the CDP web
  * agent's existing run/grant machinery (startActRun/#act-run/#act-grant)
  * unchanged — the permission prompt and progress log render in the Saved
  * workflows panel exactly as they do for a workflow replay; the chat only
@@ -683,28 +792,16 @@ async function submitPageAction(instruction: string): Promise<void> {
     return;
   }
 
-  await startActRun(instruction, undefined, MANUAL_PAGE_ACTION_MAX_ACTIONS);
-  transcript.push({ kind: 'answer', text: 'Working on it — see the run below.', sources: [] });
-  paintTranscript();
-}
-
-async function submitGoal(message: string): Promise<void> {
-  const maxActions = Number(($('max-actions') as HTMLInputElement).value) || 5;
-  const listTarget = selectedListTarget();
-  const reply = await send({
-    type: 'agentSubmitGoal',
-    goal: message,
-    maxActions,
-    listTarget,
-    autoApprove: mode === 'auto',
-  });
-  if (reply.type === 'error') {
-    showFieldError('prompt-error', reply.message);
+  const started = await startActRun(instruction, undefined, MANUAL_PAGE_ACTION_MAX_ACTIONS);
+  if (!started) {
+    showFieldError('prompt-error', 'could not start that — see the run panel below');
     return;
   }
-  const status = await send({ type: 'getAgentStatus' });
-  if (status.type === 'agentStatus' && status.run) applyRunUpdate(status.run);
-  scheduleAgentPoll(1000);
+  // Leave the pending bubble alive: it rotates working words ("Fulminating…",
+  // "Reading the page…", …) for the WHOLE run; pollActStatus() retires it and
+  // lands the closing answer when the run reaches a terminal phase.
+  pendingFollowsActRun = true;
+  ensureWorkingTicker();
 }
 
 async function submitPrompt(): Promise<void> {
@@ -726,13 +823,14 @@ async function submitPrompt(): Promise<void> {
 
   try {
     const intent = detectActionIntent(message);
-    const pageAction = mode === 'manual' && !intent ? detectPageActionIntent(message) : null;
+    const pageAction = !intent ? detectPageActionIntent(message) : null;
     if (intent) await submitActionIntent(intent);
     else if (pageAction) await submitPageAction(pageAction.instruction);
-    else if (mode === 'manual') await submitChat(message);
-    else await submitGoal(message);
+    else await submitChat(message);
   } finally {
-    clearPending();
+    // A page action hands its pending bubble over to the act run — it is
+    // cleared by pollActStatus() on a terminal phase, not here.
+    if (!pendingFollowsActRun) clearPending();
     paintTranscript();
     submitting = false;
     ($('prompt-send') as HTMLButtonElement).disabled = false;
@@ -1025,8 +1123,14 @@ function wire(): void {
   $('act-grant-always').addEventListener('click', () => void grantAct('always'));
   $('act-grant-never').addEventListener('click', () => void grantAct('never'));
 
-  $('adapter-toggle').addEventListener('click', () => void toggleAdapter());
-  $('list-server').addEventListener('change', (e) => void loadGoalOptionTools((e.target as HTMLSelectElement).value));
+  // Coding agent — project folder + per-run auto-approve.
+  $('code-attach').addEventListener('click', () => void attachProject());
+  $('code-regrant').addEventListener('click', () => void regrantProject());
+  $('code-detach').addEventListener('click', () => void detachProject());
+  $('code-auto').addEventListener('change', () => {
+    void send({ type: 'codeAutoApprove', enabled: ($('code-auto') as HTMLInputElement).checked });
+  });
+
   $('prompt-send').addEventListener('click', () => void submitPrompt());
   $('prompt-input').addEventListener('keydown', (e) => {
     const ke = e as KeyboardEvent;
@@ -1036,7 +1140,27 @@ function wire(): void {
     }
   });
 
-  // Settings tab — fallback AI key (#setup-byok)
+  // Settings tab — AI backend switch (#setup-mode). refreshState (not just a
+  // Setup repaint) because the choice also moves the header chip and the
+  // Plan/Auto gate.
+  $('setup-mode-paired').addEventListener('click', () => void send({ type: 'setBrainMode', mode: 'paired' }).then(() => refreshState()));
+  $('setup-mode-byok').addEventListener('click', () => void send({ type: 'setBrainMode', mode: 'byok' }).then(() => refreshState()));
+
+  // Settings tab — one-way brain import into the local retrieval store.
+  $('setup-brain-import').addEventListener('click', () => {
+    const status = $('setup-brain-import-status');
+    status.textContent = 'Importing…';
+    void send({ type: 'importBrainFromServer' }).then((reply) => {
+      status.textContent =
+        reply.type === 'brainImported'
+          ? `Imported ${reply.imported} note${reply.imported === 1 ? '' : 's'} — ${reply.total} in the local brain.`
+          : reply.type === 'error'
+            ? reply.message
+            : '';
+    });
+  });
+
+  // Settings tab — direct AI key (#setup-byok)
   $('provider').addEventListener('change', () => fillModelDatalists(selectedProvider()));
   $('key-save').addEventListener('click', () => void saveKey());
   $('api-key').addEventListener('keydown', (e) => {
@@ -1057,7 +1181,7 @@ function wire(): void {
   $('test').addEventListener('click', () => void testConnection());
 
   // The SW pushes storage changes; reconcile the Agent run/workflows and the
-  // shared state (header/adapter/Settings incl. its fallback-key section) when it does.
+  // shared state (header/Settings incl. its fallback-key section) when it does.
   chrome.storage.onChanged.addListener((_c, area) => {
     if (area !== 'local') return;
     void pollActStatus();
@@ -1091,7 +1215,7 @@ async function boot(): Promise<void> {
   await refreshNodes();
   await refreshState(); // may re-gate the initial tab (e.g. hide MCP while unpaired)
   void refreshTrace();
-  await loadGoalOptionServers();
+  void refreshCodeStatus();
   await pollAgentStatus();
   await pollActStatus();
   await loadWorkflows();

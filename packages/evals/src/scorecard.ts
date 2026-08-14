@@ -13,6 +13,12 @@ export type Outcome =
   | 'skipped-unconfigured'
   | 'skipped-gate'
   | 'needs-review'
+  // Act benchmark: structurally impossible for the extension agent — the row
+  // documents the boundary and is never executed.
+  | 'out-of-scope'
+  // Act benchmark: a KNOWN engine gap ran and failed as documented. A passing
+  // known-gap case reports `fail` instead ("stale marker") so gaps can't linger.
+  | 'known-gap'
   | 'error';
 
 export interface RepResult {
@@ -50,6 +56,8 @@ const OUTCOME_ICON: Record<Outcome, string> = {
   'skipped-unconfigured': '🔧',
   'skipped-gate': '🚪',
   'needs-review': '👀',
+  'out-of-scope': '🚫',
+  'known-gap': '🕳',
   error: '💥',
 };
 

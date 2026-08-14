@@ -16,7 +16,7 @@ import { isRestrictedUrl } from './actGate.js';
 import { buildCursorInstallerSource, CURSOR_GLOBAL } from './cursorScript.js';
 import { ATTENTION_GLOBAL, buildAttentionInstallerSource } from './attentionScript.js';
 import { buildFingerprintSource, buildResolveSource, buildSnapshotSource, refIndex } from './snapshotScript.js';
-import { dragSamples, keyDescriptor, modifierBits } from './actPlan.js';
+import { dragSamples, keyDescriptor, modifierBits, wheelSteps } from './actPlan.js';
 import { detach, ensureAttached, evaluate, send } from './cdp.js';
 
 export interface VerbResult {
@@ -68,6 +68,10 @@ function sleep(ms: number): Promise<void> {
 }
 /** How long a click gets to visibly affect the page before pointer.click reports it as a probable no-op. */
 const CLICK_VERIFY_DELAY_MS = 250;
+/** Gap between the eased wheel ticks of one scroll (see wheelSteps) — ≤16 ticks ≈ half a second of glide. */
+const SCROLL_STEP_MS = 30;
+/** How long a smooth scrollIntoView gets to finish animating before the verb returns — it resolves immediately while the browser scrolls, and a snapshot taken mid-animation would carry wrong coordinates. */
+const SMOOTH_SCROLL_SETTLE_MS = 450;
 /**
  * A hang here (native dialog, wedged renderer, a bfcache-restored page CDP
  * lost track of) used to freeze the WHOLE run forever with no way to recover
@@ -78,6 +82,47 @@ const CLICK_VERIFY_DELAY_MS = 250;
  * page read does actual DOM work, not a fire-and-forget overlay toggle.
  */
 const READ_TIMEOUT_MS = 10_000;
+
+/** Cap on waiting for a navigation to finish loading — a broken load must not
+ *  stall the loop (Stop is only checked between turns). */
+const NAV_LOAD_TIMEOUT_MS = 12_000;
+/** One paint after 'complete' so the next read_page sees a hydrated DOM. */
+const NAV_SETTLE_MS = 300;
+
+/**
+ * Resolve once the tab finishes loading, or the cap expires (returns false).
+ * Without this every nav verb returned instantly and the model burned a whole
+ * LLM turn reading a not-yet-loaded page, then reading it again. Transient
+ * listener (same pattern as agentRunner's waitForTabComplete) plus a poll:
+ * a bfcache back/forward restore can complete without ever emitting a
+ * status event after we subscribed.
+ */
+function waitForNavComplete(tabId: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false;
+    let poll: ReturnType<typeof setInterval> | undefined;
+    const finish = (loaded: boolean): void => {
+      if (done) return;
+      done = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      if (poll !== undefined) clearInterval(poll);
+      setTimeout(() => resolve(loaded), NAV_SETTLE_MS);
+    };
+    const listener = (id: number, info: chrome.tabs.TabChangeInfo): void => {
+      if (id === tabId && info.status === 'complete') finish(true);
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    poll = setInterval(() => {
+      void chrome.tabs.get(tabId).then(
+        (t) => {
+          if (t.status === 'complete') finish(true);
+        },
+        () => finish(false), // tab gone — let the verb report what it can
+      );
+    }, 500);
+    setTimeout(() => finish(false), NAV_LOAD_TIMEOUT_MS);
+  });
+}
 
 async function resolveTarget(tabId: number, target: Target): Promise<ResolveOutcome> {
   if ('x' in target) return { ok: true, point: { x: target.x, y: target.y } };
@@ -314,7 +359,11 @@ export async function executeVerb(tabId: number, verb: BrowserVerb): Promise<Ver
     case 'scroll.wheel': {
       const r = await resolveTarget(tabId, verb.target);
       if (!r.ok) return { ok: false, resultText: r.error };
-      await mouse(tabId, 'mouseWheel', r.point, { deltaX: verb.dx, deltaY: verb.dy, modifiers: modifierBits(verb.modifiers) });
+      const mods = modifierBits(verb.modifiers);
+      for (const s of wheelSteps(verb.dx, verb.dy)) {
+        await mouse(tabId, 'mouseWheel', r.point, { deltaX: s.dx, deltaY: s.dy, modifiers: mods });
+        await sleep(SCROLL_STEP_MS);
+      }
       const at = r.point.label ? ` at ${r.point.label}` : '';
       return { ok: true, resultText: `scrolled ${verb.dx},${verb.dy}${at}` };
     }
@@ -343,7 +392,7 @@ export async function executeVerb(tabId: number, verb: BrowserVerb): Promise<Ver
     case 'scroll.intoView': {
       const idx = refIndex(verb.ref);
       if (idx === null) return { ok: false, resultText: `bad ref "${verb.ref}"` };
-      const method = verb.kind === 'element.focus' ? 'focus()' : 'scrollIntoView({block:"center"})';
+      const method = verb.kind === 'element.focus' ? 'focus()' : 'scrollIntoView({block:"center",behavior:"smooth"})';
       const r = await evaluate<{ ok?: boolean; stale?: boolean; gone?: boolean }>(
         tabId,
         `(function(){if(globalThis.__nffSnap!==${JSON.stringify(verb.snapshotId)})return{stale:true};` +
@@ -351,23 +400,31 @@ export async function executeVerb(tabId: number, verb: BrowserVerb): Promise<Ver
       );
       if (!r || r.stale) return { ok: false, resultText: 'stale ref — call read_page again' };
       if (r.gone) return { ok: false, resultText: 'that element is no longer on the page' };
+      if (verb.kind === 'scroll.intoView') await sleep(SMOOTH_SCROLL_SETTLE_MS);
       return { ok: true, resultText: verb.kind === 'element.focus' ? 'focused' : 'scrolled into view' };
     }
     case 'nav.goto': {
       await chrome.tabs.update(tabId, { url: verb.url });
-      return { ok: true, resultText: `navigating to ${verb.url}` };
+      const loaded = await waitForNavComplete(tabId);
+      return {
+        ok: true,
+        resultText: loaded ? `loaded ${verb.url}` : `navigating to ${verb.url} — still loading after ${NAV_LOAD_TIMEOUT_MS / 1000}s; read_page may see a partial page`,
+      };
     }
     case 'nav.reload': {
       await send(tabId, 'Page.reload', { ignoreCache: !!verb.hard });
-      return { ok: true, resultText: verb.hard ? 'hard reloaded' : 'reloaded' };
+      const loaded = await waitForNavComplete(tabId);
+      return { ok: true, resultText: `${verb.hard ? 'hard reloaded' : 'reloaded'}${loaded ? '' : ' — still loading; read_page may see a partial page'}` };
     }
     case 'nav.back': {
       await chrome.tabs.goBack(tabId);
-      return { ok: true, resultText: 'went back' };
+      const loaded = await waitForNavComplete(tabId);
+      return { ok: true, resultText: `went back${loaded ? '' : ' — still loading; read_page may see a partial page'}` };
     }
     case 'nav.forward': {
       await chrome.tabs.goForward(tabId);
-      return { ok: true, resultText: 'went forward' };
+      const loaded = await waitForNavComplete(tabId);
+      return { ok: true, resultText: `went forward${loaded ? '' : ' — still loading; read_page may see a partial page'}` };
     }
     case 'page.zoom': {
       await chrome.tabs.setZoom(tabId, verb.factor);

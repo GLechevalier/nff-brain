@@ -1,0 +1,53 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>dialog fixtures</title>
+<script src="/fixtures/bench.js"></script>
+<style>
+  body { font: 16px system-ui; margin: 24px; }
+  .row { margin: 14px 0; }
+  #consent { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 20; }
+  #consent-card { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    background: #fff; padding: 28px; border-radius: 8px; width: 360px; }
+</style>
+
+<div class="row">
+  <button data-bench="goal-btn">the button the agent must click</button>
+</div>
+
+<div class="row">
+  <!-- NATIVE dialogs wedge the CDP engine today (dialog.handle is a stub and
+       Page.javascriptDialogOpening is never subscribed) — these buttons exist
+       so the BLOCKED scenarios have a real target the day ACT-dialogs lands.
+       No automated case clicks them until then. -->
+  <button data-bench="native-alert">alert()</button>
+  <button data-bench="native-confirm">confirm()</button>
+  <button data-bench="native-prompt">prompt()</button>
+  <label><input type="checkbox" data-bench="beforeunload-arm"> arm beforeunload</label>
+</div>
+
+<div id="consent" data-bench="consent">
+  <div id="consent-card">
+    <h2>Before you continue</h2>
+    <p>This overlay blocks every click until it is dismissed.</p>
+    <button data-bench="consent-accept">Accept all</button>
+    <button data-bench="consent-reject">Reject all</button>
+  </div>
+</div>
+
+<script>
+  const S = { goalClicks: 0, consentChoice: '', alerts: 0, confirmResult: null, promptResult: null };
+  window.__benchState = () => ({ ...S, consentOpen: !!document.getElementById('consent') });
+  document.querySelector('[data-bench=goal-btn]').addEventListener('click', () => { S.goalClicks++; });
+  for (const choice of ['accept', 'reject']) {
+    document.querySelector(`[data-bench=consent-${choice}]`).addEventListener('click', () => {
+      S.consentChoice = choice;
+      document.getElementById('consent').remove();
+    });
+  }
+  document.querySelector('[data-bench=native-alert]').addEventListener('click', () => { alert('native alert'); S.alerts++; });
+  document.querySelector('[data-bench=native-confirm]').addEventListener('click', () => { S.confirmResult = confirm('proceed?'); });
+  document.querySelector('[data-bench=native-prompt]').addEventListener('click', () => { S.promptResult = prompt('type something', ''); });
+  addEventListener('beforeunload', (e) => {
+    if (document.querySelector('[data-bench=beforeunload-arm]').checked) e.preventDefault();
+  });
+</script>

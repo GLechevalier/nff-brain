@@ -83,6 +83,26 @@ export async function handleRequest(req: IncomingMessage, res: ServerResponse, s
   const pathname = pathnameOf(req.url);
   const route: Route | undefined = ROUTES[pathname];
   if (!route) {
+    // An acceptable origin must still get a CORS-readable answer here: a NEWER
+    // extension probing a route this server predates has to see the honest 404
+    // (its cue to fall back to an older route), and its probe starts with a
+    // preflight. A bare 404 kills that preflight, and Chrome then reports an
+    // opaque network error indistinguishable from "server not running". A
+    // hostile page's origin still gets the bare 404 with no CORS headers.
+    const unknownVerdict = checkOrigin('lenient', header(req, 'origin'), state);
+    if (unknownVerdict.ok && unknownVerdict.origin) {
+      const unknownCors = corsHeaders({
+        origin: unknownVerdict.origin,
+        privateNetwork: header(req, 'access-control-request-private-network') === 'true',
+      });
+      if (method === 'OPTIONS') {
+        res.writeHead(204, { ...unknownCors, 'content-length': '0' });
+        res.end();
+        return;
+      }
+      sendError(res, 404, 'not_found', 'no such endpoint', unknownCors);
+      return;
+    }
     sendError(res, 404, 'not_found', 'no such endpoint');
     return;
   }

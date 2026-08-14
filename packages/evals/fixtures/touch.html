@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>touch fixtures</title>
+<script src="/fixtures/bench.js"></script>
+<style>
+  body { font: 16px system-ui; margin: 24px; }
+  #tap-pad { width: 220px; height: 120px; background: #efe; border: 2px solid #4a4; }
+  #swipe-strip { width: 320px; height: 90px; overflow-x: auto; border: 2px solid #a44; }
+  #swipe-inner { width: 1600px; height: 60px; background: linear-gradient(90deg, #fee, #f88); }
+</style>
+
+<div id="tap-pad" data-bench="tap-pad">tap here</div>
+<div id="swipe-strip" data-bench="swipe-strip" data-bench-scroll><div id="swipe-inner"></div></div>
+
+<script>
+  const S = { taps: 0, touchStarts: 0 };
+  window.__benchState = () => ({ taps: S.taps, touchStarts: S.touchStarts, swipeLeft: Math.round(document.getElementById('swipe-strip').scrollLeft) });
+  document.getElementById('tap-pad').addEventListener('click', () => { S.taps++; });
+  document.getElementById('tap-pad').addEventListener('touchstart', () => { S.touchStarts++; }, { passive: true });
+</script>

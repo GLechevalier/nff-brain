@@ -67,6 +67,17 @@ if (!fs.existsSync(path.join(SRC, 'manifest.json'))) {
     process.exit(1);
   }
 }
+{
+  // A dist built with NFF_BRAIN_BENCH=1 embeds the act-benchmark driver in
+  // sw.js (see build.mjs) — an unauthenticated loopback command channel.
+  // Shipping it would be a remote-control backdoor — refuse.
+  const sw = fs.readFileSync(path.join(SRC, 'sw.js'), 'utf8');
+  if (sw.includes('__NFF_BENCH_DRIVER__')) {
+    console.error('zip: dist/sw.js contains the bench-driver sentinel — this is the BENCH build variant.');
+    console.error('     rebuild without NFF_BRAIN_BENCH before packaging: npm run build');
+    process.exit(1);
+  }
+}
 
 const names = walk(SRC);
 const local = [];

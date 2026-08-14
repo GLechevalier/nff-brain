@@ -11,6 +11,7 @@ import {
   isAgentStatusResponse,
   isChatResponse,
   isClipsMapResponse,
+  isExportResponse,
   isGraphResponse,
   isHelloResponse,
   isImportResponse,
@@ -35,6 +36,7 @@ import type {
   ChatTurn,
   ClipResponse,
   ClipsMapResponse,
+  ExportResponse,
   GraphResponse,
   HelloResponse,
   ImportResponse,
@@ -106,8 +108,15 @@ async function call(
       signal: AbortSignal.timeout(timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
+    // 'timeout' and 'network' are distinct codes on purpose: a timeout means
+    // the route exists and the server is just slow (retrying elsewhere is
+    // wrong), while 'network' covers both "nothing listening" AND an old
+    // server 404ing the CORS preflight for a route it predates — Chrome
+    // reports that blocked preflight as the same opaque fetch failure, so a
+    // version-skew fallback has to key off 'network' (see runPairedLoop).
     const name = (err as Error)?.name;
-    throw new HttpError(0, 'network', name === 'TimeoutError' ? 'the brain did not answer in time' : 'no brain listening');
+    if (name === 'TimeoutError') throw new HttpError(0, 'timeout', 'the brain did not answer in time');
+    throw new HttpError(0, 'network', 'no brain listening');
   }
 
   const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
@@ -187,6 +196,13 @@ export async function getNodes(port: number, token: string, limit?: number): Pro
 export async function getGraph(port: number, token: string): Promise<GraphResponse> {
   const body = await call(port, '/v1/graph', { token });
   if (!isGraphResponse(body)) throw new HttpError(0, 'protocol', 'unexpected graph response');
+  return body;
+}
+
+/** The merged brain with FULL node content — seeds the local BYOK retrieval store. */
+export async function getExport(port: number, token: string): Promise<ExportResponse> {
+  const body = await call(port, '/v1/export', { token });
+  if (!isExportResponse(body)) throw new HttpError(0, 'protocol', 'unexpected export response');
   return body;
 }
 
@@ -346,6 +362,41 @@ export async function postActStep(port: number, token: string, prompt: string): 
     body: JSON.stringify({ prompt }),
   })) as { text?: unknown };
   return typeof body.text === 'string' ? body.text : '';
+}
+
+/**
+ * One brain step through the server's PERSISTENT per-run claude session — the
+ * fast path: the server keeps one warm `claude` process per runId, so only
+ * `message` (this turn's delta) is new tokens. `bootstrap` (the full legacy
+ * prompt) rides along on every call purely as respawn fuel: if the server's
+ * process died or expired, it replays the compact history transparently.
+ * A 404 means an older server without the route — the caller falls back to
+ * postActStep for the rest of the run.
+ */
+export async function postActSessionStep(
+  port: number,
+  token: string,
+  runId: string,
+  bootstrap: string,
+  message: string,
+): Promise<string> {
+  const body = (await call(port, '/v1/act/session/step', {
+    method: 'POST',
+    token,
+    timeoutMs: CHAT_TIMEOUT_MS,
+    body: JSON.stringify({ runId, bootstrap, message }),
+  })) as { text?: unknown };
+  return typeof body.text === 'string' ? body.text : '';
+}
+
+/** Fire-and-forget session cleanup at run end — the server's idle timer is the
+ *  backstop when the SW dies before this is sent. */
+export async function postActSessionEnd(port: number, token: string, runId: string): Promise<void> {
+  try {
+    await call(port, '/v1/act/session/end', { method: 'POST', token, body: JSON.stringify({ runId }) });
+  } catch {
+    /* cleanup only — never let it fail a finished run */
+  }
 }
 
 // ── Record & automate (paired mode) ─────────────────────────────────────────

@@ -1,8 +1,30 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyBrain, placeNode } from '@nff-brain/core/types';
 import type { BrainFile, BrainNode } from '@nff-brain/core/types';
-import { applyRemap, buildImportPayload } from '../src/migrate.js';
+
+vi.mock('../src/storage.js', () => ({
+  getActivity: vi.fn(async () => []),
+  getBrain: vi.fn(async () => null),
+  getBrainModePref: vi.fn(async () => null),
+  getClipQueue: vi.fn(async () => []),
+  setActivity: vi.fn(),
+  setBrain: vi.fn(),
+  setClipQueue: vi.fn(),
+  setClipSeen: vi.fn(),
+  setDrainState: vi.fn(),
+  setMigrationBackup: vi.fn(),
+}));
+vi.mock('../src/client.js', () => ({
+  postImport: vi.fn(async () => ({ ok: true, imported: 0, remapped: [], evicted: [] })),
+  postClip: vi.fn(),
+}));
+
+import { applyRemap, buildImportPayload, migrateIfNeeded } from '../src/migrate.js';
+import * as storage from '../src/storage.js';
+import * as client from '../src/client.js';
 import type { ActivityRecord } from '../src/schema.js';
+
+const PAIRING = { port: 7373, token: 't', clientId: 'c', serverId: 's', pairedAt: '' };
 
 // Pure halves of the migration: payload assembly and remap application. The
 // network/probe wiring is covered by importRoutes.test.ts (server side) and
@@ -84,5 +106,34 @@ describe('applyRemap', () => {
     const { records, changed } = applyRemap(input, []);
     expect(changed).toBe(false);
     expect(records).toEqual(input);
+  });
+});
+
+describe('migrateIfNeeded — the brain-mode gate', () => {
+  beforeEach(() => {
+    (globalThis as Record<string, unknown>).chrome = {
+      alarms: { clear: vi.fn(async () => true) },
+    };
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    delete (globalThis as Record<string, unknown>).chrome;
+  });
+
+  it('with an explicit brain-mode preference, NOTHING migrates — the local brain is live', async () => {
+    vi.mocked(storage.getBrainModePref).mockResolvedValue('byok');
+    vi.mocked(storage.getBrain).mockResolvedValue(fixture());
+    await migrateIfNeeded(PAIRING);
+    expect(client.postImport).not.toHaveBeenCalled();
+    expect(storage.setBrain).not.toHaveBeenCalled();
+  });
+
+  it('with no preference stored (true legacy leftover), the sweep still runs', async () => {
+    vi.mocked(storage.getBrainModePref).mockResolvedValue(null);
+    vi.mocked(storage.getBrain).mockResolvedValue(fixture());
+    await migrateIfNeeded(PAIRING);
+    expect(client.postImport).toHaveBeenCalledTimes(1);
+    expect(storage.setBrain).toHaveBeenCalledWith(null);
   });
 });

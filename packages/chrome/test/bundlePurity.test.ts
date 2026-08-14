@@ -122,6 +122,9 @@ describe('source purity', () => {
       // Web-agent action vocabulary + perception contract (CDP engine).
       'browserVerbs',
       'pageSnapshot',
+      // Act-benchmark wire contract — used only by benchDriver.ts, which only
+      // NFF_BRAIN_BENCH=1 builds bundle (zip.mjs refuses that variant).
+      'benchProtocol',
       // Record-and-automate: trace schema, compaction, and the workflow
       // distiller/applier the standalone (BYOK) drain runs locally.
       'trace',
@@ -181,14 +184,21 @@ describe('the capture choke point', () => {
     // point (yet another distinct question — may the CDP engine attach to /
     // act on this url — never a copy of shouldCapture). Workflow-site labeling
     // now happens server-side (traceRoutes.ts's hostOf) — no chrome-side reader.
+    // actionIntent.ts reads the hostname of a URL the USER just typed into
+    // chat (extractExplicitUrl) — labeling their own navigate request, never
+    // deciding capture. standaloneTraceDistill.ts labels a finished
+    // recording's site for the workflow spec (the browser-side sibling of
+    // traceRoutes.ts's hostOf) — the recording already passed the gate.
     const readers = FILES.filter((f) => /\.hostname\b/.test(code(f.text)));
     expect(readers.map((r) => r.rel).sort()).toEqual([
       'content/githubClassify.ts',
       'sidepanel/main.ts',
       'src/actGate.ts',
+      'src/actionIntent.ts',
       'src/activity.ts',
       'src/agentGate.ts',
       'src/gate.ts',
+      'src/standaloneTraceDistill.ts',
     ]);
   });
 
@@ -233,22 +243,34 @@ describe('MV3 service-worker discipline', () => {
     'src/actGate.ts',
     'src/actPlan.ts',
     'src/actTools.ts',
+    // Coding agent (File System Access): jail, gate, fs ops, tools, IDB handle
+    // store — all state lives on nb.actRun / nb.codeProject / IndexedDB.
+    'src/codePath.ts',
+    'src/codeGate.ts',
+    'src/codeFs.ts',
+    'src/codeTools.ts',
+    'src/fsHandles.ts',
     'src/actRun.ts',
     'src/cursorScript.ts',
     'src/attentionScript.ts',
     'src/snapshotScript.ts',
+    // Act-benchmark driver (bench builds only — see benchBuild.test.ts). Loop
+    // dedupe is server-side (boot-id retirement) precisely so these two hold
+    // no worker state.
+    'src/benchDriver.ts',
+    'src/swBench.ts',
     // Record-and-automate (traceCapture.ts has the documented appendChain and is
     // asserted separately below).
   ])('%s declares no mutable module-level state', (rel) => {
     expect(topLevelBindings(FILES.find((f) => f.rel === rel)!.text)).toEqual([]);
   });
 
-  it('permits exactly three documented module-level variables', () => {
-    // connection.ts: the in-flight probe promise. actStore.ts, traceCapture.ts:
-    // their mutation/append serialization chains. All three are harmless to
-    // lose on worker death (death means nothing is in flight) and each must
-    // keep its rationale inline. (brainStore.ts's mutateChain — the standalone
-    // brain's write path — was removed with standalone graph storage.)
+  it('permits exactly four documented module-level variables', () => {
+    // connection.ts: the in-flight probe promise. actStore.ts, traceCapture.ts,
+    // brainStore.ts: their mutation/append serialization chains (brainStore's
+    // is BACK — the local brain is live again as BYOK retrieval fuel). All
+    // four are harmless to lose on worker death (death means nothing is in
+    // flight) and each must keep its rationale inline.
     const conn = FILES.find((f) => f.rel === 'src/connection.ts')!;
     expect(topLevelBindings(conn.text)).toEqual(['inFlightProbe']);
     expect(conn.text).toMatch(/harmless/i); // the rationale must stay next to it
@@ -258,6 +280,9 @@ describe('MV3 service-worker discipline', () => {
     const trace = FILES.find((f) => f.rel === 'src/traceCapture.ts')!;
     expect(topLevelBindings(trace.text)).toEqual(['appendChain']);
     expect(trace.text).toMatch(/harmless/i);
+    const brainStore = FILES.find((f) => f.rel === 'src/brainStore.ts')!;
+    expect(topLevelBindings(brainStore.text)).toEqual(['mutateChain']);
+    expect(brainStore.text).toMatch(/harmless/i);
   });
 
   it('registers every listener synchronously at the top level of sw.ts', () => {

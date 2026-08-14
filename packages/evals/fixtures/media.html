@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>media & downloads fixtures</title>
+<script src="/fixtures/bench.js"></script>
+<style>
+  body { font: 16px system-ui; margin: 24px; }
+  .row { margin: 14px 0; }
+  #stage { width: 420px; height: 120px; background: #123; color: #8cf; position: relative; }
+  #playhead { position: absolute; bottom: 0; left: 0; height: 6px; background: #8cf; width: 0; }
+  #stage span { position: absolute; left: 10px; top: 10px; }
+</style>
+
+<div class="row">
+  <div id="stage" data-bench="player-stage"><span data-bench="player-status">stopped @ 0s</span><div id="playhead"></div></div>
+  <button data-bench="player-play">play</button>
+  <button data-bench="player-pause">pause</button>
+  <button data-bench="player-seek30">seek to 30s</button>
+  <input type="range" data-bench="player-volume" min="0" max="100" value="50" aria-label="volume"> volume
+  <select data-bench="player-speed" aria-label="speed"><option>0.5</option><option selected>1</option><option>2</option></select> speed
+</div>
+
+<div class="row">
+  <a data-bench="dl-link" href="/bench/dl/report.txt">download report.txt</a>
+</div>
+
+<script>
+  const S = { playing: false, pos: 0, volume: 50, speed: 1 };
+  const DUR = 60;
+  let timer = null;
+  const status = document.querySelector('[data-bench=player-status]');
+  const head = document.getElementById('playhead');
+  function paint() {
+    status.textContent = (S.playing ? 'playing' : 'stopped') + ' @ ' + Math.round(S.pos) + 's';
+    head.style.width = (S.pos / DUR) * 420 + 'px';
+  }
+  function tick() { S.pos = Math.min(DUR, S.pos + 0.5 * S.speed); paint(); if (S.pos >= DUR) stop(); }
+  function play() { if (!S.playing) { S.playing = true; timer = setInterval(tick, 500); paint(); } }
+  function stop() { S.playing = false; clearInterval(timer); paint(); }
+  document.querySelector('[data-bench=player-play]').addEventListener('click', play);
+  document.querySelector('[data-bench=player-pause]').addEventListener('click', stop);
+  document.querySelector('[data-bench=player-seek30]').addEventListener('click', () => { S.pos = 30; paint(); });
+  document.querySelector('[data-bench=player-volume]').addEventListener('input', (e) => { S.volume = Number(e.target.value); });
+  document.querySelector('[data-bench=player-speed]').addEventListener('change', (e) => { S.speed = Number(e.target.value); });
+  window.__benchState = () => ({ playing: S.playing, pos: Math.round(S.pos), volume: S.volume, speed: S.speed });
+
+  // Tag the download link with the run nonce so the server-side asset ledger
+  // can attribute the request.
+  const run = new URLSearchParams(location.search).get('run') || '';
+  const dl = document.querySelector('[data-bench=dl-link]');
+  if (run) dl.href = '/bench/dl/report.txt?run=' + encodeURIComponent(run);
+</script>
