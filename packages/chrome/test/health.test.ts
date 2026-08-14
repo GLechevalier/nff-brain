@@ -58,6 +58,12 @@ describe('derivePhase', () => {
     expect(derivePhase(h, true, NOW)).toBe('rejected');
     expect(derivePhase(h, true, NOW + 86_400_000)).toBe('rejected');
   });
+
+  it('is displayed as workspace_mismatch until the next probe outcome overwrites it', () => {
+    const h = health({ phase: 'workspace_mismatch', lastOkAt: new Date(NOW).toISOString() });
+    expect(derivePhase(h, true, NOW)).toBe('workspace_mismatch');
+    expect(derivePhase(h, true, NOW + 86_400_000)).toBe('workspace_mismatch');
+  });
 });
 
 describe('applyProbe', () => {
@@ -104,6 +110,24 @@ describe('applyProbe', () => {
     const next = applyProbe(health(), { ok: false, rejected: true, error: '401' }, NOW);
     expect(next.phase).toBe('rejected');
     expect(dueForProbe(next, NOW + 86_400_000 * 365)).toBe(false);
+  });
+
+  it('unlike a rejection, a workspace mismatch keeps retrying on the normal backoff', () => {
+    // Switching back to the original workspace's server (or re-pairing for the
+    // new one) must self-heal it — unlike `rejected`, this must NOT wedge
+    // dueForProbe forever.
+    const next = applyProbe(health(), { ok: false, mismatch: true, error: 'workspace_mismatch' }, NOW);
+    expect(next.phase).toBe('workspace_mismatch');
+    expect(next.nextProbeAtMs).toBe(NOW + 120_000);
+    expect(dueForProbe(next, NOW + 120_000)).toBe(true);
+
+    // And a subsequent healthy probe clears it back to connected, same as any
+    // other transient failure.
+    const recovered = applyProbe(next, {
+      ok: true,
+      status: { projectNodes: 1, globalNodes: 1, mergedNodes: 2, workspaceRoot: '/ws', serverVersion: '1', queuePending: 0 },
+    }, NOW + 120_000);
+    expect(recovered.phase).toBe('connected');
   });
 
   it('keeps nextProbeAtMs JSON-round-trippable', () => {

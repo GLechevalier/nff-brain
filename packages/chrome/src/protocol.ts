@@ -489,6 +489,49 @@ export function isChatResponse(v: unknown): v is ChatResponse {
   );
 }
 
+// ── GET /v1/workflows + POST /v1/trace — paired Record & automate ────────────
+
+export interface WorkflowSummary {
+  id: string;
+  title: string;
+  intent: string;
+  site: string;
+  params: string[];
+}
+
+export interface WorkflowsResponse {
+  ok: true;
+  items: WorkflowSummary[];
+}
+
+export function isWorkflowsResponse(v: unknown): v is WorkflowsResponse {
+  return (
+    isObj(v) &&
+    v.ok === true &&
+    Array.isArray(v.items) &&
+    v.items.every(
+      (i: unknown) =>
+        isObj(i) &&
+        typeof i.id === 'string' &&
+        typeof i.title === 'string' &&
+        typeof i.intent === 'string' &&
+        typeof i.site === 'string' &&
+        Array.isArray(i.params) &&
+        i.params.every((p: unknown) => typeof p === 'string'),
+    )
+  );
+}
+
+export interface TraceDistillResponse {
+  ok: true;
+  nodeId: string;
+  evicted: string[];
+}
+
+export function isTraceDistillResponse(v: unknown): v is TraceDistillResponse {
+  return isObj(v) && v.ok === true && typeof v.nodeId === 'string' && Array.isArray(v.evicted);
+}
+
 // ── SW ↔ content script (LinkedIn agent adapter) ─────────────────────────────
 //
 // A THIRD, narrower channel than the two above: only two verbs ever cross it,
@@ -660,6 +703,6 @@ export type SwToPopup =
   | { type: 'providerTest'; result: ProviderTestResult }
   | { type: 'actStatus'; run: ActRunState | null }
   | { type: 'traceStatus'; recording: boolean; eventCount: number; pending: { id: string; events: number; startUrl: string; title?: string } | null }
-  | { type: 'workflows'; items: Array<{ id: string; title: string; intent: string; site: string; params: string[] }> };
+  | { type: 'workflows'; items: WorkflowSummary[] };
 
 export type SwToPanel = SwToPopup;

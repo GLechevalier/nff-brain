@@ -22,6 +22,8 @@ import {
   isRetractResponse,
   isSearchResponse,
   isStatusResponse,
+  isTraceDistillResponse,
+  isWorkflowsResponse,
 } from './protocol.js';
 import type {
   AgentCardResult,
@@ -43,9 +45,12 @@ import type {
   RetractResponse,
   SearchResponse,
   StatusResponse,
+  TraceDistillResponse,
   WebAgentListTarget,
   WebAgentVerb,
+  WorkflowsResponse,
 } from './protocol.js';
+import type { TraceRecord } from '@nff-brain/core/trace';
 
 export class HttpError extends Error {
   constructor(
@@ -58,6 +63,17 @@ export class HttpError extends Error {
   /** 401/403 mean the pairing is dead — retrying forever is pointless. */
   get rejected(): boolean {
     return this.status === 401 || this.status === 403;
+  }
+  /**
+   * 409 workspace_mismatch: the token is still good, but `nff-brain serve` is
+   * now bound to a DIFFERENT project than the one this pairing was made for
+   * (it was stopped and restarted against another workspace on the same
+   * port). Distinct from `rejected` — the token isn't dead, and simply
+   * switching back to the original workspace's server self-heals it, so the
+   * caller must keep retrying rather than giving up.
+   */
+  get workspaceMismatch(): boolean {
+    return this.status === 409 && this.code === 'workspace_mismatch';
   }
 }
 
@@ -328,6 +344,27 @@ export async function postActStep(port: number, token: string, prompt: string): 
     body: JSON.stringify({ prompt }),
   })) as { text?: unknown };
   return typeof body.text === 'string' ? body.text : '';
+}
+
+// ── Record & automate (paired mode) ─────────────────────────────────────────
+
+export async function getWorkflows(port: number, token: string): Promise<WorkflowsResponse> {
+  const body = await call(port, '/v1/workflows', { token });
+  if (!isWorkflowsResponse(body)) throw new HttpError(0, 'protocol', 'unexpected workflows response');
+  return body;
+}
+
+/** Distill a finished recording into a workflow node server-side. Same long
+ *  timeout as chat/act — it waits out a full claude -p round trip. */
+export async function postTrace(port: number, token: string, trace: TraceRecord): Promise<TraceDistillResponse> {
+  const body = await call(port, '/v1/trace', {
+    method: 'POST',
+    token,
+    timeoutMs: CHAT_TIMEOUT_MS,
+    body: JSON.stringify(trace),
+  });
+  if (!isTraceDistillResponse(body)) throw new HttpError(0, 'protocol', 'unexpected trace response');
+  return body;
 }
 
 /**

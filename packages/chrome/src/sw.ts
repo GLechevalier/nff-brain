@@ -31,6 +31,7 @@ import {
   getMcpServers,
   getMcpTools,
   getNodes,
+  getWorkflows as getWorkflowsFromServer,
   moveGraphNode,
   rejectAgentPlan,
   removeMcpServer,
@@ -77,6 +78,7 @@ import { testProviderKey } from './providerClient.js';
 import { endActionRun, grantOrigin, startActionRun, stopActionRun } from './actRun.js';
 import { cancelTraceRecording, onTraceEvent, startTraceRecording, stopTraceRecording } from './traceCapture.js';
 import { distillPendingTrace } from './standaloneTraceDistill.js';
+import { distillPairedTrace } from './pairedTraceDistill.js';
 import { readLocalBrain } from './brainStore.js';
 import { getActHostAllow, getActRun, getTraceActive, getTracePending, setActHostAllow } from './storage.js';
 import { mutateActRun } from './actStore.js';
@@ -428,6 +430,15 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     }
 
     case 'getWorkflows': {
+      const pairing = await getPairing();
+      if (pairing) {
+        try {
+          const res = await getWorkflowsFromServer(pairing.port, pairing.token);
+          return { type: 'workflows', items: res.items };
+        } catch {
+          return { type: 'workflows', items: [] };
+        }
+      }
       const brain = await readLocalBrain();
       const items = brain.nodes
         .filter((n) => n.origin === 'workflow' && n.workflow)
@@ -472,10 +483,14 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'traceStop': {
       const rec = await stopTraceRecording();
-      // Standalone/BYOK: distill into a workflow node in the background. Paired
-      // mode has no provider key here, so it no-ops (paired posts to /v1/trace
-      // in a later milestone). Fire-and-forget — the panel polls tracePending.
-      if (rec && rec.events.length > 0) void distillPendingTrace();
+      // Distill into a workflow node in the background — server-side via
+      // /v1/trace when paired, BYOK locally otherwise. Fire-and-forget: the
+      // panel polls tracePending, which the distiller clears on success.
+      if (rec && rec.events.length > 0) {
+        const pairing = await getPairing();
+        if (pairing) void distillPairedTrace(pairing);
+        else void distillPendingTrace();
+      }
       return traceStatus();
     }
 

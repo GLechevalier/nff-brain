@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPairedActPrompt, parseActAction } from '../src/actTools.js';
+import { buildPairedActPrompt, parseActAction, renderActContract } from '../src/actTools.js';
 
 describe('parseActAction', () => {
   it('parses a single JSON action with args', () => {
@@ -30,6 +30,28 @@ describe('parseActAction', () => {
   it('returns invalid when there is no usable JSON action', () => {
     expect(parseActAction('I think we should click the button.')).toEqual({ kind: 'invalid' });
     expect(parseActAction('{"foo":1}')).toEqual({ kind: 'invalid' });
+  });
+
+  it('parses a tabs action (list, switch, open, close, duplicate)', () => {
+    expect(parseActAction('{"action":"tabs","args":{"action":"list"}}')).toEqual({
+      kind: 'action',
+      name: 'tabs',
+      args: { action: 'list' },
+    });
+    expect(parseActAction('{"action":"tabs","args":{"action":"switch","tabId":42}}')).toEqual({
+      kind: 'action',
+      name: 'tabs',
+      args: { action: 'switch', tabId: 42 },
+    });
+  });
+});
+
+describe('renderActContract', () => {
+  it('includes the tabs tool alongside the other action tools', () => {
+    const contract = renderActContract();
+    expect(contract).toContain('tabs —');
+    expect(contract).toContain('read_page —');
+    expect(contract).toContain('navigate —');
   });
 });
 

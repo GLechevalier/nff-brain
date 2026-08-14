@@ -21,6 +21,7 @@
 
 import { agentAdapterById } from '../src/agentRegistry.js';
 import { detectActionIntent, type ActionIntent } from '../src/actionIntent.js';
+import { detectPageActionIntent } from '../src/pageActionIntent.js';
 import { DEFAULT_PORT, PANEL_POLL_MS } from '../src/protocol.js';
 import type {
   ChatTurn,
@@ -337,7 +338,7 @@ async function pollActStatus(): Promise<void> {
   if (live) scheduleActPoll(1000);
 }
 
-async function startActRun(goal: string, workflowId?: string): Promise<void> {
+async function startActRun(goal: string, workflowId?: string, maxActionsOverride?: number): Promise<void> {
   showActError(null);
   if (!goal) {
     showActError('Describe a task first.');
@@ -348,7 +349,7 @@ async function startActRun(goal: string, workflowId?: string): Promise<void> {
     showActError('Could not find the active tab in this window.');
     return;
   }
-  const maxActions = Number(($('act-budget') as HTMLInputElement).value) || undefined;
+  const maxActions = maxActionsOverride ?? (Number(($('act-budget') as HTMLInputElement).value) || undefined);
   const reply = await send({ type: 'actStart', goal, tabId, maxActions, workflowId });
   if (reply.type === 'error') {
     showActError(reply.message);
@@ -652,6 +653,36 @@ async function submitActionIntent(intent: ActionIntent): Promise<void> {
   paintTranscript();
 }
 
+// A one-off click/scroll/type instruction from chat needs far less budget
+// than a multi-step recruiting goal or workflow replay (whose #act-budget
+// field defaults to 40) — read_page + one interact + maybe a re-check.
+const MANUAL_PAGE_ACTION_MAX_ACTIONS = 6;
+
+/**
+ * Manual-mode chat's "click the X button" shortcut. Reuses the CDP web
+ * agent's existing run/grant machinery (startActRun/#act-run/#act-grant)
+ * unchanged — the permission prompt and progress log render in the Saved
+ * workflows panel exactly as they do for a workflow replay; the chat only
+ * gets a short pointer to it. nb.actRun is a single global run, so this
+ * refuses to start a second one on top of an already-active run instead of
+ * silently clobbering it.
+ */
+async function submitPageAction(instruction: string): Promise<void> {
+  const statusReply = await send({ type: 'getActStatus' });
+  const activeRun =
+    statusReply.type === 'actStatus' &&
+    statusReply.run &&
+    (statusReply.run.phase === 'running' || statusReply.run.phase === 'awaiting_grant' || statusReply.run.phase === 'stopping');
+  if (activeRun) {
+    showFieldError('prompt-error', 'a run is already in progress below — stop or clear it first');
+    return;
+  }
+
+  await startActRun(instruction, undefined, MANUAL_PAGE_ACTION_MAX_ACTIONS);
+  transcript.push({ kind: 'answer', text: 'Working on it — see the run below.', sources: [] });
+  paintTranscript();
+}
+
 async function submitGoal(message: string): Promise<void> {
   const maxActions = Number(($('max-actions') as HTMLInputElement).value) || 5;
   const listTarget = selectedListTarget();
@@ -690,7 +721,9 @@ async function submitPrompt(): Promise<void> {
 
   try {
     const intent = detectActionIntent(message);
+    const pageAction = mode === 'manual' && !intent ? detectPageActionIntent(message) : null;
     if (intent) await submitActionIntent(intent);
+    else if (pageAction) await submitPageAction(pageAction.instruction);
     else if (mode === 'manual') await submitChat(message);
     else await submitGoal(message);
   } finally {
@@ -1037,13 +1070,13 @@ async function boot(): Promise<void> {
   wireGraphCanvas();
   setMode('manual'); // Claude-Code-style default
 
-  // Setup is the panel's landing tab — the icon opens straight here now that
-  // there is no separate toolbar popup to greet the user first. Assigned
-  // through a SidePanelTab-typed local (not the 'setup' literal directly) so
-  // TS keeps tracking currentTab as the full union below, not the literal —
-  // it can genuinely change before the awaits later in this function settle
-  // (e.g. selectTab() firing from a click on the Setup tab entry itself).
-  const initialTab: SidePanelTab = 'setup';
+  // Agent is the panel's landing tab — the icon opens straight into the chat
+  // + web-agent view now that there is no separate toolbar popup to greet the
+  // user first. Assigned through a SidePanelTab-typed local (not the 'brain'
+  // literal directly) so TS keeps tracking currentTab as the full union below,
+  // not the literal — it can genuinely change before the awaits later in this
+  // function settle (e.g. selectTab() firing from a click on a tab entry itself).
+  const initialTab: SidePanelTab = 'brain';
   currentTab = initialTab;
   switchTab(initialTab);
 

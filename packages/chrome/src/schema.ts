@@ -68,11 +68,17 @@ export interface Pairing {
  * every minute forever is pure noise in the server log and pure battery drain.
  * It gets its own phase, its own copy, and no backoff.
  *
+ * 'workspace_mismatch' is ALSO not 'disconnected' or 'rejected': the token is
+ * still valid, but `nff-brain serve` is now bound to a different project than
+ * the one this pairing was made for (see client.ts's HttpError.workspaceMismatch).
+ * Unlike 'rejected' it keeps retrying on the normal backoff — switching back to
+ * the original workspace's server (or re-pairing for the new one) self-heals it.
+ *
  * 'standalone' = no pairing stored but a BYOK provider key is configured: the
  * brain lives in extension storage and LLM calls go straight to the provider.
  * A stored pairing always wins — standalone never activates while one exists.
  */
-export type ConnectionPhase = 'unpaired' | 'connected' | 'disconnected' | 'rejected' | 'standalone';
+export type ConnectionPhase = 'unpaired' | 'connected' | 'disconnected' | 'rejected' | 'workspace_mismatch' | 'standalone';
 
 export interface Health {
   phase: ConnectionPhase;

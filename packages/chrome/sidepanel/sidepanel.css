@@ -105,6 +105,7 @@ code.inline {
 .dot.connected { background: #4ade80; }
 .dot.disconnected { background: #f87171; }
 .dot.rejected { background: #fbbf24; }
+.dot.workspace_mismatch { background: #fbbf24; }
 
 .banner {
   padding: 8px 10px;

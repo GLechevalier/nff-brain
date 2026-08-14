@@ -47,7 +47,7 @@ export function paintHeader(nodes: NodesResponse | null, connected: boolean): vo
 
 export type SidePanelTab = 'setup' | 'brain' | 'mcp' | 'graph' | 'settings';
 
-const TABS: readonly SidePanelTab[] = ['setup', 'brain', 'mcp', 'graph', 'settings'];
+const TABS: readonly SidePanelTab[] = ['brain', 'setup', 'mcp', 'graph', 'settings'];
 
 export function switchTab(tab: SidePanelTab): void {
   for (const t of TABS) {
@@ -745,6 +745,7 @@ const SETUP_PHASE_TEXT: Record<PublicState['phase'], string> = {
   connected: 'Connected',
   disconnected: 'Disconnected',
   rejected: 'Pairing expired',
+  workspace_mismatch: 'Different project now',
   unpaired: 'Not paired',
   standalone: 'Standalone',
 };
@@ -779,7 +780,7 @@ export function paintSetup(state: PublicState, deps: SetupDeps, nowMs = Date.now
   const showError = phase !== 'connected' && phase !== 'standalone' && !!health.lastError;
   $('setup-conn-error').textContent = health.lastError ?? '';
   $('setup-conn-error').classList.toggle('hidden', !showError);
-  $('setup-retry').classList.toggle('hidden', phase !== 'disconnected');
+  $('setup-retry').classList.toggle('hidden', phase !== 'disconnected' && phase !== 'workspace_mismatch');
 
   $('setup-migration').textContent =
     state.migrationPending !== null
@@ -788,10 +789,13 @@ export function paintSetup(state: PublicState, deps: SetupDeps, nowMs = Date.now
   $('setup-migration').classList.toggle('hidden', state.migrationPending === null);
 
   // Standalone keeps the pair form reachable — pairing is the doorway to
-  // migrating the local brain into a real server.
-  const needsPairing = phase === 'unpaired' || phase === 'rejected' || phase === 'standalone';
+  // migrating the local brain into a real server. workspace_mismatch keeps it
+  // reachable too, so re-pairing for the NEW project is one click away.
+  const needsPairing =
+    phase === 'unpaired' || phase === 'rejected' || phase === 'standalone' || phase === 'workspace_mismatch';
   $('setup-pair-form').classList.toggle('hidden', !needsPairing);
-  ($('setup-connect') as HTMLButtonElement).textContent = phase === 'rejected' ? 'Re-pair' : 'Connect';
+  ($('setup-connect') as HTMLButtonElement).textContent =
+    phase === 'rejected' || phase === 'workspace_mismatch' ? 'Re-pair' : 'Connect';
 
   // ── capture ─────────────────────────────────────────────────────────────
   const toggle = $('setup-capture-toggle');

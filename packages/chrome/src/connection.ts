@@ -95,6 +95,7 @@ async function runProbe({ force }: { force?: boolean }): Promise<ConnectionPhase
     next = applyProbe(health, {
       ok: false,
       rejected: http?.rejected ?? false,
+      mismatch: http?.workspaceMismatch ?? false,
       error: http?.message ?? 'probe failed',
     }, now);
   }

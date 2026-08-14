@@ -31,8 +31,8 @@ export interface ActContext {
 }
 
 export const ACT_STEERING = [
-  'You are the nff-brain web agent, driving ONE browser tab with a real cursor the user can watch.',
-  'Work toward the GOAL below using the tools. Always call read_page first, and again after anything changes the page (a click that navigates, a submit) — element refs (e1, e2, …) are only valid for the most recent read_page.',
+  'You are the nff-brain web agent, driving a browser tab with a real cursor the user can watch. Use the tabs tool to see what other tabs are open and to switch which tab you are driving.',
+  'Work toward the GOAL below using the tools. Always call read_page first, and again after anything changes the page (a click that navigates, a submit, a tab switch) — element refs (e1, e2, …) are only valid for the most recent read_page.',
   'Prefer refs over raw coordinates. Take the smallest next step, observe, then continue.',
   'NEVER enter passwords, payment details, or other credentials. NEVER attempt to solve a CAPTCHA or bot check — if you hit one, stop and tell the user.',
   'When the goal is done (or you are blocked and need the user), stop calling tools and reply with a short plain summary of what you did.',
@@ -153,6 +153,20 @@ const NAVIGATE: ToolSpec = {
     required: ['action'],
   },
 };
+const TABS: ToolSpec = {
+  name: 'tabs',
+  description:
+    'List open browser tabs, or switch/open/duplicate/close one. Call action:list first to see tab ids, titles, and urls before switching — switching makes that tab the one you drive next, so read_page again afterward.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['list', 'switch', 'open', 'close', 'duplicate'] },
+      tabId: { type: 'number', description: 'Required for switch, close, duplicate — from a prior list.' },
+      url: { type: 'string', description: 'Required for open.' },
+    },
+    required: ['action'],
+  },
+};
 
 // ── tool input → verb ────────────────────────────────────────────────────────
 
@@ -200,6 +214,13 @@ function toVerbInput(name: string, input: Record<string, unknown>, snapshotId: s
       if (input.action === 'goto') return { kind: 'nav.goto', url: input.url };
       if (input.action === 'reload') return { kind: 'nav.reload', hard: input.hard };
       return { kind: `nav.${input.action}` };
+    case 'tabs':
+      if (input.action === 'list') return { kind: 'tab.list' };
+      if (input.action === 'switch') return { kind: 'tab.switch', tabId: input.tabId };
+      if (input.action === 'open') return { kind: 'tab.open', url: input.url, active: true };
+      if (input.action === 'close') return { kind: 'tab.close', tabId: input.tabId };
+      if (input.action === 'duplicate') return { kind: 'tab.duplicate', tabId: input.tabId };
+      return null;
     default:
       return null;
   }
@@ -227,7 +248,10 @@ async function runVerb(ctx: ActContext, verb: BrowserVerb, snapshotIdRef: { id: 
       ctx.stopped = true;
       return { ok: false, resultText: `action budget of ${ctx.maxActions} reached — stopping` };
     }
-    const origin = await currentOrigin(ctx.tabId);
+    // tab.close targets a tab that may not be the one currently driven — gate on
+    // ITS origin, not ctx.tabId's, or closing an unrelated tab would be judged
+    // against the wrong site's grant.
+    const origin = verb.kind === 'tab.close' ? await currentOrigin(verb.tabId) : await currentOrigin(ctx.tabId);
     if (cls === 'interact' || cls === 'destructive') {
       const persisted = (await getActHostAllow()).byOrigin[origin ?? ''];
       const decision = decideAct({ verbClass: cls, persisted, sessionGranted: origin != null && ctx.grantedOrigins.includes(origin) });
@@ -238,6 +262,14 @@ async function runVerb(ctx: ActContext, verb: BrowserVerb, snapshotIdRef: { id: 
   }
 
   const res = await executeVerb(ctx.tabId, verb);
+  // A tab.switch / active tab.open / tab.duplicate rebinds which tab is driven:
+  // old element refs no longer apply, so drop them and persist the new tabId.
+  if (res.newTabId !== undefined && res.newTabId !== ctx.tabId) {
+    const newTabId = res.newTabId;
+    ctx.tabId = newTabId;
+    snapshotIdRef.id = '';
+    await mutateActRun((r) => { r.tabId = newTabId; });
+  }
   if (res.snapshot) snapshotIdRef.id = res.snapshot.snapshotId;
   if (cls !== 'observe' && res.ok) ctx.actionsTaken++;
   await appendTranscript({ kind: res.snapshot ? 'result' : 'action', text: res.resultText, ok: res.ok });
@@ -267,7 +299,7 @@ export function buildActTools(ctx: ActContext): ToolExecutor[] {
       return runVerb(ctx, verb, snapshotIdRef);
     },
   });
-  return [READ_PAGE, POINTER, KEYBOARD, SCROLL, NAVIGATE].map(make);
+  return [READ_PAGE, POINTER, KEYBOARD, SCROLL, NAVIGATE, TABS].map(make);
 }
 
 function rawUsesRef(raw: unknown): boolean {
@@ -289,7 +321,7 @@ export async function hasActiveRun(): Promise<boolean> {
 // the SAME executors, and feed the result back as text. Same engine, same gate,
 // same budget — only the transport differs.
 
-const ACT_JSON_TOOLS = [READ_PAGE, POINTER, KEYBOARD, SCROLL, NAVIGATE];
+const ACT_JSON_TOOLS = [READ_PAGE, POINTER, KEYBOARD, SCROLL, NAVIGATE, TABS];
 
 /** The tool contract, rendered as text for the claude -p prompt. */
 export function renderActContract(): string {

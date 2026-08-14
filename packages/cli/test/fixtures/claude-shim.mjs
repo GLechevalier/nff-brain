@@ -106,6 +106,18 @@ process.stdin.on('end', () => {
     // web agent list-write: map whatever name was read straight through.
     const m = /"name":"([^"]*)"/.exec(prompt);
     process.stdout.write(JSON.stringify({ args: { name: m?.[1] ?? 'Unknown' } }));
+  } else if (prompt.includes('workflow distiller')) {
+    // trace distill (paired /v1/trace): one generalized step with a param.
+    process.stdout.write(
+      JSON.stringify({
+        intent: 'Search for a topic and open the first result',
+        params: [{ name: 'query', description: 'what to search for', example: 'robotics engineer', required: true }],
+        steps: [
+          { intent: 'search for {query}', verbs: ['type', 'click'], params: ['query'], success: 'results are shown' },
+        ],
+        successCriteria: 'the first result is open',
+      }),
+    );
   } else if (prompt.includes('brain chat assistant')) {
     // chat: plain prose, deliberately NOT JSON — echoes back a marker the
     // route test can assert on without depending on exact wording.

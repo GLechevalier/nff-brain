@@ -192,12 +192,15 @@ async function drive(runId: string, tabId: number): Promise<void> {
     ? await runPairedLoop(ctx, runId, prompt, pairing.port, pairing.token)
     : await runByokLoop(ctx, runId, prompt);
 
+  // detach ctx.tabId, not the closure's original `tabId` param — a tab.switch/
+  // tab.open/tab.duplicate mid-run rebinds ctx.tabId to whichever tab ended up
+  // attached, and that's the one to release.
   if (!outcome.ok) {
     await mutateActRun((r) => {
       r.phase = 'error';
       r.error = outcome.error;
     });
-    await detach(tabId);
+    await detach(ctx.tabId);
     return;
   }
 
@@ -205,7 +208,7 @@ async function drive(runId: string, tabId: number): Promise<void> {
   await mutateActRun((r) => {
     if (r.phase === 'running' || r.phase === 'stopping') r.phase = ctx.stopped || r.phase === 'stopping' ? 'stopped' : 'done';
   });
-  await detach(tabId);
+  await detach(ctx.tabId);
 }
 
 type LoopOutcome = { ok: true; answer: string } | { ok: false; error: string };

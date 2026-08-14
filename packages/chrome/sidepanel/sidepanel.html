@@ -31,10 +31,10 @@
     </div>
 
     <nav class="tabs">
+      <button id="sp-tab-brain" class="tab active">Agent</button>
       <button id="sp-tab-setup" class="tab">Setup</button>
-      <button id="sp-tab-brain" class="tab active">Brain</button>
       <button id="sp-tab-mcp" class="tab">MCP</button>
-      <button id="sp-tab-graph" class="tab">Graph</button>
+      <button id="sp-tab-graph" class="tab">Brain</button>
       <button id="sp-tab-settings" class="tab">Settings</button>
     </nav>
 
@@ -125,7 +125,7 @@
         <p class="muted small">
           Records what you do on the current tab into a repeatable workflow. Allow the
           site first. Stop when done — the recording is turned into a workflow you can
-          replay from the Brain tab.
+          replay from the Agent tab.
         </p>
         <button id="setup-trace-toggle" class="btn wide">Record this tab</button>
         <div id="setup-trace-pending" class="small muted hidden"></div>
@@ -277,7 +277,7 @@
         <h2>Models</h2>
         <p class="muted small">
           Two slots: a cheap background model distills your captures into brain notes; the chat
-          model answers questions in the Brain tab. Pick from the list or type any model id.
+          model answers questions in the Agent tab. Pick from the list or type any model id.
         </p>
         <div class="row gap">
           <label class="small" for="model-background">Background</label>

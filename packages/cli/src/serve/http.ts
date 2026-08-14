@@ -24,7 +24,8 @@ export type ErrorCode =
   | 'ambiguous_client'
   | 'mcp_error'
   | 'chat_error'
-  | 'act_error';
+  | 'act_error'
+  | 'trace_error';
 
 const BASE_HEADERS: Record<string, string> = {
   'content-type': 'application/json; charset=utf-8',

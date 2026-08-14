@@ -12,16 +12,19 @@
 
 import type { BrowserVerb, Target } from '@nff-brain/core/browserVerbs';
 import type { PageSnapshot } from '@nff-brain/core/pageSnapshot';
+import { isRestrictedUrl } from './actGate.js';
 import { buildCursorInstallerSource, CURSOR_GLOBAL } from './cursorScript.js';
 import { buildResolveSource, buildSnapshotSource, refIndex } from './snapshotScript.js';
 import { dragSamples, keyDescriptor, modifierBits } from './actPlan.js';
-import { evaluate, send } from './cdp.js';
+import { detach, ensureAttached, evaluate, send } from './cdp.js';
 
 export interface VerbResult {
   ok: boolean;
   resultText: string;
   /** page.read returns the fresh snapshot so the caller can persist its refMap. */
   snapshot?: PageSnapshot;
+  /** Set when the verb changed which tab is being driven (tab.switch, tab.open{active}, tab.duplicate) — the caller rebinds ActContext.tabId to this. */
+  newTabId?: number;
 }
 
 type Point = { x: number; y: number; w?: number; h?: number };
@@ -89,6 +92,33 @@ export async function takeSnapshot(tabId: number, mode: 'interactive' | 'text'):
   const snapshotId = 's_' + crypto.randomUUID().slice(0, 8);
   const snap = await evaluate<Omit<PageSnapshot, 'tabId'>>(tabId, buildSnapshotSource(snapshotId, mode));
   return { ...snap, tabId } as PageSnapshot;
+}
+
+// ── tabs ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Make `newTabId` the active, driven tab: detach the debugger from `oldTabId`
+ * (if different) and attach it to `newTabId`, reporting the rebind so the
+ * caller updates ActContext.tabId. Refuses restricted pages the same way
+ * startActionRun does, so a bad target fails with a clear message rather than
+ * an opaque CDP reject.
+ */
+async function switchTo(oldTabId: number, newTabId: number): Promise<VerbResult> {
+  let target: chrome.tabs.Tab;
+  try {
+    target = await chrome.tabs.get(newTabId);
+  } catch {
+    return { ok: false, resultText: `tab ${newTabId} is no longer open` };
+  }
+  if (isRestrictedUrl(target.url)) return { ok: false, resultText: `cannot drive tab ${newTabId} — browser-internal or restricted page` };
+  await chrome.tabs.update(newTabId, { active: true });
+  if (newTabId !== oldTabId) await detach(oldTabId);
+  try {
+    await ensureAttached(newTabId);
+  } catch (err) {
+    return { ok: false, resultText: err instanceof Error ? `could not attach to tab ${newTabId} (${err.message})` : `could not attach to tab ${newTabId}` };
+  }
+  return { ok: true, resultText: `switched to tab ${newTabId} (${target.title || target.url || 'untitled'})`, newTabId };
 }
 
 // ── dispatch ─────────────────────────────────────────────────────────────────
@@ -203,8 +233,31 @@ export async function executeVerb(tabId: number, verb: BrowserVerb): Promise<Ver
       await chrome.tabs.setZoom(tabId, verb.factor);
       return { ok: true, resultText: `zoom ${verb.factor}` };
     }
+    case 'tab.list': {
+      const tabs = await chrome.tabs.query({});
+      const lines = tabs.map((t) => `[${t.id}]${t.active ? ' (active)' : ''} ${t.title || ''} — ${t.url || ''}`);
+      return { ok: true, resultText: `${tabs.length} tab${tabs.length === 1 ? '' : 's'}:\n${lines.join('\n')}` };
+    }
+    case 'tab.switch':
+      return switchTo(tabId, verb.tabId);
+    case 'tab.open': {
+      const active = verb.active ?? true;
+      const created = await chrome.tabs.create({ url: verb.url, active });
+      if (created.id === undefined) return { ok: false, resultText: 'could not open the tab' };
+      if (!active) return { ok: true, resultText: `opened tab ${created.id} (background)` };
+      return switchTo(tabId, created.id);
+    }
+    case 'tab.duplicate': {
+      const dup = await chrome.tabs.duplicate(verb.tabId);
+      if (!dup || dup.id === undefined) return { ok: false, resultText: 'could not duplicate that tab' };
+      return switchTo(tabId, dup.id);
+    }
+    case 'tab.close': {
+      await chrome.tabs.remove(verb.tabId);
+      return { ok: true, resultText: `closed tab ${verb.tabId}` };
+    }
     default:
-      // Verbs slated for later milestones (forms, tabs, dialogs, screenshots,
+      // Verbs slated for later milestones (forms, dialogs, screenshots,
       // touch.swipe, waitFor, find, upload). Validated but not yet dispatched.
       return { ok: false, resultText: `"${verb.kind}" is recognized but not enabled yet` };
   }

@@ -8,6 +8,7 @@ const COLORS: Record<ConnectionPhase, string> = {
   connected: '#1a7f37',
   disconnected: '#b3261e',
   rejected: '#d29922',
+  workspace_mismatch: '#d29922',
   unpaired: '#767676',
   standalone: '#0b6bcb',
 };
@@ -16,6 +17,7 @@ const TITLES: Record<ConnectionPhase, string> = {
   connected: 'nff-brain — connected',
   disconnected: 'nff-brain — brain not reachable (run `nff-brain serve`)',
   rejected: 'nff-brain — pairing expired, re-pair in the popup',
+  workspace_mismatch: 'nff-brain — this server now serves a different project, re-pair to continue',
   unpaired: 'nff-brain — not paired yet',
   standalone: 'nff-brain — standalone (local brain, your API key)',
 };

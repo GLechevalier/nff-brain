@@ -33,6 +33,7 @@ export function stalenessMs(consecutiveFailures: number): number {
 export function derivePhase(health: Health, paired: boolean, nowMs: number): ConnectionPhase {
   if (!paired) return 'unpaired';
   if (health.phase === 'rejected') return 'rejected';
+  if (health.phase === 'workspace_mismatch') return 'workspace_mismatch';
   if (!health.lastOkAt) return 'disconnected';
   const age = nowMs - Date.parse(health.lastOkAt);
   if (!Number.isFinite(age) || age > stalenessMs(health.consecutiveFailures)) return 'disconnected';
@@ -43,6 +44,8 @@ export interface ProbeOutcome {
   ok: boolean;
   /** True for 401/403: the token is dead, so stop probing entirely. */
   rejected?: boolean;
+  /** True for 409 workspace_mismatch: keep retrying on the normal backoff — see ConnectionPhase's doc comment. */
+  mismatch?: boolean;
   error?: string;
   status?: {
     projectNodes: number;
@@ -75,7 +78,7 @@ export function applyProbe(prev: Health, outcome: ProbeOutcome, nowMs: number): 
     const failures = prev.consecutiveFailures + 1;
     return {
       ...prev,
-      phase: 'disconnected',
+      phase: outcome.mismatch ? 'workspace_mismatch' : 'disconnected',
       lastErrorAt: at,
       lastError: outcome.error ?? 'could not reach the brain',
       consecutiveFailures: failures,
