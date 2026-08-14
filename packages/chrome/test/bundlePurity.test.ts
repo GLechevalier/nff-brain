@@ -16,7 +16,7 @@ const root = path.resolve(here, '..');
 
 function sources(): { file: string; rel: string; text: string }[] {
   const out: { file: string; rel: string; text: string }[] = [];
-  for (const dir of ['src', 'popup', 'sidepanel', 'content']) {
+  for (const dir of ['src', 'sidepanel', 'content']) {
     const abs = path.join(root, dir);
     if (!fs.existsSync(abs)) continue;
     for (const name of fs.readdirSync(abs)) {
@@ -168,20 +168,21 @@ describe('the capture choke point', () => {
   });
 
   it('reads a hostname only where it cannot grant capture', () => {
-    // activity.ts labels a buffered record; main.ts labels the "Allow this
-    // site" button; content/github.ts classifies a form's target (the worker
-    // re-gates on sender.tab.url regardless); agentGate.ts is item 7's OWN
-    // separate choke point (a different question — is DOM automation allowed
-    // here — never a second copy of shouldCapture's decision). None of them
-    // decides capture — gate.ts alone does that. actGate.ts is the web-agent
-    // ENGINE's own separate choke point (yet another distinct question — may the
-    // CDP engine attach to / act on this url — never a copy of shouldCapture).
-    // standaloneTraceDistill.ts reads a hostname only to label the recorded
-    // workflow's site — never a capture decision.
+    // activity.ts labels a buffered record; sidepanel/main.ts labels the
+    // Setup tab's "Allow this site" button; content/github.ts classifies a
+    // form's target (the worker re-gates on sender.tab.url regardless);
+    // agentGate.ts is item 7's OWN separate choke point (a different question
+    // — is DOM automation allowed here — never a second copy of
+    // shouldCapture's decision). None of them decides capture — gate.ts alone
+    // does that. actGate.ts is the web-agent ENGINE's own separate choke
+    // point (yet another distinct question — may the CDP engine attach to /
+    // act on this url — never a copy of shouldCapture). standaloneTraceDistill.ts
+    // reads a hostname only to label the recorded workflow's site — never a
+    // capture decision.
     const readers = FILES.filter((f) => /\.hostname\b/.test(code(f.text)));
     expect(readers.map((r) => r.rel).sort()).toEqual([
       'content/githubClassify.ts',
-      'popup/main.ts',
+      'sidepanel/main.ts',
       'src/actGate.ts',
       'src/activity.ts',
       'src/agentGate.ts',
@@ -190,16 +191,13 @@ describe('the capture choke point', () => {
     ]);
   });
 
-  it('reads chrome.storage from exactly one module, plus the tab-hint handoff', () => {
+  it('reads chrome.storage from exactly one module', () => {
     // src/storage.ts is the ONE owner of all SW-side persisted state (token,
-    // capture flag, allowlist, activity buffer, brain, provider config). The two
-    // extra readers touch chrome.storage.local ONLY for `nb.sidepanelTab` — a
-    // one-shot, non-secret UI hint the popup writes and the side panel reads +
-    // clears on boot to choose which subtab opens. That is a UI navigation
-    // handoff, not application state, so it deliberately does not route through
-    // storage.ts (which is worker-only and holds the secret material).
+    // capture flag, allowlist, activity buffer, brain, provider config).
+    // Every UI surface goes through message-passing (send()) instead — none
+    // of them may read or write chrome.storage directly.
     const users = FILES.filter((f) => /chrome\.storage\.local\./.test(code(f.text)));
-    expect(users.map((u) => u.rel).sort()).toEqual(['popup/main.ts', 'sidepanel/main.ts', 'src/storage.ts']);
+    expect(users.map((u) => u.rel).sort()).toEqual(['src/storage.ts']);
   });
 });
 
@@ -334,9 +332,6 @@ describe('built artifacts', () => {
     for (const f of [
       'manifest.json',
       'sw.js',
-      'popup.js',
-      'popup.html',
-      'popup.css',
       'sidepanel.js',
       'sidepanel.html',
       'sidepanel.css',
@@ -351,7 +346,7 @@ describe('built artifacts', () => {
 
   it('contains no off-device URL and no framework runtime', () => {
     if (!fs.existsSync(dist)) return;
-    for (const name of ['sw.js', 'popup.js', 'sidepanel.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js', 'rec-trace.js']) {
+    for (const name of ['sw.js', 'sidepanel.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js', 'rec-trace.js']) {
       const text = read(name);
       // This is what actually ships — it catches an egress URL arriving through
       // a dependency rather than through our own source.

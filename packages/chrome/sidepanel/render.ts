@@ -7,6 +7,8 @@
 
 import { PROVIDERS, PROVIDER_CHOICES } from '@nff-brain/core/provider';
 import type { ProviderId } from '@nff-brain/core/provider';
+import { relativeAge } from '../src/health.js';
+import { ruleLabel } from '../src/gate.js';
 import type {
   ActionRecord,
   ChatSource,
@@ -23,6 +25,10 @@ import type { ActRunState } from '../src/schema.js';
 
 const $ = (id: string): HTMLElement => document.getElementById(id)!;
 
+// Static placeholder shown in #api-key when a key is stored — never real key
+// bytes. PublicState carries zero key material by design; see paintSettings.
+const MASKED_KEY_PLACEHOLDER = '•'.repeat(12);
+
 // ── status header ─────────────────────────────────────────────────────────────
 
 export function paintHeader(nodes: NodesResponse | null, connected: boolean): void {
@@ -37,11 +43,11 @@ export function paintHeader(nodes: NodesResponse | null, connected: boolean): vo
   $('updated').textContent = nodes.updatedAt ? `updated ${nodes.updatedAt.slice(0, 16).replace('T', ' ')}` : '';
 }
 
-// ── the five subtabs ────────────────────────────────────────────────────────
+// ── the six subtabs ─────────────────────────────────────────────────────────
 
-export type SidePanelTab = 'brain' | 'mcp' | 'graph' | 'settings';
+export type SidePanelTab = 'setup' | 'brain' | 'mcp' | 'graph' | 'settings';
 
-const TABS: readonly SidePanelTab[] = ['brain', 'mcp', 'graph', 'settings'];
+const TABS: readonly SidePanelTab[] = ['setup', 'brain', 'mcp', 'graph', 'settings'];
 
 export function switchTab(tab: SidePanelTab): void {
   for (const t of TABS) {
@@ -710,13 +716,17 @@ export function paintSettings(state: PublicState): void {
   fillModelDatalists(state.provider ?? 'anthropic');
 
   const status = $('key-status');
+  const keyInput = $('api-key') as HTMLInputElement;
   if (state.providerConfigured) {
     const saved = `Key saved${state.providerLastTest ? ` · last test: ${state.providerLastTest.message}` : ''}`;
     status.textContent = saved;
     status.classList.toggle('ok', state.providerLastTest?.ok !== false);
+    keyInput.value = MASKED_KEY_PLACEHOLDER;
+    keyInput.readOnly = true;
   } else {
     status.textContent = 'No key saved — captures stay queued on this device.';
     status.classList.remove('ok');
+    keyInput.readOnly = false;
   }
 
   const models = state.providerModels ?? PROVIDERS[state.provider ?? 'anthropic']?.defaultModels ?? null;
@@ -724,4 +734,146 @@ export function paintSettings(state: PublicState): void {
     ($('model-background') as HTMLInputElement).value = models.background;
     ($('model-chat') as HTMLInputElement).value = models.chat;
   }
+}
+
+// ── Setup tab (pairing/capture/allowlist/recorders/activity) — was
+//    popup/paint.ts's paint(). Only textContent, classList and the children
+//    of #setup-rules/#setup-recorders are touched; #setup-rule-input is NEVER
+//    re-rendered, which is what keeps the caret in place while typing. ──────
+
+const SETUP_PHASE_TEXT: Record<PublicState['phase'], string> = {
+  connected: 'Connected',
+  disconnected: 'Disconnected',
+  rejected: 'Pairing expired',
+  unpaired: 'Not paired',
+  standalone: 'Standalone',
+};
+
+export interface SetupDeps {
+  /** Host of the panel's active tab, or null when it cannot be read. */
+  currentHost: string | null;
+  onRemoveRule: (host: string) => void;
+  onToggleRecorder: (id: string, enable: boolean) => void;
+}
+
+export function paintSetup(state: PublicState, deps: SetupDeps, nowMs = Date.now()): void {
+  const { phase, health } = state;
+
+  // ── connection ──────────────────────────────────────────────────────────
+  $('setup-dot').className = `dot ${phase}`;
+  $('setup-phase').textContent = SETUP_PHASE_TEXT[phase];
+  $('setup-endpoint').textContent = state.port ? `127.0.0.1:${state.port}` : '';
+  $('setup-version').textContent = health.serverVersion ? `v${health.serverVersion}` : '';
+
+  const counts =
+    phase === 'standalone'
+      ? `${state.standaloneNodes ?? 0} local note${(state.standaloneNodes ?? 0) === 1 ? '' : 's'} · your API key`
+      : health.projectNodes === null
+        ? ''
+        : `${health.projectNodes} project · ${health.globalNodes ?? 0} global nodes`;
+  const age = relativeAge(health.lastOkAt, nowMs);
+  $('setup-counts').textContent =
+    counts && (phase === 'connected' || phase === 'standalone' ? counts : age ? `${counts}, as of ${age}` : counts);
+  $('setup-workspace').textContent = health.workspaceRoot ?? '';
+
+  const showError = phase !== 'connected' && phase !== 'standalone' && !!health.lastError;
+  $('setup-conn-error').textContent = health.lastError ?? '';
+  $('setup-conn-error').classList.toggle('hidden', !showError);
+  $('setup-retry').classList.toggle('hidden', phase !== 'disconnected');
+
+  $('setup-migration').textContent =
+    state.migrationPending !== null
+      ? `Moving ${state.migrationPending} standalone note${state.migrationPending === 1 ? '' : 's'} into your local brain…`
+      : '';
+  $('setup-migration').classList.toggle('hidden', state.migrationPending === null);
+
+  // Standalone keeps the pair form reachable — pairing is the doorway to
+  // migrating the local brain into a real server.
+  const needsPairing = phase === 'unpaired' || phase === 'rejected' || phase === 'standalone';
+  $('setup-pair-form').classList.toggle('hidden', !needsPairing);
+  ($('setup-connect') as HTMLButtonElement).textContent = phase === 'rejected' ? 'Re-pair' : 'Connect';
+
+  // ── capture ─────────────────────────────────────────────────────────────
+  const toggle = $('setup-capture-toggle');
+  toggle.setAttribute('aria-checked', String(state.capture.enabled));
+  $('setup-capture-hint').textContent = state.capture.enabled
+    ? 'Right-click any selected text → “Remember this”.'
+    : 'Capture is paused. Nothing is recorded, on any domain.';
+
+  // ── allowlist ───────────────────────────────────────────────────────────
+  const list = $('setup-rules');
+  list.replaceChildren(
+    ...state.rules.map((rule) => {
+      const li = document.createElement('li');
+      const label = document.createElement('span');
+      label.textContent = ruleLabel(rule);
+      const remove = document.createElement('button');
+      remove.textContent = '×';
+      remove.title = `Remove ${rule.host}`;
+      remove.addEventListener('click', () => deps.onRemoveRule(rule.host));
+      li.append(label, remove);
+      return li;
+    }),
+  );
+  $('setup-rule-count').textContent = state.rules.length ? String(state.rules.length) : '';
+  $('setup-rules-empty').classList.toggle('hidden', state.rules.length > 0);
+
+  const allowCurrent = $('setup-allow-current') as HTMLButtonElement;
+  const known = deps.currentHost && !state.rules.some((r) => r.host === deps.currentHost);
+  allowCurrent.classList.toggle('hidden', !known);
+  if (known) allowCurrent.textContent = `+ Allow ${deps.currentHost}`;
+
+  // ── recorders ───────────────────────────────────────────────────────────
+  $('setup-recorders').replaceChildren(
+    ...state.recorders.map((rec) => {
+      const li = document.createElement('li');
+      const label = document.createElement('span');
+      label.textContent = rec.label;
+      const status = document.createElement('span');
+      status.className = 'muted small';
+      status.textContent = !rec.enabled
+        ? ''
+        : !state.capture.enabled
+          ? ' · paused — capture is off'
+          : !rec.allowlisted
+            ? ` · blocked — re-add ${rec.hosts[0]}`
+            : !rec.granted
+              ? ' · blocked — permission missing'
+              : ' · recording';
+      const btn = document.createElement('button');
+      btn.textContent = rec.enabled ? 'Disable' : 'Enable';
+      btn.title = rec.enabled ? `Stop recording on ${rec.hosts.join(', ')}` : `Ask Chrome for ${rec.hosts.join(', ')}`;
+      btn.addEventListener('click', () => deps.onToggleRecorder(rec.id, !rec.enabled));
+      li.append(label, status, btn);
+      return li;
+    }),
+  );
+
+  // ── activity ────────────────────────────────────────────────────────────
+  const n = state.activityCount;
+  $('setup-activity-count').textContent = n ? `${n} item${n === 1 ? '' : 's'}` : '';
+  const clear = $('setup-clear') as HTMLButtonElement;
+  clear.disabled = n === 0;
+  clear.textContent = n === 0 ? 'Nothing captured yet' : 'Clear activity history…';
+}
+
+/** The confirm step, rendered only with numbers it can actually stand behind. */
+export function paintClearConfirm(state: PublicState): void {
+  const removable = state.removableNodeCount;
+  $('setup-clear-question').textContent = `Clear ${state.activityCount} buffered item${
+    state.activityCount === 1 ? '' : 's'
+  }?`;
+  // NO CHECKBOX when nothing is traceable. A checkbox that cannot do anything
+  // is worse than no feature — and until a drain reports clip→node mappings,
+  // that is always the case.
+  $('setup-clear-nodes-row').classList.toggle('hidden', removable === 0);
+  $('setup-clear-nodes-label').textContent = `Also delete the ${removable} brain node${
+    removable === 1 ? '' : 's'
+  } still traceable to this activity`;
+  ($('setup-clear-nodes') as HTMLInputElement).checked = false;
+  $('setup-clear-confirm').classList.remove('hidden');
+}
+
+export function hideClearConfirm(): void {
+  $('setup-clear-confirm').classList.add('hidden');
 }

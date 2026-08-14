@@ -42,6 +42,18 @@ export interface ServeClient {
   origin: string;
   tokenHash: string;
   createdAt: string;
+  /**
+   * The server's workspaceRoot at the moment this client paired. A pairing is
+   * an explicit statement of which workspace it's valid for — `nff-brain
+   * serve` binds to one workspace for its whole process lifetime, but nothing
+   * stops a user from stopping it and starting a fresh one (a different
+   * workspace) on the same port. Without this, a stale bearer token would go
+   * on silently authenticating against — and writing into — the WRONG
+   * project's brain.json. Optional only so old serve.json files (minted
+   * before this field existed) still parse; such legacy clients are treated
+   * as a mismatch on their very next request, forcing a one-time re-pair.
+   */
+  workspaceRoot?: string;
 }
 
 export interface ServeConfig {
@@ -114,7 +126,8 @@ function isClient(c: unknown): c is ServeClient {
     typeof v.id === 'string' &&
     typeof v.name === 'string' &&
     typeof v.origin === 'string' &&
-    typeof v.tokenHash === 'string'
+    typeof v.tokenHash === 'string' &&
+    (v.workspaceRoot === undefined || typeof v.workspaceRoot === 'string')
   );
 }
 
@@ -158,7 +171,7 @@ export function serveConfigMode(file = serveConfigPath()): number | null {
  */
 export function addClient(
   cfg: ServeConfig,
-  opts: { name: string; origin: string; now?: Date },
+  opts: { name: string; origin: string; workspaceRoot: string; now?: Date },
 ): { client: ServeClient; token: string } {
   const token = newToken();
   const client: ServeClient = {
@@ -167,6 +180,7 @@ export function addClient(
     origin: opts.origin,
     tokenHash: hashToken(token),
     createdAt: (opts.now ?? new Date()).toISOString(),
+    workspaceRoot: opts.workspaceRoot,
   };
   // Re-pairing from the same origin replaces rather than accumulates, so the
   // clients list cannot grow without bound across dev reloads.

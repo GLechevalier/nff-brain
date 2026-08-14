@@ -1,12 +1,25 @@
 {
   "manifest_version": 3,
   "name": "nff-brain",
-  "version": "0.1.0",
+  "version": "0.1.0.4",
   "description": "Local-first memory for Claude Code. Talks to a brain you run yourself on 127.0.0.1 — or, only if you add your own API key, directly to your AI provider.",
   "minimum_chrome_version": "116",
   "incognito": "not_allowed",
-  "permissions": ["storage", "alarms", "activeTab", "contextMenus", "scripting", "debugger", "tabs", "sidePanel"],
-  "optional_host_permissions": ["http://127.0.0.1/*", "https://github.com/*", "https://www.linkedin.com/*"],
+  "permissions": [
+    "storage",
+    "alarms",
+    "activeTab",
+    "contextMenus",
+    "scripting",
+    "debugger",
+    "tabs",
+    "sidePanel"
+  ],
+  "optional_host_permissions": [
+    "http://127.0.0.1/*",
+    "https://github.com/*",
+    "https://www.linkedin.com/*"
+  ],
   "side_panel": {
     "default_path": "sidepanel.html"
   },
@@ -15,7 +28,6 @@
   },
   "action": {
     "default_title": "nff-brain",
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/16.png",
       "32": "icons/32.png",

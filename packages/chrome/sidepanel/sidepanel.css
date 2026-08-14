@@ -104,6 +104,7 @@ code.inline {
 }
 .dot.connected { background: #4ade80; }
 .dot.disconnected { background: #f87171; }
+.dot.rejected { background: #fbbf24; }
 
 .banner {
   padding: 8px 10px;
@@ -255,6 +256,52 @@ label.small { min-width: 84px; }
 #mcp-list .mcp-dot { width: 7px; height: 7px; border-radius: 50%; background: #666; flex: none; }
 #mcp-list .mcp-dot.enabled { background: #4ade80; }
 #mcp-list .mcp-actions { margin-left: auto; display: flex; gap: 4px; }
+
+/* ── Setup tab: capture toggle + allowed-domains/recorders lists ─────────── */
+
+.toggle {
+  border: 1px solid #3a3a3a;
+  background: #262626;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  display: flex;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.toggle span { padding: 3px 8px; font-size: 10px; letter-spacing: 0.06em; color: #8a8a8a; }
+.toggle[aria-checked='true'] .toggle-on { background: #00332e; color: #00ffcc; font-weight: 700; }
+.toggle[aria-checked='false'] .toggle-off { background: #3a3a3a; color: #e6e6e6; font-weight: 700; }
+
+.rules {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+.rules:empty { display: none; }
+.rules li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid #2a2a2a;
+  background: #101010;
+}
+.rules li:last-child { border-bottom: 0; }
+.rules button {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  color: #8a8a8a;
+  cursor: pointer;
+  font: inherit;
+  padding: 0 2px;
+}
+.rules button:hover { color: #fca5a5; }
 
 /* ── Graph tab ────────────────────────────────────────────────────────────── */
 

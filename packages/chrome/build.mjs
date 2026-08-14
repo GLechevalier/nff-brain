@@ -10,12 +10,25 @@ const OUT = 'dist';
 // never lands in dist, so there is no .vscodeignore analogue to maintain.
 const STATIC = [
   ['manifest.json', 'manifest.json'],
-  ['popup/popup.html', 'popup.html'],
-  ['popup/popup.css', 'popup.css'],
   ['sidepanel/sidepanel.html', 'sidepanel.html'],
   ['sidepanel/sidepanel.css', 'sidepanel.css'],
   ['icons', 'icons'],
 ];
+
+// Auto-increments a trailing build-counter segment on source manifest.json so
+// chrome://extensions shows a new version on every build+reload, without
+// touching the major.minor.patch the developer controls by hand for releases.
+// Runs before copyStatic() so source and dist/manifest.json stay byte-equal
+// (pinned by manifest.test.ts).
+function bumpManifestVersion() {
+  const m = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+  const parts = m.version.split('.').map(Number);
+  if (parts.length < 4) parts.push(1);
+  else parts[3] += 1;
+  m.version = parts.join('.');
+  fs.writeFileSync('manifest.json', JSON.stringify(m, null, 2) + '\n');
+  return m.version;
+}
 
 function copyStatic() {
   fs.mkdirSync(OUT, { recursive: true });
@@ -77,15 +90,16 @@ const CONTENT = [
 ];
 
 const swCtx = await esbuild.context({ ...common, entryPoints: ['src/sw.ts'], outfile: `${OUT}/sw.js` });
-const popupCtx = await esbuild.context({ ...common, entryPoints: ['popup/main.ts'], outfile: `${OUT}/popup.js` });
 // sidepanel/main.ts pulls in sidepanel/render.ts through its imports, so esbuild
-// bundles the whole side-panel UI (Agent · MCP · Brain · Graph · Settings) here.
+// bundles the whole side-panel UI (Setup · Agent · MCP · Brain · Graph · Settings)
+// here — the toolbar icon opens this panel directly; there is no popup bundle.
 const sidepanelCtx = await esbuild.context({ ...common, entryPoints: ['sidepanel/main.ts'], outfile: `${OUT}/sidepanel.js` });
 const contentCtxs = await Promise.all(
   CONTENT.map(([entry, out]) => esbuild.context({ ...common, entryPoints: [entry], outfile: `${OUT}/${out}` })),
 );
-const contexts = [swCtx, popupCtx, sidepanelCtx, ...contentCtxs];
+const contexts = [swCtx, sidepanelCtx, ...contentCtxs];
 
+const version = bumpManifestVersion();
 copyStatic();
 
 if (watch) {
@@ -99,9 +113,9 @@ if (watch) {
       timer = setTimeout(copyStatic, 50);
     });
   }
-  console.log(`watching… load unpacked from ${path.resolve(OUT)}`);
+  console.log(`watching… load unpacked from ${path.resolve(OUT)} (v${version})`);
 } else {
   await Promise.all(contexts.map((c) => c.rebuild()));
   await Promise.all(contexts.map((c) => c.dispose()));
-  console.log('built dist/sw.js + dist/popup.js + dist/sidepanel.js + statics');
+  console.log(`built dist/sw.js + dist/sidepanel.js + statics (v${version})`);
 }

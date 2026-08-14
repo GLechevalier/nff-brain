@@ -60,6 +60,12 @@ describe('detectActionIntent — generic host fallback (any other site)', () => 
     ['open developer.chrome.com for me', 'developer.chrome.com'],
     ['visit openai.com', 'openai.com'],
     ['take me to reddit', 'reddit.com'],
+    ['navigate to google pls', 'google.com'],
+    ['go to youtube thanks', 'youtube.com'],
+    ['open reddit asap', 'reddit.com'],
+    ['visit openai.com thank you', 'openai.com'],
+    ['navigate to google okay', 'google.com'],
+    ['go to google now please', 'google.com'],
   ])('matches %j — falls back to a generic host guess when no adapter alias matches', (message, host) => {
     expect(detectActionIntent(message, [LINKEDIN])).toEqual({ kind: 'host', host, label: host, url: `https://${host}/` });
   });
@@ -86,5 +92,23 @@ describe('detectActionIntent — generic host fallback (any other site)', () => 
 
   it('returns null when the adapter list is empty and the message has no clean single-token site either', () => {
     expect(detectActionIntent('navigate to the linkedin homepage', [])).toBeNull();
+  });
+});
+
+describe('detectActionIntent — browser history (back/forward)', () => {
+  it.each([
+    ['navigate back to the previous page', 'back'],
+    ['go back', 'back'],
+    ['go back please', 'back'],
+    ['take me back', 'back'],
+    ['head back to the last page', 'back'],
+    ['go forward', 'forward'],
+    ['navigate forward to the next page', 'forward'],
+  ])('matches %j — history shortcut, independent of ACTION_VERBS/site detection', (message, direction) => {
+    expect(detectActionIntent(message, [LINKEDIN])).toEqual({ kind: 'history', direction });
+  });
+
+  it('does not match "go back to work on the report" — leftover words after "back" mean it is not a clean history command', () => {
+    expect(detectActionIntent('go back to work on the report', [LINKEDIN])).toBeNull();
   });
 });

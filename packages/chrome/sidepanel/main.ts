@@ -1,7 +1,11 @@
-// The consolidated side panel: ONE UI home with five subtabs —
-// Agent · MCP · Brain · Graph · Settings. A side panel does NOT consume the
-// active tab's debugger slot (unlike DevTools), so the CDP web agent can attach
-// to the very page the user is looking at.
+// The consolidated side panel: ONE UI home with six subtabs —
+// Setup · Agent · MCP · Brain · Graph · Settings. A side panel does NOT
+// consume the active tab's debugger slot (unlike DevTools), so the CDP web
+// agent can attach to the very page the user is looking at. It is also the
+// toolbar icon's default click target now (chrome.sidePanel.setPanelBehavior
+// in src/sw.ts) — there is no more separate toolbar popup, so Setup carries
+// everything that surface used to own: pairing, capture, the allowed-domains
+// list, recorders, and record-a-task.
 //
 // This document is a thin client: every message rides chrome.runtime to the
 // service worker, and the pairing token / provider key never enter this realm.
@@ -17,7 +21,7 @@
 
 import { agentAdapterById } from '../src/agentRegistry.js';
 import { detectActionIntent, type ActionIntent } from '../src/actionIntent.js';
-import { PANEL_POLL_MS } from '../src/protocol.js';
+import { DEFAULT_PORT, PANEL_POLL_MS } from '../src/protocol.js';
 import type {
   ChatTurn,
   GraphEdge,
@@ -26,20 +30,25 @@ import type {
   McpToolDef,
   NodesResponse,
   PopupToSw,
+  PublicState,
   SwToPopup,
   WebAgentListTarget,
   WebAgentRun,
 } from '../src/protocol.js';
+import { adapterById } from '../src/recorderRegistry.js';
 import type { ProviderId } from '@nff-brain/core/provider';
 import {
   fillModelDatalists,
+  hideClearConfirm,
   paintActRun,
   paintAdapter,
+  paintClearConfirm,
   paintHeader,
   paintMcpServerOptions,
   paintMcpToolOptions,
   paintMode,
   paintSettings,
+  paintSetup,
   renderGraph,
   renderMcpList,
   renderTranscript,
@@ -81,8 +90,12 @@ const PENDING_TICK_MS = 2000;
 
 // ── shared module state ───────────────────────────────────────────────────────
 
-let currentTab: SidePanelTab = 'brain';
+let currentTab: SidePanelTab = 'setup';
 let latestNodes: NodesResponse | null = null;
+
+// Setup tab
+let latestState: PublicState | null = null;
+let currentHost: string | null = null;
 
 // Agent (CDP web agent) tab
 let actPollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -132,6 +145,22 @@ async function activeTabId(): Promise<number | undefined> {
   }
 }
 
+/** Resolved fresh on every call rather than cached — unlike the old popup
+ *  (which reopened per click), this panel can stay open across tab switches,
+ *  so a cached host would go stale. */
+async function resolveCurrentHost(): Promise<string | null> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    // activeTab grants url access only for the tab the panel's window is
+    // showing, and never on chrome:// or Web Store pages — hence the graceful null.
+    if (!tab?.url) return null;
+    const url = new URL(tab.url);
+    return /^https?:$/.test(url.protocol) ? url.hostname : null;
+  } catch {
+    return null;
+  }
+}
+
 // ── header + shared state refresh ─────────────────────────────────────────────
 
 async function refreshNodes(): Promise<void> {
@@ -153,9 +182,36 @@ async function refreshNodes(): Promise<void> {
 async function refreshState(): Promise<void> {
   const reply = await send({ type: 'getState' });
   if (reply.type !== 'state') return;
+  latestState = reply.state;
   paintAdapter(reply.state);
   paintStandaloneMode(reply.state.phase === 'standalone');
   paintSettings(reply.state);
+  paintSetup(reply.state, {
+    currentHost,
+    onRemoveRule: (host) => void dispatchSetup({ type: 'removeRule', host }),
+    onToggleRecorder: (id, enable) => void toggleRecorder(id, enable),
+  });
+}
+
+/** Setup tab's own dispatch: sends, repaints Setup on a state reply, and
+ *  surfaces an error into the given field — same contract the old popup's
+ *  dispatch() had. */
+async function dispatchSetup(msg: PopupToSw, errorField?: string): Promise<boolean> {
+  const reply = await send(msg);
+  if (reply.type === 'error') {
+    if (errorField) showFieldError(errorField, reply.message);
+    return false;
+  }
+  if (errorField) showFieldError(errorField, null);
+  if (reply.type === 'state') {
+    latestState = reply.state;
+    paintSetup(reply.state, {
+      currentHost,
+      onRemoveRule: (host) => void dispatchSetup({ type: 'removeRule', host }),
+      onToggleRecorder: (id, enable) => void toggleRecorder(id, enable),
+    });
+  }
+  return true;
 }
 
 /**
@@ -177,6 +233,74 @@ function paintStandaloneMode(standalone: boolean): void {
   }
 }
 
+// ── Setup tab — ported from the old toolbar popup ────────────────────────────
+
+/**
+ * Enable runs HERE, not in the SW: chrome.permissions.request needs a user
+ * gesture, and this click is that gesture. Only a granted permission flips
+ * the recorder on; a denied prompt leaves everything off.
+ */
+async function toggleRecorder(id: string, enable: boolean): Promise<void> {
+  if (!enable) {
+    await dispatchSetup({ type: 'setRecorderEnabled', id, enabled: false }, 'setup-recorder-error');
+    return;
+  }
+  const adapter = adapterById(id);
+  if (!adapter) return;
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ origins: adapter.originPatterns });
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    showFieldError('setup-recorder-error', `Chrome permission for ${adapter.hosts.join(', ')} was not granted — the recorder stays off.`);
+    return;
+  }
+  await dispatchSetup({ type: 'setRecorderEnabled', id, enabled: true }, 'setup-recorder-error');
+}
+
+function paintTrace(recording: boolean, eventCount: number, pending: { events: number; startUrl: string } | null): void {
+  const btn = $('setup-trace-toggle') as HTMLButtonElement;
+  btn.textContent = recording ? 'Stop recording' : 'Record this tab';
+  btn.classList.toggle('primary', recording);
+  $('setup-trace-count').textContent = recording ? `${eventCount} events` : '';
+  const pend = $('setup-trace-pending');
+  if (pending && !recording) {
+    pend.textContent = `Last recording: ${pending.events} events — distilling into a workflow.`;
+    pend.classList.remove('hidden');
+  } else {
+    pend.classList.add('hidden');
+  }
+}
+
+async function refreshTrace(): Promise<void> {
+  const reply = await send({ type: 'getTraceStatus' });
+  if (reply.type === 'traceStatus') paintTrace(reply.recording, reply.eventCount, reply.pending);
+}
+
+async function toggleTrace(): Promise<void> {
+  showFieldError('setup-trace-error', null);
+  const status = await send({ type: 'getTraceStatus' });
+  const recording = status.type === 'traceStatus' && status.recording;
+  if (recording) {
+    const reply = await send({ type: 'traceStop' });
+    if (reply.type === 'traceStatus') paintTrace(reply.recording, reply.eventCount, reply.pending);
+    return;
+  }
+  const tabId = await activeTabId();
+  if (tabId === undefined) {
+    showFieldError('setup-trace-error', 'Could not find the current tab.');
+    return;
+  }
+  const reply = await send({ type: 'traceStart', tabId });
+  if (reply.type === 'error') {
+    showFieldError('setup-trace-error', reply.message);
+    return;
+  }
+  if (reply.type === 'traceStatus') paintTrace(reply.recording, reply.eventCount, reply.pending);
+}
+
 // ── tab selection ─────────────────────────────────────────────────────────────
 
 function selectTab(tab: SidePanelTab): void {
@@ -185,6 +309,13 @@ function selectTab(tab: SidePanelTab): void {
   if (tab === 'mcp') void loadMcpTab();
   if (tab === 'graph') void loadGraph(true);
   if (tab === 'settings') void refreshState();
+  if (tab === 'setup') {
+    void resolveCurrentHost().then((host) => {
+      currentHost = host;
+      void refreshState();
+    });
+    void refreshTrace();
+  }
 }
 
 // The web agent now lives inside the Brain tab's "Act" mode (default), so its
@@ -467,6 +598,26 @@ async function submitChat(message: string): Promise<void> {
  * still ask.
  */
 async function submitActionIntent(intent: ActionIntent): Promise<void> {
+  if (intent.kind === 'history') {
+    const tabId = await activeTabId();
+    if (tabId === undefined) {
+      showFieldError('prompt-error', 'Could not find the active tab in this window.');
+      return;
+    }
+    const reply = await send({ type: 'runNavigateHistory', direction: intent.direction, tabId });
+    if (reply.type === 'error') {
+      showFieldError('prompt-error', reply.message);
+      return;
+    }
+    transcript.push({
+      kind: 'answer',
+      text: intent.direction === 'back' ? '← Went back' : '→ Went forward',
+      sources: [],
+    });
+    paintTranscript();
+    return;
+  }
+
   const target: Extract<TranscriptEntry, { kind: 'permission' }>['target'] =
     intent.kind === 'adapter' ? { kind: 'adapter', adapterId: intent.adapterId } : { kind: 'host', host: intent.host };
 
@@ -780,39 +931,51 @@ async function testConnection(): Promise<void> {
   await refreshState();
 }
 
-// ── initial tab handoff (popup's "open Settings" launches us here) ───────────
-
-const TAB_STORAGE_KEY = 'nb.sidepanelTab';
-
-function isSidePanelTab(v: unknown): v is SidePanelTab {
-  return v === 'mcp' || v === 'brain' || v === 'graph' || v === 'settings';
-}
-
-/** Read (and immediately clear) the one-shot tab hint the popup wrote before
- *  opening this panel; default to Brain (the agent's home) when absent. The
- *  popup still writes 'agent' from the old "Open web agent" button — map it to
- *  Brain, whose Act mode is the agent. */
-async function readInitialTab(): Promise<SidePanelTab> {
-  try {
-    const got = await chrome.storage.local.get(TAB_STORAGE_KEY);
-    const v = got[TAB_STORAGE_KEY];
-    await chrome.storage.local.remove(TAB_STORAGE_KEY);
-    if (v === 'agent') return 'brain';
-    if (isSidePanelTab(v)) return v;
-  } catch {
-    // fall through to default
-  }
-  return 'brain';
-}
-
 // ── wiring + boot ─────────────────────────────────────────────────────────────
 
 function wire(): void {
   // Tabs
+  $('sp-tab-setup').addEventListener('click', () => selectTab('setup'));
   $('sp-tab-brain').addEventListener('click', () => selectTab('brain'));
   $('sp-tab-mcp').addEventListener('click', () => selectTab('mcp'));
   $('sp-tab-graph').addEventListener('click', () => selectTab('graph'));
   $('sp-tab-settings').addEventListener('click', () => selectTab('settings'));
+
+  // Setup tab — pairing, capture, allowlist, recorders, record-a-task.
+  $('setup-retry').addEventListener('click', () => void dispatchSetup({ type: 'probeNow' }));
+  $('setup-connect').addEventListener('click', () => {
+    const port = Number(($('setup-port') as HTMLInputElement).value || DEFAULT_PORT);
+    const code = ($('setup-code') as HTMLInputElement).value;
+    void dispatchSetup({ type: 'pair', port, code }, 'setup-pair-error');
+  });
+  $('setup-code').addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') $('setup-connect').click();
+  });
+  $('setup-capture-toggle').addEventListener('click', () => {
+    void dispatchSetup({ type: 'setCaptureEnabled', enabled: !(latestState?.capture.enabled ?? false) });
+  });
+  const addSetupRule = () => {
+    const input = $('setup-rule-input') as HTMLInputElement;
+    void dispatchSetup({ type: 'addRule', input: input.value }, 'setup-rule-error').then((ok) => {
+      if (ok) input.value = '';
+    });
+  };
+  $('setup-rule-add').addEventListener('click', addSetupRule);
+  $('setup-rule-input').addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') addSetupRule();
+  });
+  $('setup-allow-current').addEventListener('click', () => {
+    if (currentHost) void dispatchSetup({ type: 'addRule', input: currentHost }, 'setup-rule-error');
+  });
+  $('setup-clear').addEventListener('click', () => {
+    if (latestState) paintClearConfirm(latestState);
+  });
+  $('setup-clear-no').addEventListener('click', hideClearConfirm);
+  $('setup-clear-yes').addEventListener('click', () => {
+    const alsoRemoveNodes = ($('setup-clear-nodes') as HTMLInputElement).checked;
+    void dispatchSetup({ type: 'clearActivity', alsoRemoveNodes }).then(hideClearConfirm);
+  });
+  $('setup-trace-toggle').addEventListener('click', () => void toggleTrace());
 
   // Brain tab — Claude-Code-style modes. The act Stop/Clear/grant controls drive
   // a REPLAYED workflow (record-and-automate), shown in the workflows section.
@@ -842,41 +1005,59 @@ function wire(): void {
   $('api-key').addEventListener('keydown', (e) => {
     if ((e as KeyboardEvent).key === 'Enter') void saveKey();
   });
+  // A saved key renders as a masked, read-only placeholder (see paintSettings).
+  // Focusing it means "replace the key" — clear it back to an editable box
+  // rather than letting the masked dots be typed over or accidentally saved.
+  $('api-key').addEventListener('focus', () => {
+    const input = $('api-key') as HTMLInputElement;
+    if (input.readOnly) {
+      input.readOnly = false;
+      input.value = '';
+    }
+  });
   $('key-clear').addEventListener('click', () => void clearKey());
   $('models-save').addEventListener('click', () => void saveModels());
   $('test').addEventListener('click', () => void testConnection());
 
   // The SW pushes storage changes; reconcile the Agent run/workflows and the
-  // shared state (header/adapter/standalone/settings) when it does.
+  // shared state (header/adapter/standalone/Setup/settings) when it does.
   chrome.storage.onChanged.addListener((_c, area) => {
     if (area !== 'local') return;
     void pollActStatus();
     void loadWorkflows();
     void refreshState();
     void refreshNodes();
+    void refreshTrace();
   });
 }
 
 async function boot(): Promise<void> {
+  ($('setup-port') as HTMLInputElement).value = String(DEFAULT_PORT);
   wire();
   wireGraphCanvas();
   setMode('manual'); // Claude-Code-style default
 
-  const initial = await readInitialTab();
-  currentTab = initial;
-  switchTab(initial);
+  // Setup is the panel's landing tab — the icon opens straight here now that
+  // there is no separate toolbar popup to greet the user first. Assigned
+  // through a SidePanelTab-typed local (not the 'setup' literal directly) so
+  // TS keeps tracking currentTab as the full union below, not the literal —
+  // it can genuinely change before the awaits later in this function settle
+  // (e.g. selectTab() firing from a click on the Setup tab entry itself).
+  const initialTab: SidePanelTab = 'setup';
+  currentTab = initialTab;
+  switchTab(initialTab);
 
   // One forced probe so the badge/health agree with what the panel shows, then
   // the poll keeps everything current while the panel is visible.
   void send({ type: 'probeNow' });
+  currentHost = await resolveCurrentHost();
   await refreshNodes();
   await refreshState(); // may re-gate the initial tab if standalone
+  void refreshTrace();
   await loadGoalOptionServers();
   await pollAgentStatus();
   await pollActStatus();
   await loadWorkflows();
-  if (currentTab === 'mcp') void loadMcpTab();
-  if (currentTab === 'graph') void loadGraph(true);
 
   setInterval(() => {
     if (document.hidden) return;

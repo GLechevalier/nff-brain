@@ -48,6 +48,11 @@ export function buildImportPayload(brain: StandaloneBrain, activity: readonly Ac
       size: n.size,
       color: n.color,
       recallCount: n.recallCount,
+      // Recorded workflows carry a machine payload that a generic clip import
+      // would flatten and lose — flag origin so the server preserves it
+      // (validated server-side; never trusted as-is). Every other node stays
+      // unlabeled and lands as a plain clip, same as before.
+      ...(n.origin === 'workflow' && n.workflow ? { origin: 'workflow' as const, workflow: n.workflow } : {}),
     })),
     edges: brain.edges.map((e) => ({ from: e.from, to: e.to, strength: e.strength })),
     map: activity

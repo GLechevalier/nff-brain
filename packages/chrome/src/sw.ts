@@ -16,8 +16,8 @@
 //       let captureEnabled → SECURITY-RELEVANT: after a restart the flag reverts
 //                            to its initializer and pause stops holding.
 //       let rules = []     → reverts to deny-all; capture silently stops.
-//       any storage cache  → the popup and this worker are SEPARATE JS REALMS,
-//                            so a cache here never sees a popup write.
+//       any storage cache  → the side panel and this worker are SEPARATE JS
+//                            REALMS, so a cache here never sees a panel write.
 //     The single exception is connection.ts's in-flight probe promise, which is
 //     documented there and is harmless to lose.
 
@@ -54,6 +54,7 @@ import {
   navigateHostAllowPublicState,
   pollAgent,
   runAdapterNavigate,
+  runNavigateHistory,
   runNavigateHost,
   setAgentActionAllowed,
   setAgentAdapterEnabled,
@@ -95,7 +96,7 @@ async function publicState(): Promise<PublicState> {
     getBrain(),
   ]);
   const { nextProbeAtMs, ...rest } = health;
-  void nextProbeAtMs; // internal scheduling; the popup has no use for it
+  void nextProbeAtMs; // internal scheduling; the UI has no use for it
   const localNodes = brain?.nodes.length ?? 0;
   return {
     // A stored pairing always wins — standalone only exists while unpaired.
@@ -189,27 +190,27 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     // bearer token.
     case 'getNodes': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       return { type: 'nodes', data: await getNodes(pairing.port, pairing.token, msg.limit) };
     }
 
     case 'getGraph': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       const { nodes: graphNodes, edges } = await getGraph(pairing.port, pairing.token);
       return { type: 'graph', nodes: graphNodes, edges };
     }
 
     case 'moveGraphNode': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       const { moved } = await moveGraphNode(pairing.port, pairing.token, msg.id, msg.x, msg.y);
       return { type: 'layout', moved };
     }
 
     case 'searchBrain': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       return { type: 'search', data: await searchBrain(pairing.port, pairing.token, msg.q, msg.limit) };
     }
 
@@ -255,9 +256,15 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       break;
     }
 
+    case 'runNavigateHistory': {
+      const error = await runNavigateHistory(msg.direction, msg.tabId);
+      if (error) return { type: 'error', message: error };
+      break;
+    }
+
     case 'agentSubmitGoal': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       try {
         await submitAgentGoal(pairing.port, pairing.token, {
           goal: msg.goal,
@@ -274,7 +281,7 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'agentApprovePlan': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       const status = await approveAgentPlan(pairing.port, pairing.token, msg.runId);
       // Kicks the poll loop off immediately rather than waiting for an alarm
       // — approving a plan is the strongest possible signal to start now.
@@ -284,14 +291,14 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'agentRejectPlan': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       const status = await rejectAgentPlan(pairing.port, pairing.token, msg.runId);
       return { type: 'agentStatus', run: status.run };
     }
 
     case 'agentStop': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       // Clear the alarm HERE too (belt-and-braces) — don't wait for a poll
       // that may not come for up to 4 minutes to notice the run stopped.
       await clearAgentPollAlarm();
@@ -309,14 +316,14 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'getMcpServers': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       const { servers } = await getMcpServers(pairing.port, pairing.token);
       return { type: 'mcpServers', servers };
     }
 
     case 'getMcpTools': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       const { tools } = await getMcpTools(pairing.port, pairing.token, msg.server);
       return { type: 'mcpTools', tools };
     }
@@ -326,14 +333,14 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     // never touch url/headers.
     case 'setMcpServerEnabled': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       const { servers } = await setMcpServerEnabledOnServer(pairing.port, pairing.token, msg.id, msg.enabled);
       return { type: 'mcpServers', servers };
     }
 
     case 'removeMcpServer': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       const { servers } = await removeMcpServer(pairing.port, pairing.token, msg.id);
       return { type: 'mcpServers', servers };
     }
@@ -343,7 +350,7 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     // than every other route (see CHAT_TIMEOUT_MS).
     case 'chatAsk': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the extension popup' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
       try {
         const { answer, sources } = await askChat(pairing.port, pairing.token, msg.message, msg.history);
         return { type: 'chatAnswer', answer, sources };
@@ -467,7 +474,7 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       const rec = await stopTraceRecording();
       // Standalone/BYOK: distill into a workflow node in the background. Paired
       // mode has no provider key here, so it no-ops (paired posts to /v1/trace
-      // in a later milestone). Fire-and-forget — the popup polls tracePending.
+      // in a later milestone). Fire-and-forget — the panel polls tracePending.
       if (rec && rec.events.length > 0) void distillPendingTrace();
       return traceStatus();
     }
@@ -514,6 +521,11 @@ async function onInstalled(): Promise<void> {
   // and wipe the allowlist behind the user's back.
   await seedDefaults();
   createMenus();
+  // A persistent browser-side setting (like the menus above) — no manifest
+  // default_popup means the toolbar icon has no built-in click behavior at
+  // all until this is set. Setting it once here (not resent on every SW
+  // wake) is Chrome's own documented pattern.
+  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   // Registered content scripts are cleared on every extension update —
   // reconcile them against stored recorder AND agent-adapter state here,
   // idempotently.
@@ -570,7 +582,7 @@ if (chrome.debugger) chrome.debugger.onDetach.addListener((source, reason) => vo
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Recorder events come from content scripts, are fire-and-forget, and must
-  // never flow into the popup message switch (their sender matters).
+  // never flow into the handleMessage() switch (their sender matters).
   if ((msg as { type?: string })?.type === 'recorderEvent') {
     void onRecorderEvent(msg, sender);
     sendResponse({ type: 'state' }); // ack; content scripts ignore replies

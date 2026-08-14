@@ -169,6 +169,17 @@ export async function runNavigateHost(url: string, tabId: number): Promise<strin
   return result.ok ? null : result.resultText;
 }
 
+/** actionIntent.ts's 'kind: history' match — same chrome.tabs.goBack/goForward actEngine.ts already uses for the CDP agent's nav.back/nav.forward verbs. */
+export async function runNavigateHistory(direction: 'back' | 'forward', tabId: number): Promise<string | null> {
+  try {
+    if (direction === 'back') await chrome.tabs.goBack(tabId);
+    else await chrome.tabs.goForward(tabId);
+  } catch {
+    return direction === 'back' ? "no previous page in this tab's history" : "no next page in this tab's history";
+  }
+  return null;
+}
+
 // ── the poll loop ─────────────────────────────────────────────────────────────
 
 export async function scheduleAgentPoll(delayMs: number): Promise<void> {

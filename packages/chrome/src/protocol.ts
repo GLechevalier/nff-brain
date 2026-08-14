@@ -544,6 +544,11 @@ export type PopupToSw =
   // a direct same-tab navigate with no adapter lookup involved.
   | { type: 'setNavigateHostAllowed'; host: string; allowed: boolean }
   | { type: 'runNavigateHost'; url: string; tabId: number }
+  // Manual-mode chat's history-navigation shortcut (actionIntent.ts's 'kind:
+  // history' match) — "go back"/"navigate forward". No permission target:
+  // acting on the tab's own history is auto-granted, same as the CDP web
+  // agent's nav.back/nav.forward VERB_CLASS.
+  | { type: 'runNavigateHistory'; direction: 'back' | 'forward'; tabId: number }
   | { type: 'agentSubmitGoal'; goal: string; maxActions: number; listTarget: WebAgentListTarget | null; autoApprove: boolean }
   | { type: 'agentApprovePlan'; runId: string }
   | { type: 'agentRejectPlan'; runId: string }

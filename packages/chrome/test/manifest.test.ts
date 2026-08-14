@@ -119,11 +119,22 @@ describe('manifest.json', () => {
     expect(manifest.incognito).toBe('not_allowed');
   });
 
-  it('points at the built service worker and popup', () => {
+  it('points at the built service worker, with no popup', () => {
     expect(manifest.background.service_worker).toBe('sw.js');
     // Classic worker, not a module: esbuild emits one self-contained IIFE.
     expect(manifest.background.type).toBeUndefined();
-    expect(manifest.action.default_popup).toBe('popup.html');
+    // No default_popup: the toolbar icon opens the side panel directly (see
+    // the next test), so there is nothing left for default_popup to point at.
+    expect(manifest.action.default_popup).toBeUndefined();
+  });
+
+  it('opens the side panel on the toolbar icon click, not a popup', () => {
+    // Chrome allows EITHER default_popup OR side-panel-on-click for the
+    // toolbar action, never both — so this is the other half of the previous
+    // test's assertion, pinned as its own reviewable line same as every other
+    // permission/behavior decision in this file.
+    const sw = fs.readFileSync(path.join(root, 'src', 'sw.ts'), 'utf8');
+    expect(sw).toMatch(/chrome\.sidePanel\.setPanelBehavior\(\s*\{\s*openPanelOnActionClick:\s*true\s*\}\s*\)/);
   });
 
   it('ships every icon size it declares', () => {

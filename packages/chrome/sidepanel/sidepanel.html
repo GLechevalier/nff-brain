@@ -13,8 +13,9 @@
       panel shows arrives via the service worker — this document never holds
       the pairing token or the provider key, and never fetches.
 
-      One UI home, five subtabs: Agent (CDP web agent) · MCP (connections) ·
-      Brain (chat in one of three modes) · Graph (node canvas) · Settings (BYOK).
+      One UI home, six subtabs: Setup (pairing/capture/recorders) · Agent (CDP
+      web agent) · MCP (connections) · Brain (chat in one of three modes) ·
+      Graph (node canvas) · Settings (BYOK).
     -->
     <header class="bar">
       <img class="mascot" src="icons/32.png" alt="" aria-hidden="true" />
@@ -26,15 +27,130 @@
     </header>
 
     <div id="disconnected" class="banner hidden">
-      Brain not reachable — pair from the extension popup.
+      Brain not reachable — pair from the Setup tab.
     </div>
 
     <nav class="tabs">
+      <button id="sp-tab-setup" class="tab">Setup</button>
       <button id="sp-tab-brain" class="tab active">Brain</button>
       <button id="sp-tab-mcp" class="tab">MCP</button>
       <button id="sp-tab-graph" class="tab">Graph</button>
       <button id="sp-tab-settings" class="tab">Settings</button>
     </nav>
+
+    <!--
+      Setup: pairing, capture on/off, the allowed-domains list, per-site
+      recorders, and record-a-task — everything that used to live in the
+      toolbar popup before the icon started opening this panel directly.
+      Ids are all setup-prefixed to avoid colliding with the header's own
+      #dot/#workspace/#counts globals above.
+    -->
+    <section id="setup-view" class="view hidden">
+      <div class="panel">
+        <div class="row">
+          <span id="setup-dot" class="dot"></span>
+          <span id="setup-phase" class="strong">Checking…</span>
+          <span id="setup-endpoint" class="muted push"></span>
+        </div>
+        <div id="setup-counts" class="muted small"></div>
+        <div id="setup-workspace" class="muted small ellipsis"></div>
+        <div id="setup-version" class="muted small"></div>
+        <div id="setup-conn-error" class="small error hidden"></div>
+        <div id="setup-migration" class="small muted hidden"></div>
+        <button id="setup-retry" class="btn hidden">Retry</button>
+      </div>
+
+      <!-- Shown when unpaired, rejected, or standalone (pairing stays reachable
+           from standalone — it is the doorway to migrating the local brain). -->
+      <div id="setup-pair-form" class="panel hidden">
+        <p class="small">
+          Run <code class="inline">nff-brain serve</code> in your project, then enter the code it prints.
+          Captures are kept on this device either way — or add your own AI API key under
+          Settings to build a brain right here in the browser.
+        </p>
+        <div class="row gap">
+          <label class="small" for="setup-port">Port</label>
+          <input id="setup-port" class="input narrow" inputmode="numeric" autocomplete="off" />
+          <input id="setup-code" class="input grow" placeholder="XXX-XXX" autocomplete="off" spellcheck="false" />
+          <button id="setup-connect" class="btn primary">Connect</button>
+        </div>
+        <div id="setup-pair-error" class="small error hidden"></div>
+      </div>
+
+      <div class="panel">
+        <div class="row">
+          <span class="strong">Capture</span>
+          <button id="setup-capture-toggle" class="toggle push" role="switch" aria-checked="false">
+            <span class="toggle-on">ON</span><span class="toggle-off">PAUSED</span>
+          </button>
+        </div>
+        <p id="setup-capture-hint" class="muted small">
+          Nothing is captured on a domain you haven't added below.
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="row">
+          <span class="label">Allowed domains</span>
+          <span id="setup-rule-count" class="muted push"></span>
+        </div>
+        <ul id="setup-rules" class="rules"></ul>
+        <p id="setup-rules-empty" class="muted small hidden">Empty list — nothing is ever captured.</p>
+        <button id="setup-allow-current" class="btn wide hidden"></button>
+        <div class="row gap">
+          <input id="setup-rule-input" class="input grow" placeholder="domain, *.domain or URL" autocomplete="off" spellcheck="false" />
+          <button id="setup-rule-add" class="btn">Add</button>
+        </div>
+        <div id="setup-rule-error" class="small error hidden"></div>
+        <p class="muted small">Ports are ignored — a domain matches on any port.</p>
+      </div>
+
+      <div class="panel">
+        <div class="row">
+          <span class="label">Recorders</span>
+        </div>
+        <p class="muted small">
+          Per-site, off by default: records only actions you perform there.
+          Enabling asks Chrome for that one site; disabling releases it.
+        </p>
+        <ul id="setup-recorders" class="rules"></ul>
+        <div id="setup-recorder-error" class="small error hidden"></div>
+      </div>
+
+      <div class="panel">
+        <div class="row">
+          <span class="label">Record a task</span>
+          <span id="setup-trace-count" class="muted push"></span>
+        </div>
+        <p class="muted small">
+          Records what you do on the current tab into a repeatable workflow. Allow the
+          site first. Stop when done — the recording is turned into a workflow you can
+          replay from the Brain tab.
+        </p>
+        <button id="setup-trace-toggle" class="btn wide">Record this tab</button>
+        <div id="setup-trace-pending" class="small muted hidden"></div>
+        <div id="setup-trace-error" class="small error hidden"></div>
+      </div>
+
+      <div class="panel">
+        <div class="row">
+          <span class="label">Activity</span>
+          <span id="setup-activity-count" class="muted push"></span>
+        </div>
+        <button id="setup-clear" class="btn wide" disabled>Nothing captured yet</button>
+        <div id="setup-clear-confirm" class="hidden">
+          <p id="setup-clear-question" class="small"></p>
+          <label id="setup-clear-nodes-row" class="row small hidden">
+            <input id="setup-clear-nodes" type="checkbox" />
+            <span id="setup-clear-nodes-label"></span>
+          </label>
+          <div class="row gap">
+            <button id="setup-clear-yes" class="btn danger">Clear</button>
+            <button id="setup-clear-no" class="btn">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <!-- ── MCP: registered-connection management ──────────────────────────── -->
     <section id="mcp-view" class="view hidden">
@@ -94,7 +210,7 @@
           <input id="act-budget" class="input narrow" type="number" min="1" max="100" value="40" />
         </div>
         <ul id="workflow-list" class="list"></ul>
-        <p id="workflow-empty" class="muted small">No workflows yet — record a task from the popup.</p>
+        <p id="workflow-empty" class="muted small">No workflows yet — record a task from the Setup tab.</p>
 
         <!-- Replay run feedback — hidden unless a replay is active. -->
         <div id="act-run" class="hidden">
@@ -184,7 +300,7 @@
       <div class="panel">
         <p class="muted small">
           Prefer everything local? Run <code class="inline">nff-brain serve</code> in a project and pair from
-          the extension popup instead — a paired server always takes over, and any notes built
+          the Setup tab instead — a paired server always takes over, and any notes built
           here migrate into it automatically.
         </p>
       </div>

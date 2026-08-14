@@ -20,7 +20,8 @@ import type { AgentAdapter } from './agentTypes.js';
 
 export type ActionIntent =
   | { kind: 'adapter'; adapterId: string; label: string; url: string }
-  | { kind: 'host'; host: string; label: string; url: string };
+  | { kind: 'host'; host: string; label: string; url: string }
+  | { kind: 'history'; direction: 'back' | 'forward' };
 
 const ACTION_VERBS = ['navigate', 'go to', 'open', 'visit', 'take me to'];
 
@@ -38,6 +39,24 @@ function adapterAlias(adapter: AgentAdapter): string | null {
 // covers "take me to X" the same way "go"+"to" covers "go to X".
 const GENERIC_TAIL_RE = /\b(?:navigate|go|open|visit|take\s+me)\b\s*(?:to\b)?\s+(.+)$/i;
 const HOSTNAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+// Common conversational sign-offs stripped from the tail before the
+// single-token hostname check — "pls"/"thanks"/etc. would otherwise make an
+// otherwise-clean request look like a multi-word (rejected) sentence.
+// `(?:^|\s+)` rather than a bare `\s+` prefix: extractHistoryDirection's
+// remainder can be the filler word alone ("go back please" leaves just
+// "please", no leading whitespace once the outer regex's \s* already ate it).
+const TRAILING_FILLER_RE = /(?:^|\s+)(?:pl(?:ease|s|z)|now|for me|thanks?(?:\s+you)?|thank\s+you|ok(?:ay)?|asap)$/i;
+
+/** Chained sign-offs ("google now please") lose one filler per pass. */
+function stripFillers(s: string): string {
+  let rest = s;
+  let stripped = rest;
+  do {
+    rest = stripped;
+    stripped = rest.replace(TRAILING_FILLER_RE, '').replace(/[.?!]+$/, '').trim();
+  } while (stripped !== rest);
+  return rest;
+}
 
 /**
  * Requires the ENTIRE remainder after the verb (once trailing filler/
@@ -52,13 +71,30 @@ const HOSTNAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-
 function extractGenericSite(message: string): { host: string; url: string } | null {
   const m = GENERIC_TAIL_RE.exec(message.trim());
   if (!m) return null;
-  let rest = m[1].trim().replace(/[.?!]+$/, '').trim();
-  rest = rest.replace(/\s+(please|now|for me)$/i, '').replace(/[.?!]+$/, '').trim();
+  const rest = stripFillers(m[1].trim().replace(/[.?!]+$/, '').trim());
   if (!rest || /\s/.test(rest)) return null;
   const candidate = rest.toLowerCase();
   if (!HOSTNAME_RE.test(candidate)) return null;
   const host = candidate.includes('.') ? candidate : `${candidate}.com`;
   return { host, url: `https://${host}/` };
+}
+
+// Independent of ACTION_VERBS/GENERIC_TAIL_RE above — "go back"/"head back"
+// don't contain "go to", and the destination is history, not a site. Same
+// "entire remainder must collapse to nothing" discipline as
+// extractGenericSite's single-token rule keeps "go back to work on the
+// report" (leftover "to work on the report") from false-positiving.
+const HISTORY_TAIL_RE = /\b(?:go|navigate|head|take\s+me)\s+(back|forward)\b\s*(.*)$/i;
+const PAGE_PHRASE_RE = /^(?:to\s+)?(?:the\s+)?(?:previous|last|next)\s+page$/i;
+
+function extractHistoryDirection(message: string): 'back' | 'forward' | null {
+  const m = HISTORY_TAIL_RE.exec(message.trim());
+  if (!m) return null;
+  let rest = m[2].trim().replace(/[.?!]+$/, '').trim();
+  rest = rest.replace(PAGE_PHRASE_RE, '').trim();
+  rest = stripFillers(rest);
+  if (rest) return null;
+  return m[1].toLowerCase() as 'back' | 'forward';
 }
 
 /**
@@ -70,6 +106,9 @@ export function detectActionIntent(
   message: string,
   adapters: readonly AgentAdapter[] = AGENT_ADAPTERS,
 ): ActionIntent | null {
+  const direction = extractHistoryDirection(message);
+  if (direction) return { kind: 'history', direction };
+
   const lower = message.toLowerCase();
   if (!ACTION_VERBS.some((v) => lower.includes(v))) return null;
 
