@@ -355,7 +355,7 @@ async function startActRun(goal: string, workflowId?: string, maxActionsOverride
     return;
   }
   const maxActions = maxActionsOverride ?? (Number(($('act-budget') as HTMLInputElement).value) || undefined);
-  const reply = await send({ type: 'actStart', goal, tabId, maxActions, workflowId });
+  const reply = await send({ type: 'actStart', goal, tabId, maxActions, workflowId, mode });
   if (reply.type === 'error') {
     showActError(reply.message);
     return;

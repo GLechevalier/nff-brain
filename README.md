@@ -3,7 +3,7 @@
   <img src="public/images/tumbnail.png" alt="nff" width="640">
 </p>
 
-# nff, a browser agent you train to learn complex tasks
+# nff, a Chrome extension that adds a browser agent you can train to learn complex tasks
 
 **Record it once on your browser. Rerun it forever — and it gets better every time you do.**
 
@@ -19,11 +19,10 @@
 What it does : it places a brain context in your browser grown automatically when you use it, and allows you to automate web tasks :
 
 - **Local only.** : The extension runs locally as a chrome process connected with a claude code or your API keys, only runs on your computer only
-- **Web navigation**
 - **Connects to your local claude code so that you don't burn too much API tokens** : litteraly linkable to your claude code terminal if you want to run it besides it, or just use an API key
 - **General context integrated** : The more you use it, the more context you store inside it, and it self-improves your tool 
 - **Automate web tasks** : a recoder makes your brain grow smarter, and you can ask it to replay actions that you already did by the past. Think Zapier/n8n but self-configured.
-- **Connects with other MCP tools** : let you output things foundout during runs to mcp tools to store data or make decisions on other systems for example
+- **Connects with other MCP tools** : let you output things foundout during runs to mcp tools to store data or make decisions on other systems
 
 
 ## Install

@@ -130,9 +130,6 @@ export function createAttentionController(doc: Document): AttentionController {
       'opacity:0;transition:opacity 200ms ease,transform 200ms ease;z-index:2147483647;' +
       'font:600 12px/1 -apple-system,BlinkMacSystemFont,sans-serif;color:#f4fffb}' +
       '.pill.visible{opacity:1;transform:translateX(-50%) translateY(0)}' +
-      '.dot{width:8px;height:8px;border-radius:50%;background:' +
-      ACCENT +
-      ';box-shadow:0 0 6px 1px rgba(0,255,204,0.7);flex:none}' +
       '.label{white-space:nowrap}' +
       '.stop{all:unset;cursor:pointer;padding:4px 10px;border-radius:999px;' +
       'background:' +
@@ -149,7 +146,6 @@ export function createAttentionController(doc: Document): AttentionController {
     pill.id = 'nff-attn-pill';
     pill.className = 'pill';
     pill.innerHTML =
-      '<span class="dot"></span>' +
       '<span class="label">nff-brain is active in this tab</span>' +
       '<button class="stop" type="button">Stop</button>';
 

@@ -18,16 +18,104 @@ import { decideAct, originOf } from './actGate.js';
 import { executeVerb } from './actEngine.js';
 import { appendTranscript, mutateActRun } from './actStore.js';
 import { getActHostAllow, getActRun } from './storage.js';
+import { KEYS } from './schema.js';
+import type { ActManualCapability, ActPendingGrant, ActRunState } from './schema.js';
 
 export interface ActContext {
   tabId: number;
+  /** Correlates a paused runVerb() with the run it's waiting on — see waitForGrantAnswer. */
+  runId: string;
+  /** The chat mode the run started under — only 'manual' asks per-capability. */
+  mode: 'manual' | 'plan' | 'auto';
   /** Toward maxActions — counts interact/navigate/destructive verbs, not reads. */
   actionsTaken: number;
   maxActions: number;
   /** Origins granted "once" this run (plus persisted "always" from storage). */
   grantedOrigins: string[];
+  /** Manual mode's "Always" answers so far this run — mirrors ActRunState.manualGrants. */
+  manualGrants: Partial<Record<ActManualCapability, true>>;
   /** Latched true by Stop / budget so in-flight executors short-circuit. */
   stopped: boolean;
+}
+
+/** Short, human description of a verb for the manual-mode capability prompt. Pre-execution, so it names the ACTION, not the resolved element (the transcript line fills that in afterward). */
+function describeVerb(verb: BrowserVerb): string {
+  switch (verb.kind) {
+    case 'page.read':
+      return 'read the page';
+    case 'page.find':
+      return 'search the page';
+    case 'page.screenshot':
+      return 'take a screenshot';
+    case 'page.zoom':
+      return 'zoom the page';
+    case 'tab.list':
+      return 'list open tabs';
+    case 'pointer.click':
+      return `${verb.button} click`;
+    case 'pointer.move':
+    case 'touch.tap':
+      return 'move the pointer';
+    case 'pointer.down':
+    case 'pointer.up':
+      return 'press the mouse button';
+    case 'pointer.drag':
+    case 'touch.swipe':
+      return 'drag on the page';
+    case 'scroll.wheel':
+      return 'scroll the page';
+    case 'scroll.intoView':
+      return 'scroll an element into view';
+    case 'key.press':
+      return `press ${verb.key}`;
+    case 'key.type':
+      return 'type text';
+    case 'element.focus':
+      return 'focus an element';
+    case 'form.setValue':
+      return 'fill in a field';
+    case 'form.upload':
+      return 'upload a file';
+    case 'tab.close':
+      return 'close a tab';
+    case 'dialog.handle':
+      return 'handle a dialog';
+    default:
+      return verb.kind;
+  }
+}
+
+/**
+ * Pause the run on a fresh pendingGrant and wait for the panel to answer it —
+ * event-driven off chrome.storage.onChanged, same pattern as actRun.ts's
+ * watchForStop, kept local here since actRun.ts imports THIS module (a reverse
+ * import would cycle). Resolves 'never' (deny, don't stop the run) if the run
+ * is stopped/cleared/replaced while waiting, so a paused verb can never hang
+ * a run that the user has already abandoned.
+ */
+async function requestGrant(runId: string, grant: ActPendingGrant): Promise<'once' | 'always' | 'never'> {
+  const posted = await mutateActRun((r) => {
+    r.phase = 'awaiting_grant';
+    r.pendingGrant = grant;
+    r.pendingGrantChoice = null;
+  });
+  if (!posted) return 'never';
+  return new Promise((resolve) => {
+    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string): void => {
+      if (area !== 'local' || !(KEYS.actRun in changes)) return;
+      const v = changes[KEYS.actRun]!.newValue as ActRunState | null | undefined;
+      if (!v || v.id !== runId || v.phase !== 'awaiting_grant') {
+        chrome.storage.onChanged.removeListener(listener);
+        resolve('never');
+        return;
+      }
+      if (v.pendingGrantChoice != null) {
+        chrome.storage.onChanged.removeListener(listener);
+        resolve(v.pendingGrantChoice);
+      }
+    };
+    chrome.storage.onChanged.addListener(listener);
+  });
 }
 
 export const ACT_STEERING = [
@@ -248,16 +336,45 @@ async function runVerb(ctx: ActContext, verb: BrowserVerb, snapshotIdRef: { id: 
       ctx.stopped = true;
       return { ok: false, resultText: `action budget of ${ctx.maxActions} reached — stopping` };
     }
+  }
+
+  // Gate everything except navigate (see decideAct's doc comment: navigate is
+  // exempt from both the manual-capability layer and the origin layer). Manual
+  // mode pulls 'observe' into the gate too, which is why this can no longer
+  // live inside the old `if (cls !== 'observe')` block above.
+  if (cls !== 'navigate') {
     // tab.close targets a tab that may not be the one currently driven — gate on
     // ITS origin, not ctx.tabId's, or closing an unrelated tab would be judged
     // against the wrong site's grant.
     const origin = verb.kind === 'tab.close' ? await currentOrigin(verb.tabId) : await currentOrigin(ctx.tabId);
-    if (cls === 'interact' || cls === 'destructive') {
-      const persisted = (await getActHostAllow()).byOrigin[origin ?? ''];
-      const decision = decideAct({ verbClass: cls, persisted, sessionGranted: origin != null && ctx.grantedOrigins.includes(origin) });
-      if (decision === 'deny') return { ok: false, resultText: `blocked — you set ${origin} to never allow actions` };
-      if (decision === 'prompt')
-        return { ok: false, resultText: `not permitted to act on ${origin} yet — ask the user to grant this origin in the panel, then retry` };
+    const persisted = origin ? (await getActHostAllow()).byOrigin[origin] : undefined;
+    const manualCap = cls as ActManualCapability; // safe: cls is 'observe'|'interact'|'destructive' here, navigate excluded above
+    const manualGranted = ctx.mode !== 'manual' || !!ctx.manualGrants[manualCap];
+    const decision = decideAct({
+      verbClass: cls,
+      persisted,
+      sessionGranted: origin != null && ctx.grantedOrigins.includes(origin),
+      mode: ctx.mode,
+      manualGranted,
+    });
+    if (decision === 'deny') return { ok: false, resultText: `blocked — you set ${origin} to never allow actions` };
+    if (decision === 'prompt') {
+      const isManualGate = ctx.mode === 'manual' && !manualGranted;
+      const grant: ActPendingGrant = isManualGate
+        ? { kind: 'capability', verbClass: manualCap, description: describeVerb(verb) }
+        : { kind: 'origin', origin: origin ?? '', verbClass: cls };
+      const choice = await requestGrant(ctx.runId, grant);
+      if (choice === 'never') {
+        return {
+          ok: false,
+          resultText: isManualGate ? 'the user declined this action' : `blocked — you set ${origin ?? 'this site'} to never allow actions`,
+        };
+      }
+      if (isManualGate) {
+        if (choice === 'always') ctx.manualGrants[manualCap] = true;
+      } else if (origin && !ctx.grantedOrigins.includes(origin)) {
+        ctx.grantedOrigins.push(origin);
+      }
     }
   }
 

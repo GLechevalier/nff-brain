@@ -129,6 +129,14 @@ export interface RunChatOpts {
    * and honor cancellation between turns.
    */
   onTurn?: (state: { messages: ChatMessage[]; toolEvents: ChatWithToolsResult['toolEvents']; turn: number }) => Promise<boolean> | boolean;
+  /**
+   * Called with each turn's assistant text BEFORE its tool calls run (skipped
+   * when a turn has no text — most turns that call a tool say nothing).
+   * Otherwise every intermediate turn's reasoning is silently discarded — only
+   * the FINAL turn's text survives as `answer`. The web-agent run uses this to
+   * log the agent's per-step reasoning, not just its closing summary.
+   */
+  onAssistantText?: (text: string) => void;
 }
 
 /**
@@ -162,6 +170,7 @@ export async function runChatWithTools(
     const result = await chatOneShot(messages, specs);
     lastText = result.text;
     if (result.toolCalls.length === 0) return { answer: result.text, toolEvents };
+    if (result.text) opts.onAssistantText?.(result.text);
 
     const assistantContent: ChatContentBlock[] = [];
     if (result.text) assistantContent.push({ type: 'text', text: result.text });

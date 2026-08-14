@@ -30,11 +30,28 @@ export interface ActGateInput {
   persisted: OriginGrant | undefined;
   /** True when the user granted this origin "once" earlier in THIS run. */
   sessionGranted: boolean;
+  /** The run's chat mode — only 'manual' adds the per-capability layer below. */
+  mode?: 'manual' | 'plan' | 'auto';
+  /**
+   * True when the user already answered THIS run's capability prompt for
+   * verbClass (Once for the action in flight, or Always for the rest of the
+   * run) — irrelevant, and unread, for verbClass 'navigate' or any mode other
+   * than 'manual'.
+   */
+  manualGranted?: boolean;
 }
 
 /**
  * NEVER THROWS. Decide whether the engine may dispatch a verb of this class.
  *
+ * Manual mode adds a layer IN FRONT of everything below: the first observe,
+ * interact, or destructive verb of a run prompts the user directly (Once /
+ * Always / Never — see ActPendingGrant's 'capability' kind), regardless of
+ * origin trust, until manualGranted says that capability was already answered
+ * this run. 'navigate' is exempt — following a link within an already-granted
+ * origin doesn't get its own prompt. Plan/Auto never see this layer.
+ *
+ * Beneath that, per origin:
  * - observe / navigate: always allowed — a started run consents to reading the
  *   page and moving between pages. ('never' blocks acting ON a page, not
  *   looking at it.)
@@ -45,6 +62,7 @@ export interface ActGateInput {
  *   run. "never" denies.
  */
 export function decideAct(i: ActGateInput): GateDecision {
+  if (i.mode === 'manual' && i.verbClass !== 'navigate' && !i.manualGranted) return 'prompt';
   if (i.verbClass === 'observe' || i.verbClass === 'navigate') return 'allow';
   if (i.persisted === 'never') return 'deny';
   if (i.verbClass === 'destructive') return i.persisted === 'always' ? 'allow' : 'prompt';

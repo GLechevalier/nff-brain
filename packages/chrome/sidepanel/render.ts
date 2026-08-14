@@ -109,7 +109,9 @@ export function paintActRun(run: ActRunState | null): void {
   status.classList.toggle('error', phase === 'error');
 
   if (phase === 'awaiting_grant' && run?.pendingGrant) {
-    $('act-grant-origin').textContent = run.pendingGrant.origin || 'this site';
+    const g = run.pendingGrant;
+    $('act-grant-text').textContent =
+      g.kind === 'capability' ? `Let the agent ${g.description}?` : `Let the agent act on ${g.origin || 'this site'}?`;
   }
 
   const log = $('act-log');

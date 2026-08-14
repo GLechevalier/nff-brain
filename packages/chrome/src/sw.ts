@@ -75,7 +75,7 @@ import {
   setProviderSettings,
 } from './storage.js';
 import { testProviderKey } from './providerClient.js';
-import { endActionRun, grantOrigin, startActionRun, stopActionRun } from './actRun.js';
+import { answerPendingGrant, endActionRun, startActionRun, stopActionRun } from './actRun.js';
 import { attentionHide, cursorHide } from './actEngine.js';
 import { cancelTraceRecording, onTraceEvent, startTraceRecording, stopTraceRecording } from './traceCapture.js';
 import { distillPairedTrace } from './pairedTraceDistill.js';
@@ -408,7 +408,7 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     // uses the provider key); paired mode has no provider so the run reports
     // "add an API key" — the paired generic loop is a later milestone.
     case 'actStart': {
-      const res = await startActionRun(msg.goal, msg.tabId, msg.maxActions, msg.workflowId);
+      const res = await startActionRun(msg.goal, msg.tabId, msg.maxActions, msg.workflowId, msg.mode);
       if (!res.ok) return { type: 'error', message: res.error ?? 'could not start the run' };
       return { type: 'actStatus', run: await getActRun() };
     }
@@ -433,7 +433,7 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       return { type: 'actStatus', run: null };
 
     case 'actGrant':
-      await grantOrigin(msg.choice);
+      await answerPendingGrant(msg.choice);
       return { type: 'actStatus', run: await getActRun() };
 
     case 'getActStatus':

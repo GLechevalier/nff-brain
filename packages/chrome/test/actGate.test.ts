@@ -32,6 +32,29 @@ describe('decideAct', () => {
   });
 });
 
+describe('decideAct — manual mode capability layer', () => {
+  it('prompts for observe, interact, and destructive when not yet capability-granted', () => {
+    for (const vc of ['observe', 'interact', 'destructive'] as const) {
+      expect(decideAct({ verbClass: vc, persisted: undefined, sessionGranted: false, mode: 'manual', manualGranted: false })).toBe('prompt');
+    }
+  });
+
+  it('exempts navigate from the capability layer', () => {
+    expect(decideAct({ verbClass: 'navigate', persisted: undefined, sessionGranted: false, mode: 'manual', manualGranted: false })).toBe('allow');
+  });
+
+  it('falls through to the ordinary origin logic once capability-granted', () => {
+    expect(decideAct({ verbClass: 'observe', persisted: undefined, sessionGranted: false, mode: 'manual', manualGranted: true })).toBe('allow');
+    expect(decideAct({ verbClass: 'interact', persisted: undefined, sessionGranted: false, mode: 'manual', manualGranted: true })).toBe('prompt'); // origin still ungranted
+    expect(decideAct({ verbClass: 'interact', persisted: 'always', sessionGranted: false, mode: 'manual', manualGranted: true })).toBe('allow');
+  });
+
+  it('never applies to plan or auto mode', () => {
+    expect(decideAct({ verbClass: 'observe', persisted: undefined, sessionGranted: false, mode: 'plan', manualGranted: false })).toBe('allow');
+    expect(decideAct({ verbClass: 'observe', persisted: undefined, sessionGranted: false, mode: 'auto', manualGranted: false })).toBe('allow');
+  });
+});
+
 describe('originOf', () => {
   it('reduces a url to scheme://host[:port]', () => {
     expect(originOf('https://www.linkedin.com/search?q=x')).toBe('https://www.linkedin.com');

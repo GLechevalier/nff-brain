@@ -15,7 +15,7 @@ import type { PageSnapshot } from '@nff-brain/core/pageSnapshot';
 import { isRestrictedUrl } from './actGate.js';
 import { buildCursorInstallerSource, CURSOR_GLOBAL } from './cursorScript.js';
 import { ATTENTION_GLOBAL, buildAttentionInstallerSource } from './attentionScript.js';
-import { buildResolveSource, buildSnapshotSource, refIndex } from './snapshotScript.js';
+import { buildFingerprintSource, buildResolveSource, buildSnapshotSource, refIndex } from './snapshotScript.js';
 import { dragSamples, keyDescriptor, modifierBits } from './actPlan.js';
 import { detach, ensureAttached, evaluate, send } from './cdp.js';
 
@@ -28,7 +28,18 @@ export interface VerbResult {
   newTabId?: number;
 }
 
-type Point = { x: number; y: number; w?: number; h?: number };
+type Point = {
+  x: number;
+  y: number;
+  w?: number;
+  h?: number;
+  /** tag + short accessible name, e.g. `button "Get started"` — for transcript/prompt text, not the walker's full name algorithm. */
+  label?: string;
+  /** True when something else sits on top of the element's center point (a cookie banner, a modal) — a click here would land on THAT, not the element. */
+  occluded?: boolean;
+  /** Short tag+id/class description of the occluding element, when occluded. */
+  occluder?: string;
+};
 type ResolveOutcome = { ok: true; point: Point } | { ok: false; error: string };
 
 /**
@@ -52,18 +63,36 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
 }
 const ATTENTION_CALL_TIMEOUT_MS = 1200;
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+/** How long a click gets to visibly affect the page before pointer.click reports it as a probable no-op. */
+const CLICK_VERIFY_DELAY_MS = 250;
+
 async function resolveTarget(tabId: number, target: Target): Promise<ResolveOutcome> {
   if ('x' in target) return { ok: true, point: { x: target.x, y: target.y } };
   const idx = refIndex(target.ref);
   if (idx === null) return { ok: false, error: `bad ref "${target.ref}"` };
-  const r = await evaluate<{ x?: number; y?: number; w?: number; h?: number; stale?: boolean; gone?: boolean }>(
-    tabId,
-    buildResolveSource(target.snapshotId, idx),
-  );
+  const r = await evaluate<{
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+    label?: string;
+    occluded?: boolean;
+    occluder?: string;
+    stale?: boolean;
+    gone?: boolean;
+  }>(tabId, buildResolveSource(target.snapshotId, idx));
   if (!r || r.stale) return { ok: false, error: 'stale ref — the page changed, call read_page again' };
   if (r.gone) return { ok: false, error: 'that element is no longer on the page — call read_page again' };
   if (typeof r.x !== 'number' || typeof r.y !== 'number') return { ok: false, error: 'could not locate that element' };
-  return { ok: true, point: { x: r.x, y: r.y, w: r.w, h: r.h } };
+  return { ok: true, point: { x: r.x, y: r.y, w: r.w, h: r.h, label: r.label, occluded: r.occluded, occluder: r.occluder } };
+}
+
+/** Cheap page fingerprint (URL + title + visible-text length), or '' on failure — used only for a soft did-anything-change hint after a click. */
+async function fingerprint(tabId: number): Promise<string> {
+  return (await evaluate<string>(tabId, buildFingerprintSource()).catch(() => '')) || '';
 }
 
 // ── cursor visualization ─────────────────────────────────────────────────────
@@ -218,12 +247,20 @@ export async function executeVerb(tabId: number, verb: BrowserVerb): Promise<Ver
       await attentionShow(tabId);
       await cursorMove(tabId, r.point.x, r.point.y);
       await mouse(tabId, 'mouseMoved', r.point);
-      return { ok: true, resultText: `moved to ${Math.round(r.point.x)},${Math.round(r.point.y)}` };
+      const on = r.point.label ? ` on ${r.point.label}` : '';
+      return { ok: true, resultText: `moved to ${Math.round(r.point.x)},${Math.round(r.point.y)}${on}` };
     }
     case 'pointer.click': {
       const r = await resolveTarget(tabId, verb.target);
       if (!r.ok) return { ok: false, resultText: r.error };
+      if (r.point.occluded) {
+        return {
+          ok: false,
+          resultText: `cannot click — the element is covered by <${r.point.occluder || 'another element'}>, likely a banner or modal; dismiss it, then read_page again`,
+        };
+      }
       const mods = modifierBits(verb.modifiers);
+      const before = await fingerprint(tabId);
       await cursorInstall(tabId);
       await attentionShow(tabId);
       await cursorMove(tabId, r.point.x, r.point.y);
@@ -231,7 +268,16 @@ export async function executeVerb(tabId: number, verb: BrowserVerb): Promise<Ver
       await mouse(tabId, 'mouseMoved', r.point, { modifiers: mods });
       await mouse(tabId, 'mousePressed', r.point, { button: verb.button, clickCount: verb.clickCount, modifiers: mods });
       await mouse(tabId, 'mouseReleased', r.point, { button: verb.button, clickCount: verb.clickCount, modifiers: mods });
-      return { ok: true, resultText: `${verb.button} click x${verb.clickCount} at ${Math.round(r.point.x)},${Math.round(r.point.y)}` };
+      const on = r.point.label ? ` on ${r.point.label}` : '';
+      let resultText = `${verb.button} click x${verb.clickCount}${on} at ${Math.round(r.point.x)},${Math.round(r.point.y)}`;
+      if (before) {
+        await sleep(CLICK_VERIFY_DELAY_MS);
+        const after = await fingerprint(tabId);
+        if (after && after === before) {
+          resultText += ' — no visible page change detected; the button may be disabled, occluded, or need another interaction';
+        }
+      }
+      return { ok: true, resultText };
     }
     case 'pointer.down':
     case 'pointer.up': {
@@ -260,7 +306,8 @@ export async function executeVerb(tabId: number, verb: BrowserVerb): Promise<Ver
       const r = await resolveTarget(tabId, verb.target);
       if (!r.ok) return { ok: false, resultText: r.error };
       await mouse(tabId, 'mouseWheel', r.point, { deltaX: verb.dx, deltaY: verb.dy, modifiers: modifierBits(verb.modifiers) });
-      return { ok: true, resultText: `scrolled ${verb.dx},${verb.dy}` };
+      const at = r.point.label ? ` at ${r.point.label}` : '';
+      return { ok: true, resultText: `scrolled ${verb.dx},${verb.dy}${at}` };
     }
     case 'key.type': {
       if (verb.mode === 'keys') {

@@ -68,7 +68,13 @@ async function loadWorkflow(workflowId: string): Promise<WorkflowSpec | null> {
   }
 }
 
-export async function startActionRun(goal: string, tabId: number, maxActions?: number, workflowId?: string): Promise<StartResult> {
+export async function startActionRun(
+  goal: string,
+  tabId: number,
+  maxActions?: number,
+  workflowId?: string,
+  mode: 'manual' | 'plan' | 'auto' = 'auto',
+): Promise<StartResult> {
   if (!goal.trim()) return { ok: false, error: 'enter a goal first' };
   if (!(await hasDebuggerPermission())) return { ok: false, error: 'the debugger permission is missing — remove and reload the extension' };
   if (workflowId && !(await loadWorkflow(workflowId))) {
@@ -94,12 +100,15 @@ export async function startActionRun(goal: string, tabId: number, maxActions?: n
     id: newRunId(),
     phase: awaitingGrant ? 'awaiting_grant' : 'running',
     goal: goal.trim(),
+    mode,
     workflowId,
     tabId,
     actionsTaken: 0,
     maxActions: clampMax(maxActions),
     grantedOrigins: grantedNow,
-    pendingGrant: awaitingGrant ? { origin: origin ?? '', verbClass: 'interact' } : null,
+    manualGrants: {},
+    pendingGrant: awaitingGrant ? { kind: 'origin', origin: origin ?? '', verbClass: 'interact' } : null,
+    pendingGrantChoice: null,
     transcript: [{ at: now, kind: 'system', text: `Goal: ${goal.trim()}` }],
     startedAt: now,
     updatedAt: now,
@@ -110,12 +119,31 @@ export async function startActionRun(goal: string, tabId: number, maxActions?: n
   return { ok: true, runId: run.id, awaitingGrant };
 }
 
-/** Answer the pending origin grant. 'never' ends the run; else the loop starts. */
-export async function grantOrigin(choice: GrantChoice): Promise<void> {
+/**
+ * Answer the current pendingGrant — either the origin grant asked before the
+ * loop starts (unchanged behavior: 'never' ends the run, else drive() starts)
+ * or, mid-run, Manual mode's per-capability grant a paused runVerb() call
+ * (actTools.ts's requestGrant) is waiting on: this just posts the choice and
+ * lets that waiting call resume itself, same as answering Stop.
+ */
+export async function answerPendingGrant(choice: GrantChoice): Promise<void> {
   const run = await getActRun();
   if (!run || run.phase !== 'awaiting_grant' || !run.pendingGrant) return;
-  const origin = run.pendingGrant.origin;
 
+  if (run.pendingGrant.kind === 'capability') {
+    const { verbClass, description } = run.pendingGrant;
+    const verb = { once: 'Allowed', always: 'Always allowed', never: 'Declined' }[choice];
+    await mutateActRun((r) => {
+      if (choice === 'always') r.manualGrants[verbClass] = true;
+      r.pendingGrant = null;
+      r.pendingGrantChoice = choice;
+      r.phase = 'running';
+      r.transcript.push({ at: new Date().toISOString(), kind: 'system', text: `${verb}: ${description}.` });
+    });
+    return;
+  }
+
+  const origin = run.pendingGrant.origin;
   if (choice === 'always' || choice === 'never') {
     const state = await getActHostAllow();
     state.byOrigin[origin] = choice;
@@ -188,9 +216,12 @@ async function drive(runId: string, tabId: number): Promise<void> {
 
   const ctx: ActContext = {
     tabId,
+    runId,
+    mode: run.mode,
     actionsTaken: run.actionsTaken,
     maxActions: run.maxActions,
     grantedOrigins: [...run.grantedOrigins],
+    manualGrants: { ...run.manualGrants },
     stopped: false,
   };
 
@@ -278,6 +309,7 @@ async function runByokLoop(ctx: ActContext, runId: string, prompt: string): Prom
   const result = await runChatWithTools(prompt, buildActTools(ctx), {
     maxTurns: ACT_MAX_TURNS,
     onTurn: () => keepGoing(ctx, runId),
+    onAssistantText: (text) => void appendTranscript({ kind: 'thought', text }),
   });
   if (result === null) return { ok: false, error: 'pair a local nff-brain server, or add an API key in Settings, to run the agent' };
   return { ok: true, answer: result.answer };
@@ -317,6 +349,11 @@ async function runPairedLoop(ctx: ActContext, runId: string, systemPrompt: strin
       return { ok: false, error: raced.err instanceof Error ? raced.err.message : 'the local server did not answer' };
     }
     const text = raced.text;
+    // Prose the model wrote before its JSON action (its reasoning for this
+    // step) — otherwise only the final {done:true,summary} survives anywhere.
+    const braceIdx = text.indexOf('{');
+    const prose = braceIdx > 0 ? text.slice(0, braceIdx).trim() : '';
+    if (prose) void appendTranscript({ kind: 'thought', text: prose });
 
     const action = parseActAction(text);
     if (action.kind === 'done') {

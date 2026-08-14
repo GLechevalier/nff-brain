@@ -197,7 +197,12 @@ export function buildSnapshotSource(snapshotId: string, mode: 'interactive' | 't
 
 /**
  * The program that resolves a ref to a viewport-center point, verifying the
- * snapshot is still current. Returns {x,y} | {stale:true} | {gone:true}.
+ * snapshot is still current, and reports whether some OTHER element actually
+ * sits on top of that point (a cookie banner, a modal) — a click dispatched at
+ * the point would land on the occluder, not the resolved element, and
+ * silently do nothing useful. `label` is a lightweight tag+name description
+ * for the transcript/log, not the walker's full accessible-name algorithm.
+ * Returns {x,y,w,h,label,occluded,occluder} | {stale:true} | {gone:true}.
  */
 export function buildResolveSource(snapshotId: string, refIndex: number): string {
   return inlineGlobals(
@@ -209,9 +214,30 @@ export function buildResolveSource(snapshotId: string, refIndex: number): string
       String(refIndex) +
       '];if(!el||!el.isConnected)return {gone:true};' +
       'var r=el.getBoundingClientRect();' +
-      'return {x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height};' +
+      'var cx=r.left+r.width/2,cy=r.top+r.height/2;' +
+      'var nm=(el.getAttribute("aria-label")||el.textContent||el.getAttribute("value")||"").replace(/\\s+/g," ").trim();' +
+      'var label=(el.tagName||"").toLowerCase()+(nm?(\' "\'+nm.slice(0,60)+\'"\'):"");' +
+      'var top=document.elementFromPoint(cx,cy);' +
+      'var occluded=!!top&&!el.contains(top)&&!top.contains(el);' +
+      'var occluder="";' +
+      'if(occluded){' +
+      'var cls=top.className&&typeof top.className==="string"?("."+top.className.trim().split(/\\s+/).slice(0,2).join(".")):"";' +
+      'occluder=(top.tagName||"").toLowerCase()+(top.id?("#"+top.id):cls);' +
+      '}' +
+      'return {x:cx,y:cy,w:r.width,h:r.height,label:label,occluded:occluded,occluder:occluder};' +
       '})()',
   );
+}
+
+/**
+ * A cheap, order-sensitive fingerprint of the page's visible content — URL,
+ * title, and the length of its rendered text. Not a hash: two different pages
+ * of the same text length could theoretically collide, but that's an
+ * acceptable false negative for "did anything visibly change after a click",
+ * which only needs to catch the common case (nothing happened at all).
+ */
+export function buildFingerprintSource(): string {
+  return '(function(){var b=document.body;return (location.href||"")+"|"+(document.title||"")+"|"+(b?b.innerText.length:0);})()';
 }
 
 /** Parse "e3" → 3, or null. */

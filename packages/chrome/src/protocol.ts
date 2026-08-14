@@ -631,7 +631,7 @@ export type PopupToSw =
   // Web-agent action engine (CDP). The panel requests the optional `debugger`
   // permission itself (a user gesture is required in the calling page); these
   // messages only start/steer/stop the run and answer its origin-grant prompt.
-  | { type: 'actStart'; goal: string; tabId: number; maxActions?: number; workflowId?: string }
+  | { type: 'actStart'; goal: string; tabId: number; maxActions?: number; workflowId?: string; mode?: 'manual' | 'plan' | 'auto' }
   | { type: 'getWorkflows' }
   | { type: 'actStop' }
   | { type: 'actEnd' }

@@ -247,12 +247,21 @@ export interface ActTranscriptEntry {
   ok?: boolean;
 }
 
-/** A per-origin input consent the panel is waiting for the user to answer. */
-export interface ActPendingGrant {
-  origin: string;
-  /** The verb class that triggered the prompt — see @nff-brain/core browserVerbs. */
-  verbClass: string;
-}
+/** Manual-mode's per-run capability grants — see decideAct() in actGate.ts. Never persisted beyond the run. */
+export type ActManualCapability = 'observe' | 'interact' | 'destructive';
+
+/**
+ * Something the panel is waiting for the user to answer before the run can
+ * proceed. 'origin' is the pre-existing "let the agent act on this site?"
+ * consent, asked once before the loop starts. 'capability' is Manual mode's
+ * per-action-type consent (first click, first read, …), asked mid-run and
+ * answered with the same Once/Always/Never choices — Once allows just the
+ * action in flight, Always sets ActRunState.manualGrants[verbClass] so the
+ * rest of the run skips that prompt, Never denies just that one action.
+ */
+export type ActPendingGrant =
+  | { kind: 'origin'; origin: string; verbClass: string }
+  | { kind: 'capability'; verbClass: ActManualCapability; description: string };
 
 /**
  * The single active action run. One globally, same structural fact as the
@@ -264,6 +273,8 @@ export interface ActRunState {
   id: string; // act_<epochMs>_<6hex>
   phase: ActRunPhase;
   goal: string;
+  /** Chat mode the run was started under — Manual asks per-capability permission (see actGate.ts); Plan/Auto never do. */
+  mode: 'manual' | 'plan' | 'auto';
   /** When set, this run is REPLAYING that workflow node (origin 'workflow'). */
   workflowId?: string;
   tabId: number;
@@ -271,7 +282,16 @@ export interface ActRunState {
   maxActions: number;
   /** Origins granted "once" earlier in THIS run (never persisted beyond it). */
   grantedOrigins: string[];
+  /** Manual mode's "Always" answers for THIS run only — see ActManualCapability. */
+  manualGrants: Partial<Record<ActManualCapability, true>>;
   pendingGrant: ActPendingGrant | null;
+  /**
+   * The panel's answer to the current pendingGrant, or null while still
+   * waiting. Internal signaling only (not rendered) between answerPendingGrant
+   * and the paused runVerb() call — reset to null every time a NEW pendingGrant
+   * is posted, so a stale answer can never leak into the next prompt.
+   */
+  pendingGrantChoice: 'once' | 'always' | 'never' | null;
   transcript: ActTranscriptEntry[]; // capped at ACT_TRANSCRIPT_MAX
   startedAt: string;
   updatedAt: string;

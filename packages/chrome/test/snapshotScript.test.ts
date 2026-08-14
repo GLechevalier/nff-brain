@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildFingerprintSource,
   buildResolveSource,
   buildSnapshotSource,
   isRedacted,
@@ -82,5 +83,21 @@ describe('buildResolveSource', () => {
     expect(src).toContain('stale');
     expect(src).toContain('gone');
     expect(src).not.toMatch(/\bELS_GLOBAL\b|\bSNAP_GLOBAL\b/);
+  });
+
+  it('reports an occlusion check and an element label alongside the point', () => {
+    const src = buildResolveSource('s5', 3);
+    expect(src).toContain('elementFromPoint');
+    expect(src).toContain('occluded');
+    expect(src).toContain('occluder');
+    expect(src).toContain('label');
+  });
+});
+
+describe('buildFingerprintSource', () => {
+  it('is a self-contained IIFE with no imports', () => {
+    const src = buildFingerprintSource();
+    expect(src.startsWith('(function(){')).toBe(true);
+    expect(src).not.toMatch(/\bimport\b|\brequire\(/);
   });
 });
