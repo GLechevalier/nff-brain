@@ -30,51 +30,11 @@
     </div>
 
     <nav class="tabs">
-      <button id="sp-tab-agent" class="tab active">Agent</button>
+      <button id="sp-tab-brain" class="tab active">Brain</button>
       <button id="sp-tab-mcp" class="tab">MCP</button>
-      <button id="sp-tab-brain" class="tab">Brain</button>
       <button id="sp-tab-graph" class="tab">Graph</button>
       <button id="sp-tab-settings" class="tab">Settings</button>
     </nav>
-
-    <!-- ── Agent: the CDP web agent that drives THIS tab ──────────────────── -->
-    <section id="agent-view" class="view">
-      <div class="panel">
-        <p class="muted small">
-          The agent drives <strong>this tab</strong> with a real, visible cursor — no new tab. Chrome shows a
-          "debugging this browser" bar while it runs; that is the agent. Uses your local server (or a BYOK key).
-          Keep DevTools closed on the tab you want it to act on.
-        </p>
-        <textarea id="act-goal" class="input grow" rows="3" placeholder="Describe a task on the current tab — e.g. press the Get Started button"></textarea>
-        <div class="row gap">
-          <label class="small" for="act-budget">Max actions</label>
-          <input id="act-budget" class="input narrow" type="number" min="1" max="100" value="40" />
-          <button id="act-start" class="btn primary">Run</button>
-          <button id="act-stop" class="btn small hidden">Stop</button>
-          <button id="act-clear" class="btn small hidden">Clear</button>
-        </div>
-
-        <div id="act-grant" class="grant hidden">
-          <p class="small">Let the agent act on <strong id="act-grant-origin"></strong>?</p>
-          <div class="row gap">
-            <button id="act-grant-once" class="btn small">Once</button>
-            <button id="act-grant-always" class="btn small">Always</button>
-            <button id="act-grant-never" class="btn small">Never</button>
-          </div>
-        </div>
-
-        <p id="act-status" class="small"></p>
-        <div id="act-log" class="transcript"></div>
-        <div id="act-error" class="small error hidden"></div>
-      </div>
-
-      <div class="panel">
-        <div class="row"><span class="label">Saved workflows</span></div>
-        <p class="muted small">Recorded tasks you can replay. The agent re-finds each target on the live page.</p>
-        <ul id="workflow-list" class="list"></ul>
-        <p id="workflow-empty" class="muted small">No workflows yet — record a task from the popup.</p>
-      </div>
-    </section>
 
     <!-- ── MCP: registered-connection management ──────────────────────────── -->
     <section id="mcp-view" class="view hidden">
@@ -91,24 +51,55 @@
       </div>
     </section>
 
-    <!-- ── Brain: chat transcript with a Manual/Plan/Auto mode switch ─────── -->
-    <section id="brain-view" class="view hidden">
-      <div class="row">
+    <!--
+      Brain: one prompt, four modes. Act (default) drives the CDP web agent on
+      THIS tab (press a button, fill a form) with a visible cursor. Ask answers
+      from your notes. Plan/Auto are the LinkedIn recruiting flow (paired).
+    -->
+    <section id="brain-view" class="view">
+      <div id="adapter-row" class="row hidden">
         <span class="small strong">LinkedIn agent</span>
         <button id="adapter-toggle" class="btn small push">Enable</button>
       </div>
       <div id="adapter-error" class="small error hidden"></div>
 
       <div class="row gap mode-switch" role="radiogroup" aria-label="Mode">
-        <button id="mode-manual" class="mode-btn active" data-mode="manual" type="button">Manual</button>
+        <button id="mode-act" class="mode-btn active" data-mode="act" type="button">Act</button>
+        <button id="mode-manual" class="mode-btn" data-mode="manual" type="button">Ask</button>
         <button id="mode-plan" class="mode-btn" data-mode="plan" type="button">Plan</button>
         <button id="mode-auto" class="mode-btn" data-mode="auto" type="button">Auto</button>
       </div>
       <p id="mode-hint" class="muted small"></p>
 
+      <!-- Ask/Plan/Auto: the chat transcript. -->
       <div id="transcript" class="transcript"></div>
 
-      <!-- Only shown in Plan/Auto mode — Manual mode is a plain question, no cap or list target. -->
+      <!-- Act mode: the web-agent panel (status/grant/log + Stop/Clear + workflows). -->
+      <div id="act-panel" class="hidden">
+        <div class="row gap">
+          <label class="small" for="act-budget">Max actions</label>
+          <input id="act-budget" class="input narrow" type="number" min="1" max="100" value="40" />
+          <button id="act-stop" class="btn small hidden">Stop</button>
+          <button id="act-clear" class="btn small hidden">Clear</button>
+        </div>
+        <div id="act-grant" class="grant hidden">
+          <p class="small">Let the agent act on <strong id="act-grant-origin"></strong>?</p>
+          <div class="row gap">
+            <button id="act-grant-once" class="btn small">Once</button>
+            <button id="act-grant-always" class="btn small">Always</button>
+            <button id="act-grant-never" class="btn small">Never</button>
+          </div>
+        </div>
+        <p id="act-status" class="small"></p>
+        <div id="act-log" class="transcript"></div>
+        <div id="act-error" class="small error hidden"></div>
+
+        <div class="row"><span class="label">Saved workflows</span></div>
+        <ul id="workflow-list" class="list"></ul>
+        <p id="workflow-empty" class="muted small">No workflows yet — record a task from the popup.</p>
+      </div>
+
+      <!-- Only shown in Plan/Auto mode — a recruiting goal with a cap + list target. -->
       <div id="goal-options" class="row gap hidden">
         <label class="small" for="max-actions">Max connects</label>
         <input id="max-actions" class="input narrow" type="number" min="1" max="25" value="5" />
@@ -117,8 +108,8 @@
       </div>
 
       <div class="row gap prompt-row">
-        <textarea id="prompt-input" class="input grow" rows="2" placeholder="Ask your brain, or describe a goal…"></textarea>
-        <button id="prompt-send" class="btn primary">Send</button>
+        <textarea id="prompt-input" class="input grow" rows="2" placeholder="Tell the agent to do something on this tab…"></textarea>
+        <button id="prompt-send" class="btn primary">Run</button>
       </div>
       <div id="prompt-error" class="small error hidden"></div>
     </section>

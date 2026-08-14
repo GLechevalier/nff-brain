@@ -81,7 +81,7 @@ const PENDING_TICK_MS = 2000;
 
 // ── shared module state ───────────────────────────────────────────────────────
 
-let currentTab: SidePanelTab = 'agent';
+let currentTab: SidePanelTab = 'brain';
 let latestNodes: NodesResponse | null = null;
 
 // Agent (CDP web agent) tab
@@ -169,10 +169,11 @@ function paintStandaloneMode(standalone: boolean): void {
   $('mode-plan').classList.toggle('hidden', standalone);
   $('mode-auto').classList.toggle('hidden', standalone);
   $('adapter-toggle').classList.toggle('hidden', standalone);
-  if (standalone && mode !== 'manual') setMode('manual');
+  // Plan/Auto are paired-only; standalone keeps Act (agent) + Ask (chat).
+  if (standalone && (mode === 'plan' || mode === 'auto')) setMode('act');
   if (standalone && currentTab === 'mcp') {
-    currentTab = 'agent';
-    switchTab('agent');
+    currentTab = 'brain';
+    switchTab('brain');
   }
 }
 
@@ -185,6 +186,9 @@ function selectTab(tab: SidePanelTab): void {
   if (tab === 'graph') void loadGraph(true);
   if (tab === 'settings') void refreshState();
 }
+
+// The web agent now lives inside the Brain tab's "Act" mode (default), so its
+// grant/status/log render there. Standalone gating for 'mcp' still applies.
 
 // ── Agent tab (CDP web agent) ─────────────────────────────────────────────────
 
@@ -244,8 +248,9 @@ async function loadWorkflows(): Promise<void> {
   const reply = await send({ type: 'getWorkflows' });
   if (reply.type !== 'workflows') return;
   renderWorkflows(reply.items, (w: WorkflowRow) => {
-    const goalEl = $('act-goal') as HTMLTextAreaElement;
+    const goalEl = $('prompt-input') as HTMLTextAreaElement;
     if (!goalEl.value.trim()) goalEl.value = w.intent;
+    if (mode !== 'act') setMode('act');
     void startActRun(goalEl.value.trim() || w.intent, w.id);
   });
 }
@@ -525,6 +530,15 @@ async function submitPrompt(): Promise<void> {
     return;
   }
   showFieldError('prompt-error', null);
+
+  // Act mode: the prompt IS the agent goal — drive the CDP web agent on the
+  // active tab. No chat transcript / pending word; the act panel shows progress.
+  if (mode === 'act') {
+    input.value = '';
+    await startActRun(message);
+    return;
+  }
+
   submitting = true;
   ($('prompt-send') as HTMLButtonElement).disabled = true;
 
@@ -781,46 +795,48 @@ async function testConnection(): Promise<void> {
 const TAB_STORAGE_KEY = 'nb.sidepanelTab';
 
 function isSidePanelTab(v: unknown): v is SidePanelTab {
-  return v === 'agent' || v === 'mcp' || v === 'brain' || v === 'graph' || v === 'settings';
+  return v === 'mcp' || v === 'brain' || v === 'graph' || v === 'settings';
 }
 
 /** Read (and immediately clear) the one-shot tab hint the popup wrote before
- *  opening this panel; default to Agent when absent. */
+ *  opening this panel; default to Brain (the agent's home) when absent. The
+ *  popup still writes 'agent' from the old "Open web agent" button — map it to
+ *  Brain, whose Act mode is the agent. */
 async function readInitialTab(): Promise<SidePanelTab> {
   try {
     const got = await chrome.storage.local.get(TAB_STORAGE_KEY);
     const v = got[TAB_STORAGE_KEY];
     await chrome.storage.local.remove(TAB_STORAGE_KEY);
+    if (v === 'agent') return 'brain';
     if (isSidePanelTab(v)) return v;
   } catch {
     // fall through to default
   }
-  return 'agent';
+  return 'brain';
 }
 
 // ── wiring + boot ─────────────────────────────────────────────────────────────
 
 function wire(): void {
   // Tabs
-  $('sp-tab-agent').addEventListener('click', () => selectTab('agent'));
-  $('sp-tab-mcp').addEventListener('click', () => selectTab('mcp'));
   $('sp-tab-brain').addEventListener('click', () => selectTab('brain'));
+  $('sp-tab-mcp').addEventListener('click', () => selectTab('mcp'));
   $('sp-tab-graph').addEventListener('click', () => selectTab('graph'));
   $('sp-tab-settings').addEventListener('click', () => selectTab('settings'));
 
-  // Agent tab
-  $('act-start').addEventListener('click', () => void startActRun(($('act-goal') as HTMLTextAreaElement).value.trim()));
+  // Brain tab — modes (Act default). Act mode runs the CDP web agent; the act
+  // panel's Stop/Clear/grant controls live here now that the Agent tab is gone.
+  $('mode-act').addEventListener('click', () => setMode('act'));
+  $('mode-manual').addEventListener('click', () => setMode('manual'));
+  $('mode-plan').addEventListener('click', () => setMode('plan'));
+  $('mode-auto').addEventListener('click', () => setMode('auto'));
   $('act-stop').addEventListener('click', () => void stopActRun());
   $('act-clear').addEventListener('click', () => void clearActRun());
   $('act-grant-once').addEventListener('click', () => void grantAct('once'));
   $('act-grant-always').addEventListener('click', () => void grantAct('always'));
   $('act-grant-never').addEventListener('click', () => void grantAct('never'));
 
-  // Brain tab
   $('adapter-toggle').addEventListener('click', () => void toggleAdapter());
-  $('mode-manual').addEventListener('click', () => setMode('manual'));
-  $('mode-plan').addEventListener('click', () => setMode('plan'));
-  $('mode-auto').addEventListener('click', () => setMode('auto'));
   $('list-server').addEventListener('change', (e) => void loadGoalOptionTools((e.target as HTMLSelectElement).value));
   $('prompt-send').addEventListener('click', () => void submitPrompt());
   $('prompt-input').addEventListener('keydown', (e) => {
@@ -855,7 +871,7 @@ function wire(): void {
 async function boot(): Promise<void> {
   wire();
   wireGraphCanvas();
-  setMode('manual');
+  setMode('act'); // default: the Brain prompt drives the web agent
 
   const initial = await readInitialTab();
   currentTab = initial;
