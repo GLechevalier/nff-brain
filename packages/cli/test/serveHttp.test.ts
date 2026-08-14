@@ -11,6 +11,7 @@ import {
   formatPairingCode,
   loadServeConfig,
   readClipMap,
+  saveServeConfig,
 } from '@nff-brain/core';
 import { startBrainServer } from '../src/serve/server.js';
 import type { BrainServer } from '../src/serve/server.js';
@@ -353,6 +354,33 @@ describe('negative matrix', () => {
     const token = await pair();
     const res = await request(port, { path: `/v1/status?token=${token}`, headers: { origin: ORIGIN } });
     expect(res.status).toBe(401);
+  });
+
+  it('409s workspace_mismatch when the paired client belongs to a different workspace', async () => {
+    // Simulates: pair against a server bound to workspace A, stop it, start a
+    // fresh `nff-brain serve` in workspace B on the same port — the token is
+    // still valid, but must not go on silently authenticating into B's brain.
+    const token = await pair();
+    const cfg = server.state.config();
+    cfg.clients[0]!.workspaceRoot = path.join(dir, 'a-completely-different-workspace');
+    saveServeConfig(cfg, configFile);
+
+    // The paired extension origin still gets CORS (unlike the adversarial
+    // cases below) — it must be able to read this error to prompt a re-pair.
+    const res = await request(port, { path: '/v1/status', headers: auth(token) });
+    expect(res.status).toBe(409);
+    expect(res.json<{ error: string }>().error).toBe('workspace_mismatch');
+    expect(res.headers['access-control-allow-origin']).toBe(ORIGIN);
+  });
+
+  it('409s a legacy client with no workspaceRoot at all (pre-upgrade serve.json)', async () => {
+    const token = await pair();
+    const cfg = server.state.config();
+    delete cfg.clients[0]!.workspaceRoot;
+    saveServeConfig(cfg, configFile);
+
+    const res = await request(port, { path: '/v1/status', headers: auth(token) });
+    expect(res.status).toBe(409);
   });
 
   it('403s a web page origin even with a VALID token', async () => {

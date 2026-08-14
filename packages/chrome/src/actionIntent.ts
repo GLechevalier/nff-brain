@@ -46,6 +46,10 @@ const HOSTNAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-
 // remainder can be the filler word alone ("go back please" leaves just
 // "please", no leading whitespace once the outer regex's \s* already ate it).
 const TRAILING_FILLER_RE = /(?:^|\s+)(?:pl(?:ease|s|z)|now|for me|thanks?(?:\s+you)?|thank\s+you|ok(?:ay)?|asap)$/i;
+// "navigate to a reddit" / "go to the whitehouse" — a leading article is as
+// much conversational noise as a trailing "pls"; strip it before requiring
+// the remainder to collapse to one token.
+const LEADING_ARTICLE_RE = /^(?:a|an|the)\s+/i;
 
 /** Chained sign-offs ("google now please") lose one filler per pass. */
 function stripFillers(s: string): string {
@@ -71,7 +75,9 @@ function stripFillers(s: string): string {
 function extractGenericSite(message: string): { host: string; url: string } | null {
   const m = GENERIC_TAIL_RE.exec(message.trim());
   if (!m) return null;
-  const rest = stripFillers(m[1].trim().replace(/[.?!]+$/, '').trim());
+  let rest = m[1].trim().replace(/[.?!]+$/, '').trim();
+  rest = rest.replace(LEADING_ARTICLE_RE, '').trim();
+  rest = stripFillers(rest);
   if (!rest || /\s/.test(rest)) return null;
   const candidate = rest.toLowerCase();
   if (!HOSTNAME_RE.test(candidate)) return null;

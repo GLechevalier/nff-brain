@@ -19,6 +19,7 @@ import {
 import type { ServeInstance } from '../src/index.js';
 
 const ORIGIN = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+const WORKSPACE = '/tmp/ws';
 
 let dir: string;
 let cfgFile: string;
@@ -46,7 +47,7 @@ describe('mintServerIdentity', () => {
 describe('serve.json round trip', () => {
   it('loads back what it saved', () => {
     const cfg = mintServerIdentity();
-    addClient(cfg, { name: 'Chrome extension', origin: ORIGIN });
+    addClient(cfg, { name: 'Chrome extension', origin: ORIGIN, workspaceRoot: WORKSPACE });
     saveServeConfig(cfg, cfgFile);
 
     const back = loadServeConfig(cfgFile)!;
@@ -58,7 +59,7 @@ describe('serve.json round trip', () => {
 
   it('never writes a client token in the clear', () => {
     const cfg = mintServerIdentity();
-    const { token } = addClient(cfg, { name: 'Chrome extension', origin: ORIGIN });
+    const { token } = addClient(cfg, { name: 'Chrome extension', origin: ORIGIN, workspaceRoot: WORKSPACE });
     saveServeConfig(cfg, cfgFile);
 
     const onDisk = fs.readFileSync(cfgFile, 'utf8');
@@ -101,7 +102,7 @@ describe('serve.json round trip', () => {
 describe('clients', () => {
   it('finds by origin and by id', () => {
     const cfg = mintServerIdentity();
-    const { client } = addClient(cfg, { name: 'Chrome extension', origin: ORIGIN });
+    const { client } = addClient(cfg, { name: 'Chrome extension', origin: ORIGIN, workspaceRoot: WORKSPACE });
     expect(findClientByOrigin(cfg, ORIGIN)!.id).toBe(client.id);
     expect(findClientById(cfg, client.id)!.origin).toBe(ORIGIN);
     expect(findClientByOrigin(cfg, 'chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba')).toBeUndefined();
@@ -110,8 +111,8 @@ describe('clients', () => {
   it('replaces rather than accumulates when the same origin re-pairs', () => {
     // Dev reloads re-pair constantly; the list must not grow without bound.
     const cfg = mintServerIdentity();
-    const first = addClient(cfg, { name: 'Chrome extension', origin: ORIGIN });
-    const second = addClient(cfg, { name: 'Chrome extension', origin: ORIGIN });
+    const first = addClient(cfg, { name: 'Chrome extension', origin: ORIGIN, workspaceRoot: WORKSPACE });
+    const second = addClient(cfg, { name: 'Chrome extension', origin: ORIGIN, workspaceRoot: WORKSPACE });
     expect(cfg.clients).toHaveLength(1);
     expect(tokenMatches(second.token, cfg.clients[0]!.tokenHash)).toBe(true);
     expect(tokenMatches(first.token, cfg.clients[0]!.tokenHash)).toBe(false);
@@ -119,16 +120,44 @@ describe('clients', () => {
 
   it('removes by id and reports whether anything went', () => {
     const cfg = mintServerIdentity();
-    const { client } = addClient(cfg, { name: 'Chrome extension', origin: ORIGIN });
+    const { client } = addClient(cfg, { name: 'Chrome extension', origin: ORIGIN, workspaceRoot: WORKSPACE });
     expect(removeClient(cfg, client.id)).toBe(true);
     expect(removeClient(cfg, client.id)).toBe(false);
     expect(cfg.clients).toEqual([]);
   });
 
+  it('stamps and persists the workspaceRoot at pair time', () => {
+    const cfg = mintServerIdentity();
+    const { client } = addClient(cfg, { name: 'Chrome extension', origin: ORIGIN, workspaceRoot: WORKSPACE });
+    expect(client.workspaceRoot).toBe(WORKSPACE);
+    saveServeConfig(cfg, cfgFile);
+    expect(loadServeConfig(cfgFile)!.clients[0]!.workspaceRoot).toBe(WORKSPACE);
+  });
+
+  it('loads a legacy client with no workspaceRoot rather than dropping it', () => {
+    const cfg = mintServerIdentity();
+    addClient(cfg, { name: 'Chrome extension', origin: ORIGIN, workspaceRoot: WORKSPACE });
+    saveServeConfig(cfg, cfgFile);
+    const raw = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+    delete raw.clients[0].workspaceRoot;
+    fs.writeFileSync(cfgFile, JSON.stringify(raw));
+    const back = loadServeConfig(cfgFile)!;
+    expect(back.clients).toHaveLength(1);
+    expect(back.clients[0]!.workspaceRoot).toBeUndefined();
+  });
+
   it('gives each client an independent token', () => {
     const cfg = mintServerIdentity();
-    const a = addClient(cfg, { name: 'A', origin: 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' });
-    const b = addClient(cfg, { name: 'B', origin: 'chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' });
+    const a = addClient(cfg, {
+      name: 'A',
+      origin: 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      workspaceRoot: WORKSPACE,
+    });
+    const b = addClient(cfg, {
+      name: 'B',
+      origin: 'chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      workspaceRoot: WORKSPACE,
+    });
     expect(a.token).not.toBe(b.token);
     expect(tokenMatches(a.token, cfg.clients[1]!.tokenHash)).toBe(false);
   });

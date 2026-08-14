@@ -66,6 +66,9 @@ describe('detectActionIntent — generic host fallback (any other site)', () => 
     ['visit openai.com thank you', 'openai.com'],
     ['navigate to google okay', 'google.com'],
     ['go to google now please', 'google.com'],
+    ['navigate to a reddit pls', 'reddit.com'],
+    ['go to the whitehouse', 'whitehouse.com'],
+    ['open an openai.com', 'openai.com'],
   ])('matches %j — falls back to a generic host guess when no adapter alias matches', (message, host) => {
     expect(detectActionIntent(message, [LINKEDIN])).toEqual({ kind: 'host', host, label: host, url: `https://${host}/` });
   });

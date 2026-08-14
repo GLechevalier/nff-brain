@@ -8,6 +8,7 @@ export type ErrorCode =
   | 'forbidden_origin'
   | 'forbidden_context'
   | 'unauthorized'
+  | 'workspace_mismatch'
   | 'rate_limited'
   | 'not_found'
   | 'method_not_allowed'

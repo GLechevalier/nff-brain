@@ -180,6 +180,20 @@ export async function handleRequest(req: IncomingMessage, res: ServerResponse, s
         sendError(res, 401, 'unauthorized', 'bad token for this origin', cors);
         return;
       }
+      // A pairing is only valid for the workspace `nff-brain serve` was bound
+      // to at pair time. Stop it and start a fresh one — a DIFFERENT project —
+      // on the same port, and a stale token would otherwise go on silently
+      // authenticating (and writing) into the wrong project's brain.json. 409,
+      // not 401/403: the token itself is still good, it just needs a fresh
+      // pairing for whichever workspace is live now — client.ts treats
+      // 401/403 as "this pairing is dead forever," which is the wrong signal
+      // here. A client minted before this field existed has no workspaceRoot
+      // at all and always fails this check, forcing one safe re-pair.
+      if (client.workspaceRoot !== state.opts.workspaceRoot) {
+        state.buckets.fail(bucket);
+        sendError(res, 409, 'workspace_mismatch', 'this server now serves a different project — re-pair to continue', cors);
+        return;
+      }
       ctx.client = client;
     }
     state.buckets.succeed(bucket);

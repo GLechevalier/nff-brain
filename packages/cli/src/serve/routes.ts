@@ -139,7 +139,7 @@ const pair: Handler = async (req, res, ctx) => {
   // THE ORIGIN IS PINNED HERE. Every later request from this client must match
   // it exactly — which is what stops any OTHER installed extension, each of
   // which can also fetch 127.0.0.1 from its own service worker.
-  const { client, token } = addClient(cfg, { name, origin });
+  const { client, token } = addClient(cfg, { name, origin, workspaceRoot: state.opts.workspaceRoot });
   state.saveConfig(cfg);
 
   sendJson(res, 200, { ok: true, token, clientId: client.id, serverId: cfg.serverId, origin }, ctx.cors);
@@ -486,6 +486,7 @@ const adminClients: Handler = (_req, res, ctx) => {
       name: c.name,
       origin: c.origin,
       createdAt: c.createdAt,
+      workspaceRoot: c.workspaceRoot ?? null,
     })),
   });
 };
