@@ -65,8 +65,20 @@ export function nameFromParts(parts: Array<string | null | undefined>, max: numb
 // The DOM walker. Declared as a normal function so its .toString() can be
 // stitched into the injected program AFTER the helper sources, which is why it
 // references roleOf/isRedacted/nameFromParts by bare name — those names are
-// defined in the same injected scope. Never called directly in the SW.
-function walkPage(snapshotId: string, mode: string): unknown {
+// defined in the same injected scope (safe: their OWN declarations are ALSO
+// stitched in via .toString(), so a minifier renaming `roleOf` renames every
+// reference to it consistently together). elsKey/snapKey are passed as
+// PARAMETERS rather than closing over the ELS_GLOBAL/SNAP_GLOBAL module
+// consts for the opposite reason: those consts' declarations are NOT part of
+// the stitched IIFE, so a minified build's build.mjs step can (and does)
+// rename references to them in this function body — e.g. to `Fn`/`Wn` — with
+// nothing left to resolve that name inside the injected page context,
+// producing "ReferenceError: Fn is not defined" from read_page. Passing them
+// as call arguments (see buildSnapshotSource) reads the CURRENT real string
+// value at call time instead of relying on inlineGlobals' text-substitution
+// trick, which only works against un-minified .toString() output. Never
+// called directly in the SW.
+function walkPage(snapshotId: string, mode: string, elsKey: string, snapKey: string): unknown {
   var MAX_NAME = 80;
   var MAX_VALUE = 120;
   var MAX_ELS = 200;
@@ -148,8 +160,8 @@ function walkPage(snapshotId: string, mode: string): unknown {
     out.push(rec);
   }
 
-  (globalThis as Record<string, unknown>)[ELS_GLOBAL] = els;
-  (globalThis as Record<string, unknown>)[SNAP_GLOBAL] = snapshotId;
+  (globalThis as Record<string, unknown>)[elsKey] = els;
+  (globalThis as Record<string, unknown>)[snapKey] = snapshotId;
 
   var snap: Record<string, unknown> = {
     snapshotId: snapshotId,
@@ -178,7 +190,14 @@ function inlineGlobals(src: string): string {
   return src.replace(/ELS_GLOBAL/g, JSON.stringify(ELS_GLOBAL)).replace(/SNAP_GLOBAL/g, JSON.stringify(SNAP_GLOBAL));
 }
 
-/** The program that reads the page and returns a snapshot (minus tabId, added by the engine). */
+/**
+ * The program that reads the page and returns a snapshot (minus tabId, added
+ * by the engine). elsKey/snapKey are passed as call arguments (their CURRENT
+ * runtime string values, read here in the SW — never reflected via
+ * .toString()) rather than inlined into walkPage's stitched source, since a
+ * minified build renames the ELS_GLOBAL/SNAP_GLOBAL references inlineGlobals
+ * would need to text-match. See walkPage's comment for the full story.
+ */
 export function buildSnapshotSource(snapshotId: string, mode: 'interactive' | 'text'): string {
   return (
     '(function(){' +
@@ -186,11 +205,15 @@ export function buildSnapshotSource(snapshotId: string, mode: 'interactive' | 't
     isRedacted.toString() +
     nameFromParts.toString() +
     'var __walk=' +
-    inlineGlobals(walkPage.toString()) +
+    walkPage.toString() +
     ';return __walk(' +
     JSON.stringify(snapshotId) +
     ',' +
     JSON.stringify(mode) +
+    ',' +
+    JSON.stringify(ELS_GLOBAL) +
+    ',' +
+    JSON.stringify(SNAP_GLOBAL) +
     ');})()'
   );
 }

@@ -13,7 +13,7 @@ import { ACT_MAX_ACTIONS_CEILING, ACT_MAX_ACTIONS_DEFAULT, KEYS } from './schema
 import type { ActRunState } from './schema.js';
 import { isRestrictedUrl, originOf } from './actGate.js';
 import { detach, ensureAttached, hasDebuggerPermission } from './cdp.js';
-import { attentionConsumeStop, attentionHide, attentionShow, cursorHide, cursorShowIdle } from './actEngine.js';
+import { attentionConsumeStop, attentionHide, attentionShow, cursorHide } from './actEngine.js';
 import {
   buildActTools,
   buildPairedActPrompt,
@@ -212,7 +212,6 @@ async function drive(runId: string, tabId: number): Promise<void> {
     return;
   }
   await attentionShow(tabId);
-  await cursorShowIdle(tabId);
 
   const ctx: ActContext = {
     tabId,
@@ -351,8 +350,11 @@ async function runPairedLoop(ctx: ActContext, runId: string, systemPrompt: strin
     const text = raced.text;
     // Prose the model wrote before its JSON action (its reasoning for this
     // step) — otherwise only the final {done:true,summary} survives anywhere.
+    // Strip a trailing ``` / ```json code-fence opener (claude -p routinely
+    // wraps its JSON reply in one) so that common case doesn't log a spurious
+    // "```json" line with no actual reasoning in it.
     const braceIdx = text.indexOf('{');
-    const prose = braceIdx > 0 ? text.slice(0, braceIdx).trim() : '';
+    const prose = braceIdx > 0 ? text.slice(0, braceIdx).replace(/```\w*\s*$/, '').trim() : '';
     if (prose) void appendTranscript({ kind: 'thought', text: prose });
 
     const action = parseActAction(text);

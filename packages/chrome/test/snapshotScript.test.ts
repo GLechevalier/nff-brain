@@ -67,9 +67,19 @@ describe('buildSnapshotSource', () => {
     expect(src).toContain('function nameFromParts');
     expect(src).toContain('"s5"');
     expect(src).toContain('"interactive"');
-    // Globals inlined as string literals, not left as bare identifiers.
+    // Globals passed as call-site string literals, not left as bare
+    // module-level identifiers walkPage's body would close over — a minified
+    // build renames ELS_GLOBAL/SNAP_GLOBAL references (e.g. to `Fn`/`Wn`)
+    // with nothing in the injected page scope left to resolve that name,
+    // which is exactly the "ReferenceError: Fn is not defined" read_page bug
+    // this shape prevents. walkPage must read them via its OWN parameters
+    // (elsKey/snapKey) instead, which a minifier renames consistently
+    // wherever they're used because they're part of the SAME reflected
+    // function.
     expect(src).toContain('"__nffEls"');
     expect(src).toContain('"__nffSnap"');
+    expect(src).toContain('globalThis[elsKey]');
+    expect(src).toContain('globalThis[snapKey]');
     expect(src).not.toMatch(/\bELS_GLOBAL\b|\bSNAP_GLOBAL\b/);
     expect(src).not.toMatch(/\bimport\b|\brequire\(/);
   });

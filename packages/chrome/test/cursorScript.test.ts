@@ -99,22 +99,23 @@ describe('createCursorController (DOM behavior)', () => {
     expect(cursor.classList.contains('visible')).toBe(false);
   });
 
-  it('positions the dot centered on the target point', () => {
+  it('positions the arrow tip (its hotspot) on the target point, not its center', () => {
     const doc = new FakeDocument();
     createCursorController(doc as unknown as Document).moveTo(100, 200);
     const cursor = doc.getElementById('nff-brain-agent-cursor')!.shadowRoot!.getElementById('cursor')!;
-    // DOT is 16 → offset by 8 so the dot's center lands on 100,200.
-    expect(cursor.style.transform).toBe('translate3d(92px,192px,0)');
+    // SIZE 26, tip at (3/24) of the 24-unit viewBox → offset 3.25 so the
+    // arrow's tip (not its bounding-box center) lands on 100,200.
+    expect(cursor.style.transform).toBe('translate3d(96.75px,196.75px,0)');
   });
 
-  it('showIdle() shows and pulses the dot at a top-right anchor', () => {
+  it('showIdle() shows and pulses the arrow at a top-right anchor', () => {
     const doc = new FakeDocument();
     createCursorController(doc as unknown as Document).showIdle();
     const cursor = doc.getElementById('nff-brain-agent-cursor')!.shadowRoot!.getElementById('cursor')!;
     expect(cursor.classList.contains('visible')).toBe(true);
     expect(cursor.classList.contains('idle')).toBe(true);
-    // innerWidth 1000, IDLE_MARGIN 32, DOT 16 → x = 1000-32-8=960, y = 32-8=24.
-    expect(cursor.style.transform).toBe('translate3d(960px,24px,0)');
+    // innerWidth 1000, IDLE_MARGIN 32, tip offset 3.25 → x = 1000-32-3.25=964.75, y = 32-3.25=28.75.
+    expect(cursor.style.transform).toBe('translate3d(964.75px,28.75px,0)');
   });
 
   it('moveTo() after showIdle() clears the idle (breathing) class', () => {

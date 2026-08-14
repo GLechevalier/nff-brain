@@ -104,14 +104,19 @@ async function requestGrant(runId: string, grant: ActPendingGrant): Promise<'onc
     const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string): void => {
       if (area !== 'local' || !(KEYS.actRun in changes)) return;
       const v = changes[KEYS.actRun]!.newValue as ActRunState | null | undefined;
-      if (!v || v.id !== runId || v.phase !== 'awaiting_grant') {
-        chrome.storage.onChanged.removeListener(listener);
-        resolve('never');
-        return;
-      }
-      if (v.pendingGrantChoice != null) {
+      // Check the answer FIRST: answerPendingGrant() posts pendingGrantChoice
+      // and flips phase back to 'running' in the SAME write, so by the time
+      // this listener sees it, phase is already NOT 'awaiting_grant' — checking
+      // phase before the choice would misread every real answer as abandonment.
+      if (v && v.id === runId && v.pendingGrantChoice != null) {
         chrome.storage.onChanged.removeListener(listener);
         resolve(v.pendingGrantChoice);
+        return;
+      }
+      if (!v || v.id !== runId || v.phase !== 'awaiting_grant') {
+        // Stopped/cleared/replaced while still waiting for an answer.
+        chrome.storage.onChanged.removeListener(listener);
+        resolve('never');
       }
     };
     chrome.storage.onChanged.addListener(listener);
@@ -378,7 +383,23 @@ async function runVerb(ctx: ActContext, verb: BrowserVerb, snapshotIdRef: { id: 
     }
   }
 
-  const res = await executeVerb(ctx.tabId, verb);
+  let res: Awaited<ReturnType<typeof executeVerb>>;
+  try {
+    res = await executeVerb(ctx.tabId, verb);
+  } catch (err) {
+    // executeVerb can throw (a page-side JS exception, or a read/resolve
+    // timeout — see actEngine.ts). This function is documented NEVER TO
+    // THROW: the paired loop (actRun.ts's runPairedLoop) calls it with no
+    // try/catch of its own, so an uncaught rejection here used to silently
+    // kill the whole run as an unhandled promise rejection, leaving nb.actRun
+    // frozen in 'running' forever with no error surfaced and Stop unable to
+    // do anything (the loop had already unwound with nothing left to check
+    // it). Turning it into an ordinary failed result lets the model see what
+    // went wrong and the run end (or retry) normally instead of hanging.
+    const msg = err instanceof Error ? err.message : 'the action failed unexpectedly';
+    await appendTranscript({ kind: 'action', text: msg, ok: false });
+    return { ok: false, resultText: msg };
+  }
   // A tab.switch / active tab.open / tab.duplicate rebinds which tab is driven:
   // old element refs no longer apply, so drop them and persist the new tabId.
   if (res.newTabId !== undefined && res.newTabId !== ctx.tabId) {

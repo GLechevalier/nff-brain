@@ -68,31 +68,35 @@ function sleep(ms: number): Promise<void> {
 }
 /** How long a click gets to visibly affect the page before pointer.click reports it as a probable no-op. */
 const CLICK_VERIFY_DELAY_MS = 250;
+/**
+ * A hang here (native dialog, wedged renderer, a bfcache-restored page CDP
+ * lost track of) used to freeze the WHOLE run forever with no way to recover
+ * — read_page/resolve are the first thing every turn does, and unlike the
+ * attention/cursor calls above nothing here was time-bounded, so Stop could
+ * never even get checked (the loop never reaches its between-turns
+ * checkpoint). Generous relative to ATTENTION_CALL_TIMEOUT_MS since a real
+ * page read does actual DOM work, not a fire-and-forget overlay toggle.
+ */
+const READ_TIMEOUT_MS = 10_000;
 
 async function resolveTarget(tabId: number, target: Target): Promise<ResolveOutcome> {
   if ('x' in target) return { ok: true, point: { x: target.x, y: target.y } };
   const idx = refIndex(target.ref);
   if (idx === null) return { ok: false, error: `bad ref "${target.ref}"` };
-  const r = await evaluate<{
-    x?: number;
-    y?: number;
-    w?: number;
-    h?: number;
-    label?: string;
-    occluded?: boolean;
-    occluder?: string;
-    stale?: boolean;
-    gone?: boolean;
-  }>(tabId, buildResolveSource(target.snapshotId, idx));
-  if (!r || r.stale) return { ok: false, error: 'stale ref — the page changed, call read_page again' };
+  const r = await withTimeout<
+    | { x?: number; y?: number; w?: number; h?: number; label?: string; occluded?: boolean; occluder?: string; stale?: boolean; gone?: boolean }
+    | undefined
+  >(evaluate(tabId, buildResolveSource(target.snapshotId, idx)), READ_TIMEOUT_MS, undefined);
+  if (!r) return { ok: false, error: 'the page did not respond — it may be showing a dialog or still loading; try again' };
+  if (r.stale) return { ok: false, error: 'stale ref — the page changed, call read_page again' };
   if (r.gone) return { ok: false, error: 'that element is no longer on the page — call read_page again' };
   if (typeof r.x !== 'number' || typeof r.y !== 'number') return { ok: false, error: 'could not locate that element' };
   return { ok: true, point: { x: r.x, y: r.y, w: r.w, h: r.h, label: r.label, occluded: r.occluded, occluder: r.occluder } };
 }
 
-/** Cheap page fingerprint (URL + title + visible-text length), or '' on failure — used only for a soft did-anything-change hint after a click. */
+/** Cheap page fingerprint (URL + title + visible-text length), or '' on failure/timeout — used only for a soft did-anything-change hint after a click. */
 async function fingerprint(tabId: number): Promise<string> {
-  return (await evaluate<string>(tabId, buildFingerprintSource()).catch(() => '')) || '';
+  return (await withTimeout(evaluate<string>(tabId, buildFingerprintSource()).catch(() => ''), ATTENTION_CALL_TIMEOUT_MS, '')) || '';
 }
 
 // ── cursor visualization ─────────────────────────────────────────────────────
@@ -200,7 +204,12 @@ async function pressKey(tabId: number, key: string, modifiers: number): Promise<
  */
 export async function takeSnapshot(tabId: number, mode: 'interactive' | 'text'): Promise<PageSnapshot> {
   const snapshotId = 's_' + crypto.randomUUID().slice(0, 8);
-  const snap = await evaluate<Omit<PageSnapshot, 'tabId'>>(tabId, buildSnapshotSource(snapshotId, mode));
+  const snap = await withTimeout<Omit<PageSnapshot, 'tabId'> | undefined>(
+    evaluate(tabId, buildSnapshotSource(snapshotId, mode)),
+    READ_TIMEOUT_MS,
+    undefined,
+  );
+  if (!snap) throw new Error('the page did not respond to read_page in time — it may be showing a dialog or still loading; try again');
   return { ...snap, tabId } as PageSnapshot;
 }
 
