@@ -204,15 +204,14 @@ describe('createAttentionController (DOM behavior)', () => {
 });
 
 describe('createAttentionController (tab-strip favicon + title badge)', () => {
-  it('show() prefixes the title and installs a teal-dot favicon link', () => {
+  it('show() prefixes the title and installs the capybara favicon link', () => {
     const doc = new FakeDocument();
     doc.title = 'Real Page Title';
     createAttentionController(doc as unknown as Document).show();
     expect(doc.title).toBe('● Real Page Title');
     const icons = doc.querySelectorAll('link[rel~="icon"]');
     expect(icons).toHaveLength(1);
-    expect(icons[0]!.attrs['href']).toContain('data:image/svg+xml');
-    expect(icons[0]!.attrs['href']).toContain('%2300ffcc'); // encodeURIComponent of #00ffcc
+    expect(icons[0]!.attrs['href']).toContain('data:image/png;base64,');
   });
 
   it('removes the page\'s existing favicon link(s) while badged', () => {
@@ -224,7 +223,7 @@ describe('createAttentionController (tab-strip favicon + title badge)', () => {
     createAttentionController(doc as unknown as Document).show();
     const icons = doc.querySelectorAll('link[rel~="icon"]');
     expect(icons).toHaveLength(1);
-    expect(icons[0]!.attrs['href']).toContain('data:image/svg+xml'); // ours, not the page's
+    expect(icons[0]!.attrs['href']).toContain('data:image/png;base64,'); // ours, not the page's
   });
 
   it('a second show() (the per-interact-verb reinstall) does not double-prefix the title or stack favicon links', () => {
@@ -286,6 +285,7 @@ describe('buildAttentionInstallerSource (CDP injection contract)', () => {
     expect(src).toContain('nff-brain is active in this tab');
     expect(src).toContain('#00ffcc');
     expect(src).toContain('link[rel~="icon"]'); // the tab-strip favicon badge
+    expect(src).toContain('data:image/png;base64,'); // the inlined capybara favicon
     expect(src).not.toMatch(/\bimport\b|\brequire\(/);
   });
 });

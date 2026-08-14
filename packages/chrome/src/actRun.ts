@@ -9,7 +9,7 @@
 // if the worker dies mid-run the run is abandoned in 'running' (full resume is
 // a later milestone), which the panel surfaces rather than silently continuing.
 
-import { ACT_MAX_ACTIONS_CEILING, ACT_MAX_ACTIONS_DEFAULT } from './schema.js';
+import { ACT_MAX_ACTIONS_CEILING, ACT_MAX_ACTIONS_DEFAULT, KEYS } from './schema.js';
 import type { ActRunState } from './schema.js';
 import { isRestrictedUrl, originOf } from './actGate.js';
 import { detach, ensureAttached, hasDebuggerPermission } from './cdp.js';
@@ -231,6 +231,30 @@ async function drive(runId: string, tabId: number): Promise<void> {
 type LoopOutcome = { ok: true; answer: string } | { ok: false; error: string };
 
 /**
+ * Watch nb.actRun for Stop (phase leaving 'running') via chrome.storage.onChanged
+ * — event-driven, not polled — so a turn's server call can be preempted the
+ * instant Stop is clicked instead of only being noticed once that call settles.
+ * A single /v1/act/step round trip can legitimately take up to CHAT_TIMEOUT_MS
+ * (95s): without this, Stop looked broken because it was only ever checked
+ * BETWEEN turns (keepGoing()), so clicking it mid-call did nothing visible for
+ * up to 95s. Call cancel() once the race is decided either way, or the listener
+ * leaks for the rest of the run.
+ */
+function watchForStop(runId: string): { promise: Promise<void>; cancel: () => void } {
+  let listener!: (changes: Record<string, chrome.storage.StorageChange>, area: string) => void;
+  const promise = new Promise<void>((resolve) => {
+    listener = (changes, area) => {
+      if (area !== 'local' || !(KEYS.actRun in changes)) return;
+      const v = changes[KEYS.actRun]!.newValue as ActRunState | null | undefined;
+      const stillRunning = !!v && v.id === runId && v.phase === 'running';
+      if (!stillRunning) resolve();
+    };
+    chrome.storage.onChanged.addListener(listener);
+  });
+  return { promise, cancel: () => chrome.storage.onChanged.removeListener(listener) };
+}
+
+/**
  * Between-turns checkpoint shared by both loops: honor Stop (from the panel's
  * storage-based flag, OR the page's in-page Stop pill) and the action budget.
  */
@@ -273,12 +297,26 @@ async function runPairedLoop(ctx: ActContext, runId: string, systemPrompt: strin
   for (let turn = 0; turn < ACT_MAX_TURNS; turn++) {
     if (!(await keepGoing(ctx, runId))) break;
 
-    let text: string;
-    try {
-      text = await postActStep(port, token, buildPairedActPrompt(systemPrompt, history));
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : 'the local server did not answer' };
+    // Never throws — a rejection settles as {kind:'error'} so the promise
+    // always fulfills, even if the stop-watcher below wins the race first
+    // (otherwise a later rejection with no .catch would surface as an
+    // unhandled promise rejection in the service worker).
+    const stepSettled = postActStep(port, token, buildPairedActPrompt(systemPrompt, history)).then(
+      (text) => ({ kind: 'text', text }) as const,
+      (err) => ({ kind: 'error', err }) as const,
+    );
+    const watch = watchForStop(runId);
+    const raced = await Promise.race([stepSettled, watch.promise.then(() => ({ kind: 'stop' }) as const)]);
+    watch.cancel();
+
+    if (raced.kind === 'stop') {
+      ctx.stopped = true;
+      break;
     }
+    if (raced.kind === 'error') {
+      return { ok: false, error: raced.err instanceof Error ? raced.err.message : 'the local server did not answer' };
+    }
+    const text = raced.text;
 
     const action = parseActAction(text);
     if (action.kind === 'done') {

@@ -51,14 +51,14 @@ export function createAttentionController(doc: Document): AttentionController {
   // title prefix is unaffected (CSP never governs document.title).
   var FAVICON_ID = 'nff-brain-agent-favicon';
   var TITLE_PREFIX = '● '; // '● ' — short on purpose, keeps the real title legible in a narrow tab
+  // The nff-brain capybara mascot (packages/chrome/icons/32.png), inlined as
+  // base64 rather than referenced by chrome-extension://<id>/... — this code
+  // runs in the PAGE's main world via CDP, which has no chrome.* access to
+  // resolve the extension's own id/URL, and self-containment (.toString()
+  // carries the whole function body with it) is the same discipline every
+  // other asset in this file already follows.
   var FAVICON_HREF =
-    'data:image/svg+xml,' +
-    encodeURIComponent(
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">' +
-        '<circle cx="8" cy="8" r="6.5" fill="' +
-        ACCENT +
-        '" stroke="#0a0a0a" stroke-width="1.5"/></svg>',
-    );
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAArUlEQVR42u2W0QnAIAxEXa//3aEjdJwu1l1aKAQ01cboRSnkIF9C7ulJNASXy/UDXYX6WseZ79vy1HmsSZEZrVMhAZLGHIAXGiBuVg2AjEANEMUSoADSHZgGMPQEaszNILQAcAieswIAO5BmnkITABKiyRwJMRWgyxwB8Zr3pXfAAiBpTINJa94NwJ5ZtXkXQOaXM2z3YiSW2YuRSI+UxSjOfj4LpnBjzR1xqXUDcF0fYAM3T68AAAAASUVORK5CYII=';
   // null until badged; holds exactly what's needed to restore the page's real
   // favicon/title on hide(). Kept separate from `state` above so a repeated
   // show() (the existing per-interact-verb reinstall) can check "already
