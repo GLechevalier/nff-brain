@@ -10,24 +10,21 @@ const COLORS: Record<ConnectionPhase, string> = {
   rejected: '#d29922',
   workspace_mismatch: '#d29922',
   unpaired: '#767676',
-  standalone: '#0b6bcb',
 };
 
 const TITLES: Record<ConnectionPhase, string> = {
   connected: 'nff-brain — connected',
   disconnected: 'nff-brain — brain not reachable (run `nff-brain serve`)',
-  rejected: 'nff-brain — pairing expired, re-pair in the popup',
+  rejected: 'nff-brain — pairing expired, re-pair in the Settings tab',
   workspace_mismatch: 'nff-brain — this server now serves a different project, re-pair to continue',
   unpaired: 'nff-brain — not paired yet',
-  standalone: 'nff-brain — standalone (local brain, your API key)',
 };
 
 export async function paintBadge(phase: ConnectionPhase, captureEnabled: boolean): Promise<void> {
   try {
     // Paused is worth shouting about even while capturing works: it is the
-    // difference between "this is recording" and "this is not". Standalone is
-    // a healthy phase — capture lands in the local brain, so no '!'.
-    const healthy = phase === 'connected' || phase === 'standalone';
+    // difference between "this is recording" and "this is not".
+    const healthy = phase === 'connected';
     const text = healthy ? (captureEnabled ? '' : '❚❚') : '!';
     await chrome.action.setBadgeText({ text });
     await chrome.action.setBadgeBackgroundColor({ color: COLORS[phase] });

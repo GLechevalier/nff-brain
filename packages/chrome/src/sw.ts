@@ -76,38 +76,31 @@ import {
 } from './storage.js';
 import { testProviderKey } from './providerClient.js';
 import { endActionRun, grantOrigin, startActionRun, stopActionRun } from './actRun.js';
+import { attentionHide, cursorHide } from './actEngine.js';
 import { cancelTraceRecording, onTraceEvent, startTraceRecording, stopTraceRecording } from './traceCapture.js';
-import { distillPendingTrace } from './standaloneTraceDistill.js';
 import { distillPairedTrace } from './pairedTraceDistill.js';
-import { readLocalBrain } from './brainStore.js';
 import { getActHostAllow, getActRun, getTraceActive, getTracePending, setActHostAllow } from './storage.js';
 import { mutateActRun } from './actStore.js';
-import { handleStandaloneMessage } from './standalone.js';
-import { DRAIN_ALARM, drainStandaloneClips, ensureDrainAlarm } from './standaloneDrain.js';
 import { PROVIDERS } from '@nff-brain/core/provider';
 import type { PopupToSw, PublicState, SwToPopup } from './protocol.js';
 
 async function publicState(): Promise<PublicState> {
-  const [pairing, health, capture, allowlist, activity, provider, brain] = await Promise.all([
+  const [pairing, health, capture, allowlist, activity, provider, legacyBrain] = await Promise.all([
     getPairing(),
     getHealth(),
     getCapture(),
     getAllowlist(),
     getActivity(),
     getProviderSettings(),
+    // The brain graph is always server-side now — this ONE read is the sole
+    // surviving exception, purely to detect a pre-upgrade user's leftover
+    // local brain so migrateIfNeeded() (migrate.ts) has something to finish.
     getBrain(),
   ]);
   const { nextProbeAtMs, ...rest } = health;
   void nextProbeAtMs; // internal scheduling; the UI has no use for it
-  const localNodes = brain?.nodes.length ?? 0;
   return {
-    // A stored pairing always wins — standalone only exists while unpaired.
-    phase:
-      pairing !== null
-        ? derivePhase(health, true, Date.now())
-        : provider !== null
-          ? 'standalone'
-          : 'unpaired',
+    phase: pairing !== null ? derivePhase(health, true, Date.now()) : 'unpaired',
     port: pairing?.port ?? null,
     health: rest,
     capture,
@@ -122,23 +115,14 @@ async function publicState(): Promise<PublicState> {
     provider: provider?.provider ?? null,
     providerModels: provider?.models ?? null,
     providerLastTest: provider?.lastTest ?? null,
-    standaloneNodes: pairing === null ? localNodes : null,
-    // While paired, any surviving local brain is a migration waiting to finish.
-    migrationPending: pairing !== null && localNodes > 0 ? localNodes : null,
+    // Non-null whether paired or not — the blocked-state UI shows the count
+    // ("N notes saved from before — pair to keep them") before the user ever
+    // pairs; migrateIfNeeded() clears it once the import lands.
+    migrationPending: (legacyBrain?.nodes.length ?? 0) > 0 ? legacyBrain!.nodes.length : null,
   };
 }
 
 async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
-  // STANDALONE INTERCEPTOR — before the switch, so every paired case below
-  // stays byte-identical. Only when no pairing is stored: messages with a
-  // local-brain meaning are answered from nb.brain; 'handled' means the work
-  // is done and the default state reply should follow; null falls through to
-  // the existing not-paired guards.
-  if (!(await getPairing())) {
-    const local = await handleStandaloneMessage(msg);
-    if (local === 'handled') return { type: 'state', state: await publicState() };
-    if (local) return local;
-  }
   switch (msg.type) {
     case 'getState':
       break;
@@ -192,27 +176,27 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     // bearer token.
     case 'getNodes': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       return { type: 'nodes', data: await getNodes(pairing.port, pairing.token, msg.limit) };
     }
 
     case 'getGraph': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       const { nodes: graphNodes, edges } = await getGraph(pairing.port, pairing.token);
       return { type: 'graph', nodes: graphNodes, edges };
     }
 
     case 'moveGraphNode': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       const { moved } = await moveGraphNode(pairing.port, pairing.token, msg.id, msg.x, msg.y);
       return { type: 'layout', moved };
     }
 
     case 'searchBrain': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       return { type: 'search', data: await searchBrain(pairing.port, pairing.token, msg.q, msg.limit) };
     }
 
@@ -266,7 +250,7 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'agentSubmitGoal': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       try {
         await submitAgentGoal(pairing.port, pairing.token, {
           goal: msg.goal,
@@ -283,7 +267,7 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'agentApprovePlan': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       const status = await approveAgentPlan(pairing.port, pairing.token, msg.runId);
       // Kicks the poll loop off immediately rather than waiting for an alarm
       // — approving a plan is the strongest possible signal to start now.
@@ -293,14 +277,14 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'agentRejectPlan': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       const status = await rejectAgentPlan(pairing.port, pairing.token, msg.runId);
       return { type: 'agentStatus', run: status.run };
     }
 
     case 'agentStop': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       // Clear the alarm HERE too (belt-and-braces) — don't wait for a poll
       // that may not come for up to 4 minutes to notice the run stopped.
       await clearAgentPollAlarm();
@@ -318,14 +302,14 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'getMcpServers': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       const { servers } = await getMcpServers(pairing.port, pairing.token);
       return { type: 'mcpServers', servers };
     }
 
     case 'getMcpTools': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       const { tools } = await getMcpTools(pairing.port, pairing.token, msg.server);
       return { type: 'mcpTools', tools };
     }
@@ -335,14 +319,14 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     // never touch url/headers.
     case 'setMcpServerEnabled': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       const { servers } = await setMcpServerEnabledOnServer(pairing.port, pairing.token, msg.id, msg.enabled);
       return { type: 'mcpServers', servers };
     }
 
     case 'removeMcpServer': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       const { servers } = await removeMcpServer(pairing.port, pairing.token, msg.id);
       return { type: 'mcpServers', servers };
     }
@@ -352,7 +336,7 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
     // than every other route (see CHAT_TIMEOUT_MS).
     case 'chatAsk': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Setup tab' };
+      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
       try {
         const { answer, sources } = await askChat(pairing.port, pairing.token, msg.message, msg.history);
         return { type: 'chatAnswer', answer, sources };
@@ -431,25 +415,13 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'getWorkflows': {
       const pairing = await getPairing();
-      if (pairing) {
-        try {
-          const res = await getWorkflowsFromServer(pairing.port, pairing.token);
-          return { type: 'workflows', items: res.items };
-        } catch {
-          return { type: 'workflows', items: [] };
-        }
+      if (!pairing) return { type: 'workflows', items: [] };
+      try {
+        const res = await getWorkflowsFromServer(pairing.port, pairing.token);
+        return { type: 'workflows', items: res.items };
+      } catch {
+        return { type: 'workflows', items: [] };
       }
-      const brain = await readLocalBrain();
-      const items = brain.nodes
-        .filter((n) => n.origin === 'workflow' && n.workflow)
-        .map((n) => ({
-          id: n.id,
-          title: n.title,
-          intent: n.workflow!.intent,
-          site: n.workflow!.site,
-          params: n.workflow!.params.map((p) => p.name),
-        }));
-      return { type: 'workflows', items };
     }
 
     case 'actStop':
@@ -483,13 +455,15 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'traceStop': {
       const rec = await stopTraceRecording();
-      // Distill into a workflow node in the background — server-side via
-      // /v1/trace when paired, BYOK locally otherwise. Fire-and-forget: the
-      // panel polls tracePending, which the distiller clears on success.
+      // Distill into a workflow node server-side via /v1/trace — fire-and-
+      // forget, the panel polls tracePending, which the distiller clears on
+      // success. Unpaired: the recording stays queued in tracePending rather
+      // than being distilled anywhere; the next pairing does not retry it
+      // automatically (this is Record & automate, not the legacy migration
+      // sweep), but nothing is lost silently — it is still visible/re-startable.
       if (rec && rec.events.length > 0) {
         const pairing = await getPairing();
         if (pairing) void distillPairedTrace(pairing);
-        else void distillPendingTrace();
       }
       return traceStatus();
     }
@@ -523,6 +497,15 @@ async function traceStatus(): Promise<SwToPopup> {
 async function onDebuggerDetach(source: chrome.debugger.Debuggee, reason: string): Promise<void> {
   const run = await getActRun();
   if (run && source.tabId === run.tabId && (run.phase === 'running' || run.phase === 'awaiting_grant' || run.phase === 'stopping')) {
+    // Best-effort only: Chrome notifies AFTER the debugger is already gone —
+    // there is no "about to detach" hook to beat that race — so this CDP
+    // evaluate will usually no-op silently and the glow border/Stop pill are
+    // left showing, inert, on the page until it next navigates or reloads.
+    // Same class of gap as the cursor overlay having no cleanup on this path.
+    if (source.tabId !== undefined) {
+      await attentionHide(source.tabId);
+      await cursorHide(source.tabId);
+    }
     await mutateActRun((r) => {
       r.phase = 'stopped';
       r.transcript.push({ at: new Date().toISOString(), kind: 'system', text: `Debugger detached (${reason}). Run stopped.` });
@@ -564,9 +547,6 @@ async function onStartup(): Promise<void> {
   // chrome.alarms survive a browser restart, so a mid-run nb.agentPoll alarm
   // should still fire on its own — this is just insurance in case it didn't.
   void pollAgent();
-  // Same insurance for the standalone drain: a queue left over from before the
-  // restart re-arms its tick (the handler no-ops unless a drain is actually due).
-  void ensureDrainAlarm();
 }
 
 async function onAlarm(alarm: chrome.alarms.Alarm): Promise<void> {
@@ -576,10 +556,6 @@ async function onAlarm(alarm: chrome.alarms.Alarm): Promise<void> {
   }
   if (alarm.name === AGENT_POLL_ALARM) {
     await pollAgent();
-    return;
-  }
-  if (alarm.name === DRAIN_ALARM) {
-    await drainStandaloneClips();
   }
 }
 

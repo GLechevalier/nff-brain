@@ -13,9 +13,9 @@
       panel shows arrives via the service worker — this document never holds
       the pairing token or the provider key, and never fetches.
 
-      One UI home, six subtabs: Setup (pairing/capture/recorders) · Agent (CDP
-      web agent) · MCP (connections) · Brain (chat in one of three modes) ·
-      Graph (node canvas) · Settings (BYOK).
+      One UI home, five subtabs: Agent (CDP web agent) · MCP (connections) ·
+      Brain (chat in one of three modes) · Graph (node canvas) · Settings
+      (pairing, the BYOK fallback key, and capture/recorders — last tab).
     -->
     <header class="bar">
       <img class="mascot" src="icons/32.png" alt="" aria-hidden="true" />
@@ -27,25 +27,28 @@
     </header>
 
     <div id="disconnected" class="banner hidden">
-      Brain not reachable — pair from the Setup tab.
+      Brain not reachable — pair from the Settings tab.
     </div>
 
     <nav class="tabs">
       <button id="sp-tab-brain" class="tab active">Agent</button>
-      <button id="sp-tab-setup" class="tab">Setup</button>
       <button id="sp-tab-mcp" class="tab">MCP</button>
       <button id="sp-tab-graph" class="tab">Brain</button>
-      <button id="sp-tab-settings" class="tab">Settings</button>
+      <button id="sp-tab-setup" class="tab">Settings</button>
     </nav>
 
     <!--
-      Setup: pairing, capture on/off, the allowed-domains list, per-site
-      recorders, and record-a-task — everything that used to live in the
-      toolbar popup before the icon started opening this panel directly.
-      Ids are all setup-prefixed to avoid colliding with the header's own
-      #dot/#workspace/#counts globals above.
+      Settings (still "setup" in ids/JS identifiers below — only the visible
+      tab label changed): two zones. Connection (pairing status + the BYOK
+      fallback key that only powers the web agent's reasoning while unpaired)
+      comes first; Capture (capture on/off, allowed-domains, per-site
+      recorders, and record-a-task) comes second — it applies no matter how
+      the brain is powered. Ids are all setup-prefixed to avoid colliding
+      with the header's own #dot/#workspace/#counts globals above.
     -->
     <section id="setup-view" class="view hidden">
+      <div class="label group-heading">Connection</div>
+
       <div class="panel">
         <div class="row">
           <span id="setup-dot" class="dot"></span>
@@ -60,13 +63,13 @@
         <button id="setup-retry" class="btn hidden">Retry</button>
       </div>
 
-      <!-- Shown when unpaired, rejected, or standalone (pairing stays reachable
-           from standalone — it is the doorway to migrating the local brain). -->
+      <!-- Shown when unpaired, rejected, or workspace_mismatch — pairing is
+           required for the brain graph; there is no local fallback. -->
       <div id="setup-pair-form" class="panel hidden">
         <p class="small">
           Run <code class="inline">nff-brain serve</code> in your project, then enter the code it prints.
-          Captures are kept on this device either way — or add your own AI API key under
-          Settings to build a brain right here in the browser.
+          Capture, chat, and MCP all need this — nothing is stored until you pair. Add your own
+          AI key below in the meantime to let the web agent reason without a server.
         </p>
         <div class="row gap">
           <label class="small" for="setup-port">Port</label>
@@ -76,6 +79,62 @@
         </div>
         <div id="setup-pair-error" class="small error hidden"></div>
       </div>
+
+      <!-- Fallback AI key: a narrow, subordinate path — it only powers the CDP
+           web agent's reasoning loop, and only while unpaired (src/actRun.ts).
+           Collapsed by default; render.ts opens/closes it as the phase
+           requires, without stomping a manual toggle (see byokAutoOpen). -->
+      <details id="setup-byok" class="panel">
+        <summary class="row">
+          <span class="strong">Fallback AI key</span>
+          <span id="setup-byok-status" class="muted small push"></span>
+        </summary>
+
+        <p class="muted small">
+          Optional. Powers the web agent's reasoning when there's no paired server to run it —
+          nothing else uses this. A paired server always takes over, and any notes saved locally
+          from before migrate into it automatically.
+        </p>
+
+        <div class="row gap">
+          <label class="small" for="provider">Provider</label>
+          <select id="provider" class="input"></select>
+        </div>
+
+        <div class="row gap">
+          <label class="small" for="api-key">API key</label>
+          <input id="api-key" class="input grow" type="password" autocomplete="off" spellcheck="false"
+                 placeholder="paste your key" />
+          <button id="key-save" class="btn primary">Save</button>
+          <button id="key-clear" class="btn">Clear</button>
+        </div>
+        <div id="key-status" class="small muted"></div>
+        <div id="key-error" class="small error hidden"></div>
+
+        <h2>Models</h2>
+        <p class="muted small">
+          Two slots: a cheap background model, and the model that answers the web agent's
+          reasoning while unpaired. Pick from the list or type any model id.
+        </p>
+        <div class="row gap">
+          <label class="small" for="model-background">Background</label>
+          <input id="model-background" class="input grow" list="models-background" autocomplete="off" spellcheck="false" />
+          <datalist id="models-background"></datalist>
+        </div>
+        <div class="row gap">
+          <label class="small" for="model-chat">Chat</label>
+          <input id="model-chat" class="input grow" list="models-chat" autocomplete="off" spellcheck="false" />
+          <datalist id="models-chat"></datalist>
+        </div>
+        <div class="row gap">
+          <button id="models-save" class="btn">Save models</button>
+          <button id="test" class="btn">Test connection</button>
+        </div>
+        <div id="test-result" class="small hidden"></div>
+        <div id="models-error" class="small error hidden"></div>
+      </details>
+
+      <div class="label group-heading">Capture</div>
 
       <div class="panel">
         <div class="row">
@@ -210,7 +269,7 @@
           <input id="act-budget" class="input narrow" type="number" min="1" max="100" value="40" />
         </div>
         <ul id="workflow-list" class="list"></ul>
-        <p id="workflow-empty" class="muted small">No workflows yet — record a task from the Setup tab.</p>
+        <p id="workflow-empty" class="muted small">No workflows yet — record a task from the Settings tab.</p>
 
         <!-- Replay run feedback — hidden unless a replay is active. -->
         <div id="act-run" class="hidden">
@@ -245,65 +304,6 @@
         Positions come from <code class="inline">nff-brain layout</code> — run it for a
         clearer layout if nodes look clustered. Scroll to zoom, drag to pan.
       </p>
-    </section>
-
-    <!-- ── Settings: bring-your-own AI key + model slots ──────────────────── -->
-    <section id="settings-view" class="view hidden">
-      <div class="panel">
-        <h2>Bring your own AI key</h2>
-        <p class="muted small">
-          Optional. Without a key (and without a paired local server) captures queue on this
-          device and nothing is sent anywhere. With a key, captured snippets and brain excerpts
-          go directly to the provider below under your own account — nowhere else.
-        </p>
-
-        <div class="row gap">
-          <label class="small" for="provider">Provider</label>
-          <select id="provider" class="input"></select>
-        </div>
-
-        <div class="row gap">
-          <label class="small" for="api-key">API key</label>
-          <input id="api-key" class="input grow" type="password" autocomplete="off" spellcheck="false"
-                 placeholder="paste your key" />
-          <button id="key-save" class="btn primary">Save</button>
-          <button id="key-clear" class="btn">Clear</button>
-        </div>
-        <div id="key-status" class="small muted"></div>
-        <div id="key-error" class="small error hidden"></div>
-      </div>
-
-      <div class="panel">
-        <h2>Models</h2>
-        <p class="muted small">
-          Two slots: a cheap background model distills your captures into brain notes; the chat
-          model answers questions in the Agent tab. Pick from the list or type any model id.
-        </p>
-        <div class="row gap">
-          <label class="small" for="model-background">Background</label>
-          <input id="model-background" class="input grow" list="models-background" autocomplete="off" spellcheck="false" />
-          <datalist id="models-background"></datalist>
-        </div>
-        <div class="row gap">
-          <label class="small" for="model-chat">Chat</label>
-          <input id="model-chat" class="input grow" list="models-chat" autocomplete="off" spellcheck="false" />
-          <datalist id="models-chat"></datalist>
-        </div>
-        <div class="row gap">
-          <button id="models-save" class="btn">Save models</button>
-          <button id="test" class="btn">Test connection</button>
-        </div>
-        <div id="test-result" class="small hidden"></div>
-        <div id="models-error" class="small error hidden"></div>
-      </div>
-
-      <div class="panel">
-        <p class="muted small">
-          Prefer everything local? Run <code class="inline">nff-brain serve</code> in a project and pair from
-          the Setup tab instead — a paired server always takes over, and any notes built
-          here migrate into it automatically.
-        </p>
-      </div>
     </section>
 
     <script src="sidepanel.js"></script>

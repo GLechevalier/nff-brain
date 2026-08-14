@@ -1,9 +1,10 @@
 // Pure DOM renderers for the consolidated side panel — no chrome.*, same
 // separation as popup/paint.ts. This one module folds together what used to be
 // three separate paint layers: devtools/panelPaint.ts (Brain/MCP/Graph), the
-// old sidepanel/actView.ts (Agent), and options/main.ts's paint helpers
-// (Settings). Every piece of node text goes through textContent, never
-// innerHTML: brain/page content is data, not markup.
+// old sidepanel/actView.ts (Agent), and options/main.ts's paint helpers (the
+// BYOK fallback key, now the #setup-byok section inside the Settings tab
+// rather than a separate one). Every piece of node text goes through textContent,
+// never innerHTML: brain/page content is data, not markup.
 
 import { PROVIDERS, PROVIDER_CHOICES } from '@nff-brain/core/provider';
 import type { ProviderId } from '@nff-brain/core/provider';
@@ -21,7 +22,7 @@ import type {
   PublicState,
   WebAgentRun,
 } from '../src/protocol.js';
-import type { ActRunState } from '../src/schema.js';
+import type { ActRunState, ConnectionPhase } from '../src/schema.js';
 
 const $ = (id: string): HTMLElement => document.getElementById(id)!;
 
@@ -31,11 +32,27 @@ const MASKED_KEY_PLACEHOLDER = '•'.repeat(12);
 
 // ── status header ─────────────────────────────────────────────────────────────
 
-export function paintHeader(nodes: NodesResponse | null, connected: boolean): void {
+// Phase-specific copy for the global header banner — distinct from
+// SETUP_PHASE_TEXT below (that's a one-word status label; this is a full
+// sentence explaining what happened and what to do), and critically NOT the
+// same string for every non-connected phase: "Brain not reachable" is
+// actively wrong for workspace_mismatch, where the brain answers fine, it's
+// just paired to a different project now.
+const HEADER_BANNER_TEXT: Partial<Record<ConnectionPhase, string>> = {
+  disconnected: 'Brain not reachable — pair from the Settings tab.',
+  unpaired: 'Brain not reachable — pair from the Settings tab.',
+  rejected: 'Pairing expired — re-pair from the Settings tab.',
+  workspace_mismatch: 'This server is now serving a different project — re-pair from the Settings tab to continue.',
+};
+
+export function paintHeader(nodes: NodesResponse | null, phase: ConnectionPhase): void {
   const dot = $('dot');
-  dot.classList.toggle('connected', connected);
-  dot.classList.toggle('disconnected', !connected);
-  $('disconnected').classList.toggle('hidden', connected);
+  for (const p of ['connected', 'disconnected', 'rejected', 'workspace_mismatch', 'unpaired'] as ConnectionPhase[]) {
+    dot.classList.toggle(p, p === phase);
+  }
+  const bannerText = HEADER_BANNER_TEXT[phase];
+  $('disconnected').classList.toggle('hidden', !bannerText);
+  if (bannerText) $('disconnected').textContent = bannerText;
   if (!nodes) return;
   $('workspace').textContent = nodes.workspace.name;
   $('counts').textContent =
@@ -43,11 +60,11 @@ export function paintHeader(nodes: NodesResponse | null, connected: boolean): vo
   $('updated').textContent = nodes.updatedAt ? `updated ${nodes.updatedAt.slice(0, 16).replace('T', ' ')}` : '';
 }
 
-// ── the six subtabs ─────────────────────────────────────────────────────────
+// ── the four subtabs ────────────────────────────────────────────────────────
 
-export type SidePanelTab = 'setup' | 'brain' | 'mcp' | 'graph' | 'settings';
+export type SidePanelTab = 'setup' | 'brain' | 'mcp' | 'graph';
 
-const TABS: readonly SidePanelTab[] = ['brain', 'setup', 'mcp', 'graph', 'settings'];
+const TABS: readonly SidePanelTab[] = ['brain', 'mcp', 'graph', 'setup'];
 
 export function switchTab(tab: SidePanelTab): void {
   for (const t of TABS) {
@@ -77,7 +94,12 @@ export function paintActRun(run: ActRunState | null): void {
   ($('act-budget') as HTMLInputElement).disabled = running;
   $('act-stop').classList.toggle('hidden', !running);
   $('act-grant').classList.toggle('hidden', phase !== 'awaiting_grant');
-  $('act-clear').classList.toggle('hidden', idle || running);
+  // Clear must stay available once a stop was requested even if the run never
+  // gets to actually honor it (a wedged tab, a hung network call) — 'stopping'
+  // is exactly the state a stuck run sits in, so it can't be lumped in with
+  // 'running'/'awaiting_grant' (where Clear force-abandoning a run that hasn't
+  // even been asked to stop yet would be a footgun, not an escape hatch).
+  $('act-clear').classList.toggle('hidden', idle || phase === 'running' || phase === 'awaiting_grant');
 
   const status = $('act-status');
   status.textContent = idle
@@ -678,7 +700,8 @@ export function showFieldError(id: string, message: string | null): void {
   el.classList.toggle('hidden', !message);
 }
 
-// ── Settings tab (BYOK provider) — was options/main.ts's paint helpers ───────
+// ── Settings tab's fallback-key section (BYOK provider), #setup-byok — was
+//    options/main.ts's paint helpers ───────────────────────────────────────
 
 export function fillProviderSelect(current: ProviderId | null): void {
   const select = $('provider') as HTMLSelectElement;
@@ -710,7 +733,8 @@ export function fillModelDatalists(provider: ProviderId): void {
 
 /** Renamed from options/main.ts's `paint` to avoid colliding with the other
  *  tab paints; the stored key is NEVER rendered back — PublicState carries
- *  zero key material. */
+ *  zero key material. Fills #setup-byok, which now lives inside the Settings
+ *  tab; see paintSetup for the section's open/collapsed state and summary. */
 export function paintSettings(state: PublicState): void {
   fillProviderSelect(state.provider);
   fillModelDatalists(state.provider ?? 'anthropic');
@@ -724,7 +748,7 @@ export function paintSettings(state: PublicState): void {
     keyInput.value = MASKED_KEY_PLACEHOLDER;
     keyInput.readOnly = true;
   } else {
-    status.textContent = 'No key saved — captures stay queued on this device.';
+    status.textContent = 'No key saved — the web agent needs a paired server or a key here to reason.';
     status.classList.remove('ok');
     keyInput.readOnly = false;
   }
@@ -736,7 +760,7 @@ export function paintSettings(state: PublicState): void {
   }
 }
 
-// ── Setup tab (pairing/capture/allowlist/recorders/activity) — was
+// ── Settings tab (pairing/capture/allowlist/recorders/activity) — was
 //    popup/paint.ts's paint(). Only textContent, classList and the children
 //    of #setup-rules/#setup-recorders are touched; #setup-rule-input is NEVER
 //    re-rendered, which is what keeps the caret in place while typing. ──────
@@ -747,7 +771,6 @@ const SETUP_PHASE_TEXT: Record<PublicState['phase'], string> = {
   rejected: 'Pairing expired',
   workspace_mismatch: 'Different project now',
   unpaired: 'Not paired',
-  standalone: 'Standalone',
 };
 
 export interface SetupDeps {
@@ -756,6 +779,13 @@ export interface SetupDeps {
   onRemoveRule: (host: string) => void;
   onToggleRecorder: (id: string, enable: boolean) => void;
 }
+
+// Tracks the phase-driven open/collapsed state #setup-byok was last SET to
+// (not what it currently is) so paintSetup — called on every poll — only
+// touches `.open` when that bucket actually flips, the same discipline that
+// keeps #setup-rule-input from being re-rendered mid-keystroke: forcing
+// `.open` every repaint would stomp a user's manual expand/collapse.
+let byokAutoOpen: boolean | null = null;
 
 export function paintSetup(state: PublicState, deps: SetupDeps, nowMs = Date.now()): void {
   const { phase, health } = state;
@@ -766,36 +796,50 @@ export function paintSetup(state: PublicState, deps: SetupDeps, nowMs = Date.now
   $('setup-endpoint').textContent = state.port ? `127.0.0.1:${state.port}` : '';
   $('setup-version').textContent = health.serverVersion ? `v${health.serverVersion}` : '';
 
-  const counts =
-    phase === 'standalone'
-      ? `${state.standaloneNodes ?? 0} local note${(state.standaloneNodes ?? 0) === 1 ? '' : 's'} · your API key`
-      : health.projectNodes === null
-        ? ''
-        : `${health.projectNodes} project · ${health.globalNodes ?? 0} global nodes`;
+  const counts = health.projectNodes === null ? '' : `${health.projectNodes} project · ${health.globalNodes ?? 0} global nodes`;
   const age = relativeAge(health.lastOkAt, nowMs);
-  $('setup-counts').textContent =
-    counts && (phase === 'connected' || phase === 'standalone' ? counts : age ? `${counts}, as of ${age}` : counts);
+  $('setup-counts').textContent = counts && (phase === 'connected' ? counts : age ? `${counts}, as of ${age}` : counts);
   $('setup-workspace').textContent = health.workspaceRoot ?? '';
 
-  const showError = phase !== 'connected' && phase !== 'standalone' && !!health.lastError;
+  const showError = phase !== 'connected' && !!health.lastError;
   $('setup-conn-error').textContent = health.lastError ?? '';
   $('setup-conn-error').classList.toggle('hidden', !showError);
   $('setup-retry').classList.toggle('hidden', phase !== 'disconnected' && phase !== 'workspace_mismatch');
 
+  // A pre-upgrade user's leftover local notes, surfaced whether paired or not
+  // — while paired this is "still finishing," while unpaired it's the reason
+  // to pair at all.
   $('setup-migration').textContent =
     state.migrationPending !== null
-      ? `Moving ${state.migrationPending} standalone note${state.migrationPending === 1 ? '' : 's'} into your local brain…`
+      ? phase === 'connected'
+        ? `Moving ${state.migrationPending} saved note${state.migrationPending === 1 ? '' : 's'} into your brain…`
+        : `You have ${state.migrationPending} note${state.migrationPending === 1 ? '' : 's'} saved from before — pair to keep ${state.migrationPending === 1 ? 'it' : 'them'}.`
       : '';
   $('setup-migration').classList.toggle('hidden', state.migrationPending === null);
 
-  // Standalone keeps the pair form reachable — pairing is the doorway to
-  // migrating the local brain into a real server. workspace_mismatch keeps it
-  // reachable too, so re-pairing for the NEW project is one click away.
-  const needsPairing =
-    phase === 'unpaired' || phase === 'rejected' || phase === 'standalone' || phase === 'workspace_mismatch';
+  // workspace_mismatch keeps the pair form reachable so re-pairing for the
+  // NEW project is one click away.
+  const needsPairing = phase === 'unpaired' || phase === 'rejected' || phase === 'workspace_mismatch';
   $('setup-pair-form').classList.toggle('hidden', !needsPairing);
   ($('setup-connect') as HTMLButtonElement).textContent =
     phase === 'rejected' || phase === 'workspace_mismatch' ? 'Re-pair' : 'Connect';
+
+  // ── fallback AI key (#setup-byok) ──────────────────────────────────────
+  // Only relevant while unpaired — src/actRun.ts falls back to it exclusively
+  // when getPairing() === null, i.e. exactly phase === 'unpaired'; every other
+  // phase still tries the paired loop first and never reaches it.
+  const byokRelevant = phase === 'unpaired';
+  $('setup-byok-status').textContent = state.providerConfigured
+    ? byokRelevant
+      ? 'Saved — powering the web agent'
+      : 'Saved — inactive while paired'
+    : byokRelevant
+      ? 'Not set — add a key to power the web agent'
+      : 'Not set';
+  if (byokAutoOpen !== byokRelevant) {
+    ($('setup-byok') as HTMLDetailsElement).open = byokRelevant;
+    byokAutoOpen = byokRelevant;
+  }
 
   // ── capture ─────────────────────────────────────────────────────────────
   const toggle = $('setup-capture-toggle');

@@ -12,7 +12,6 @@ import { currentPhase } from './connection.js';
 import { isAllowed, shouldCapture } from './gate.js';
 import { ADAPTERS, adapterById } from './recorderRegistry.js';
 import { formatRecorderClip, pushRecorderSeen, recorderSeenRecently, validateRecorderEvent } from './recorderFormat.js';
-import { enqueueStandaloneClip } from './standaloneDrain.js';
 import type { RecorderEventMsg } from './recorderTypes.js';
 import {
   getAllowlist,
@@ -151,8 +150,9 @@ export async function deliverRecorderClip(url: string, msg: RecorderEventMsg): P
   await appendActivity({ id, url, title, text, delivery: 'pending' });
 
   if (!pairing) {
-    // Same standalone tail as capture.ts — recorder events queue locally too.
-    await enqueueStandaloneClip({ kind: 'note', text, url, title, capturedAt: msg.at }, id);
+    // Same posture as capture.ts — no local fallback store exists anymore.
+    await markDelivery(id, 'failed');
+    await flashCaptured(false);
     setTimeout(() => {
       void currentPhase().then((phase) => paintBadge(phase, capture.enabled));
     }, 1200);

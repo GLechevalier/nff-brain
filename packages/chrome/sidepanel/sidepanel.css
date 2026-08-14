@@ -258,7 +258,16 @@ label.small { min-width: 84px; }
 #mcp-list .mcp-dot.enabled { background: #4ade80; }
 #mcp-list .mcp-actions { margin-left: auto; display: flex; gap: 4px; }
 
-/* ── Setup tab: capture toggle + allowed-domains/recorders lists ─────────── */
+/* ── Settings tab: Connection/Capture group headings + the collapsible fallback
+   key section ────────────────────────────────────────────────────────────── */
+
+.group-heading { display: block; margin: 14px 0 6px; }
+.group-heading:first-child { margin-top: 0; }
+
+#setup-byok > summary { cursor: pointer; }
+#setup-byok[open] > summary { margin-bottom: 8px; }
+
+/* ── Settings tab: capture toggle + allowed-domains/recorders lists ──────── */
 
 .toggle {
   border: 1px solid #3a3a3a;

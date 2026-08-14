@@ -68,7 +68,13 @@ allows one debugger per tab and open DevTools holds that slot, so the panel must
 be somewhere that leaves the active tab's slot free). It attaches `chrome.debugger`
 to the window's **active tab** and drives it with trusted CDP input — click (all
 buttons/counts), drag, scroll, type, keys, navigate — reading the page as a
-token-lean element snapshot. A shared teal cursor overlay shows every action.
+token-lean element snapshot. A shared teal cursor overlay shows every action,
+and a persistent pulsing glow border + "Stop" pill (`src/attentionScript.ts`)
+mark the tab as actively driven for the whole run, not just per-click — both
+are CDP-injected (no host permissions needed for arbitrary origins), so the
+Stop pill can't message the SW directly; it sets a page-side flag `keepGoing()`
+(`src/actRun.ts`) polls between turns, the same checkpoint the panel's own Stop
+button already goes through.
 The reasoning loop runs through paired `claude -p` (default) or the BYOK
 Anthropic tool-use API.
 
@@ -110,8 +116,7 @@ The CDP web agent's loop is a held-open async chain in the SW; UI surfaces poll
 | `manifest.json` | MV3 manifest. Permissions: storage, alarms, activeTab, contextMenus, scripting, **debugger**, **tabs**, **sidePanel**. `debugger`/`tabs` carry the only install warnings (the web agent). |
 | `src/sw.ts` | **Service worker entry.** Listener registration + `handleMessage()` dispatch. |
 | `devtools/` | The **Brain / MCP / Graph** DevTools panel (subsystem 2 + brain browsing). `devtools.ts` registers the panel; `panel.ts` logic, `panelPaint.ts` pure renderers, `panel.html/css`. |
-| `sidepanel/` | The consolidated UI (Setup · Agent · MCP · Brain · Graph · Settings) — this is now also the toolbar icon's default click target (no more separate popup; see `chrome.sidePanel.setPanelBehavior` in `src/sw.ts`). Setup carries what the old popup owned: pairing, capture toggle, allowlist, recorders, **Record a task**. `main.ts` targets the active tab + drives the run; `render.ts` pure renderers; `sidepanel.html/css`. |
-| `options/` | BYOK key + model entry (a full tab, not a popup). `main.ts`, `options.html/css`. |
+| `sidepanel/` | The consolidated UI (Settings · Agent · MCP · Brain · Graph — Settings is still `setup` in ids/JS identifiers, only its visible label changed) — this is now also the toolbar icon's default click target (no more separate popup; see `chrome.sidePanel.setPanelBehavior` in `src/sw.ts`). Settings carries what the old popup owned (pairing, capture toggle, allowlist, recorders, **Record a task**) plus, in a collapsible `#setup-byok` section, what the old options page owned (BYOK provider/key + model slots — now a narrow fallback for the web agent's reasoning while unpaired, not a peer brain). `main.ts` targets the active tab + drives the run; `render.ts` pure renderers; `sidepanel.html/css`. |
 
 ### Core plumbing
 | Path | What |
@@ -166,6 +171,7 @@ The stable action/perception contract lives in **`@nff-brain/core`**
 | `src/actPlan.ts` | Pure planners: key table, modifier bits, drag interpolation. |
 | `src/snapshotScript.ts` | The self-contained page-reader injected via CDP (returns the element snapshot; refs stashed page-side for stale detection). |
 | `src/cursorScript.ts` | The shared self-contained cursor overlay (used by CDP injection AND `content/virtualCursor.ts`). |
+| `src/attentionScript.ts` | The persistent glow-border + Stop-pill overlay, same self-contained CDP-injection pattern as `cursorScript.ts`. Shown at run start and reinstalled alongside the cursor before every interact verb (`src/actEngine.ts`'s `attentionShow`/`attentionHide`/`attentionConsumeStop`, `cursorHide`); hidden at every SW-controlled stop point in `src/actRun.ts`. |
 | `src/actGate.ts` | `decideAct` — per-origin consent (observe/navigate free; interact prompts; destructive confirms). `isRestrictedUrl`. |
 | `src/actTools.ts` | The LLM tool surface: specs (read_page/pointer/keyboard/scroll/navigate), tool-input→verb mapping, the paired JSON-action contract (`parseActAction`, `buildPairedActPrompt`, `runActByName`), steering prompts. |
 | `src/actStore.ts` | Serialized `nb.actRun` mutator (transcript, budget, grants). |

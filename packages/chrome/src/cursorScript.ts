@@ -20,6 +20,9 @@
 export interface CursorController {
   /** Fade the overlay in (idempotent). */
   show(): void;
+  /** Show the overlay pulsing at a fixed idle anchor (top-right corner) — used
+   *  at run start so the agent reads as alive before its first real move. */
+  showIdle(): void;
   /** Glide the dot to a viewport point; resolves when the glide finishes. */
   moveTo(x: number, y: number): Promise<void>;
   /** Play the press pulse in place; resolves when it finishes. */
@@ -42,6 +45,7 @@ export function createCursorController(doc: Document): CursorController {
   var DOT = 16;
   var TRAVEL_MS = 350;
   var PRESS_MS = 180;
+  var IDLE_MARGIN = 32; // px from the top-right corner — the closest in-page proxy to the extension's toolbar icon, which is outside the DOM entirely
 
   function wait(ms: number): Promise<void> {
     return new Promise(function (resolve) {
@@ -76,6 +80,8 @@ export function createCursorController(doc: Document): CursorController {
       'ms ease,opacity 200ms ease;opacity:0}' +
       '.cursor.visible{opacity:1}' +
       '.cursor.pressed .dot{transform:scale(0.7);box-shadow:0 0 0 10px rgba(0,255,204,0.25)}' +
+      '.cursor.idle .dot{animation:nffCursorBreathe 1.6s ease-in-out infinite}' +
+      '@keyframes nffCursorBreathe{0%,100%{box-shadow:0 0 0 0 rgba(0,255,204,0.35)}50%{box-shadow:0 0 0 6px rgba(0,255,204,0.15)}}' +
       '.dot{width:' +
       DOT +
       'px;height:' +
@@ -104,8 +110,17 @@ export function createCursorController(doc: Document): CursorController {
     show: function () {
       build().classList.add('visible');
     },
+    showIdle: function () {
+      var el = build();
+      el.classList.add('visible');
+      el.classList.add('idle');
+      var view = doc.defaultView;
+      var w = (view && view.innerWidth) || doc.documentElement.clientWidth || 800;
+      moveEl(el, w - IDLE_MARGIN, IDLE_MARGIN);
+    },
     moveTo: function (x: number, y: number) {
       var el = build();
+      el.classList.remove('idle');
       el.classList.add('visible');
       moveEl(el, x, y);
       return wait(TRAVEL_MS);
@@ -118,6 +133,7 @@ export function createCursorController(doc: Document): CursorController {
     },
     dragPath: async function (points: Array<{ x: number; y: number }>) {
       var el = build();
+      el.classList.remove('idle');
       el.classList.add('visible');
       for (var i = 0; i < points.length; i++) {
         moveEl(el, points[i]!.x, points[i]!.y);

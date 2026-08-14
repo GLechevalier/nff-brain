@@ -15,28 +15,23 @@ import {
   getCapture,
   getHealth,
   getPairing,
-  getProviderSettings,
   setActivity,
   setHealth,
   setPairing,
 } from './storage.js';
 
 /**
- * One of the TWO permitted module-level variables in the whole extension (the
- * other is brainStore.ts's mutation chain): an in-flight probe promise, so an
- * alarm and a popup firing in the same worker lifetime do not double-fetch.
- * Losing it when the worker dies is harmless — the worst case is one extra
- * request.
+ * One of the THREE permitted module-level variables in the whole extension
+ * (the others are actStore.ts's and traceCapture.ts's serialization chains):
+ * an in-flight probe promise, so an alarm and a popup firing in the same
+ * worker lifetime do not double-fetch. Losing it when the worker dies is
+ * harmless — the worst case is one extra request.
  */
 let inFlightProbe: Promise<ConnectionPhase> | null = null;
 
 export async function currentPhase(nowMs = Date.now()): Promise<ConnectionPhase> {
   const [pairing, health] = await Promise.all([getPairing(), getHealth()]);
-  if (pairing === null) {
-    // No pairing: a configured BYOK provider means the local brain is live.
-    // A stored pairing always wins over standalone (see mode.ts).
-    return (await getProviderSettings()) !== null ? 'standalone' : 'unpaired';
-  }
+  if (pairing === null) return 'unpaired';
   return derivePhase(health, true, nowMs);
 }
 

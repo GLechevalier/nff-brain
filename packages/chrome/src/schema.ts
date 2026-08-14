@@ -34,8 +34,13 @@ export const KEYS = {
   agentActionAllow: 'nb.agentActionAllow',
   navigateHostAllow: 'nb.navigateHostAllow',
   agentTab: 'nb.agentTab',
-  // Standalone mode (no local server): BYOK provider + the in-browser brain.
+  // BYOK provider settings — LLM reasoning only (chat tool-calling, the web
+  // agent's BYOK loop), never a graph store.
   provider: 'nb.provider',
+  // LEGACY, migration-only: a pre-upgrade user's local brain/clip queue, kept
+  // solely so migrate.ts's migrateIfNeeded() can finish draining it into the
+  // paired server. No live feature writes these anymore. Delete once
+  // telemetry/support confirms no legacy users remain.
   brain: 'nb.brain',
   clipQueue: 'nb.clipQueue',
   clipSeen: 'nb.clipSeen',
@@ -44,8 +49,8 @@ export const KEYS = {
   // Web-agent action engine (CDP): the single active run + per-origin grants.
   actRun: 'nb.actRun',
   actHostAllow: 'nb.actHostAllow',
-  // Record-and-automate: the in-progress recording + the finished trace awaiting
-  // distillation (standalone/BYOK path; paired posts to /v1/trace instead).
+  // Record-and-automate: the in-progress recording + the finished trace
+  // awaiting distillation (server-side via POST /v1/trace).
   traceActive: 'nb.traceActive',
   tracePending: 'nb.tracePending',
 } as const;
@@ -74,11 +79,12 @@ export interface Pairing {
  * Unlike 'rejected' it keeps retrying on the normal backoff — switching back to
  * the original workspace's server (or re-pairing for the new one) self-heals it.
  *
- * 'standalone' = no pairing stored but a BYOK provider key is configured: the
- * brain lives in extension storage and LLM calls go straight to the provider.
- * A stored pairing always wins — standalone never activates while one exists.
+ * There is no standalone/offline phase: the brain graph always lives on a
+ * paired `nff-brain serve`. A BYOK provider key (ProviderSettings below) only
+ * ever powers LLM reasoning (chat tool-calling, the web agent's BYOK loop) —
+ * never a substitute source of truth for the graph itself.
  */
-export type ConnectionPhase = 'unpaired' | 'connected' | 'disconnected' | 'rejected' | 'workspace_mismatch' | 'standalone';
+export type ConnectionPhase = 'unpaired' | 'connected' | 'disconnected' | 'rejected' | 'workspace_mismatch';
 
 export interface Health {
   phase: ConnectionPhase;
@@ -172,7 +178,7 @@ export const ACTIVITY_URL_MAX = 512;
 export const ACTIVITY_TITLE_MAX = 256;
 export const ACTIVITY_TEXT_MAX = 2000;
 
-// ── standalone mode: BYOK provider settings ─────────────────────────────────
+// ── BYOK provider settings (LLM reasoning only) ─────────────────────────────
 
 export interface ProviderTestResult {
   ok: boolean;
@@ -196,7 +202,12 @@ export interface ProviderSettings {
   lastTest: ProviderTestResult | null;
 }
 
-// ── standalone mode: the in-browser brain ───────────────────────────────────
+// ── legacy, migration-only: a pre-upgrade user's local brain ────────────────
+//
+// Nothing writes these anymore — see KEYS' comment above. They exist purely
+// so migrate.ts's migrateIfNeeded() can finish draining a leftover local
+// brain into the paired server. Delete this whole section (and migrate.ts's
+// remaining storage.ts imports) once no legacy users remain.
 
 /**
  * nb.brain holds a core BrainFile VERBATIM (same schema as .nff-brain/
@@ -205,18 +216,9 @@ export interface ProviderSettings {
  */
 export type StandaloneBrain = BrainFile;
 
-/** Queued raw captures awaiting a drain — the browser analog of clips.jsonl. */
-export const CLIP_QUEUE_MAX = 200;
-
-/** Processed clip ids (at-least-once dedupe) — the analog of seenClipIds(). */
-export const CLIP_SEEN_MAX = 500;
-
 export type StandaloneClip = ClipRecord;
 
-/**
- * THE DRAIN SCHEDULE LIVES HERE, not in the alarm — same discipline as
- * Health.nextProbeAtMs. The alarm is only a tick; this number on disk decides.
- */
+/** Only DEFAULT_DRAIN is still written (to clear a legacy drain schedule on migration). */
 export interface DrainState {
   nextDrainAtMs: number;
   consecutiveFailures: number;

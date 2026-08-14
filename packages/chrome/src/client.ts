@@ -23,6 +23,7 @@ import {
   isSearchResponse,
   isStatusResponse,
   isTraceDistillResponse,
+  isWorkflowSpecResponse,
   isWorkflowsResponse,
 } from './protocol.js';
 import type {
@@ -49,6 +50,7 @@ import type {
   WebAgentListTarget,
   WebAgentVerb,
   WorkflowsResponse,
+  WorkflowSpecResponse,
 } from './protocol.js';
 import type { TraceRecord } from '@nff-brain/core/trace';
 
@@ -351,6 +353,14 @@ export async function postActStep(port: number, token: string, prompt: string): 
 export async function getWorkflows(port: number, token: string): Promise<WorkflowsResponse> {
   const body = await call(port, '/v1/workflows', { token });
   if (!isWorkflowsResponse(body)) throw new HttpError(0, 'protocol', 'unexpected workflows response');
+  return body;
+}
+
+/** ONE workflow's full replayable spec — the web agent's replay path needs
+ *  the steps, unlike getWorkflows()' summary list. */
+export async function getWorkflow(port: number, token: string, id: string): Promise<WorkflowSpecResponse> {
+  const body = await call(port, `/v1/workflow?id=${encodeURIComponent(id)}`, { token });
+  if (!isWorkflowSpecResponse(body)) throw new HttpError(0, 'protocol', 'unexpected workflow response');
   return body;
 }
 

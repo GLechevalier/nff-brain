@@ -14,6 +14,7 @@ import type { BrowserVerb, Target } from '@nff-brain/core/browserVerbs';
 import type { PageSnapshot } from '@nff-brain/core/pageSnapshot';
 import { isRestrictedUrl } from './actGate.js';
 import { buildCursorInstallerSource, CURSOR_GLOBAL } from './cursorScript.js';
+import { ATTENTION_GLOBAL, buildAttentionInstallerSource } from './attentionScript.js';
 import { buildResolveSource, buildSnapshotSource, refIndex } from './snapshotScript.js';
 import { dragSamples, keyDescriptor, modifierBits } from './actPlan.js';
 import { detach, ensureAttached, evaluate, send } from './cdp.js';
@@ -29,6 +30,27 @@ export interface VerbResult {
 
 type Point = { x: number; y: number; w?: number; h?: number };
 type ResolveOutcome = { ok: true; point: Point } | { ok: false; error: string };
+
+/**
+ * A hung page (most commonly a native JS dialog — alert/confirm/prompt —
+ * blocking the renderer's main thread) makes `chrome.debugger.sendCommand`
+ * (what evaluate() is built on) hang indefinitely rather than reject, since
+ * Runtime.evaluate needs the main thread to run. `evaluate(...).catch(...)`
+ * alone does NOT protect against this — a promise that never settles never
+ * reaches its .catch either. Used only for the attention overlay's show/hide/
+ * consumeStop and the cursor's hide, because those specifically sit on paths
+ * that MUST stay reliable regardless of page state: attentionConsumeStop is
+ * the first thing actRun.ts's keepGoing() awaits every turn, so without this
+ * a wedged page would silently defeat the Stop button (which used to be pure
+ * chrome.storage and therefore page-state-independent) — not just delay the
+ * overlay's own visuals. The existing cursor install/move/press/drag calls
+ * are deliberately left unguarded: a hang there only stalls the one click
+ * about to happen, not Stop/Clear/run-start.
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([p, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))]);
+}
+const ATTENTION_CALL_TIMEOUT_MS = 1200;
 
 async function resolveTarget(tabId: number, target: Target): Promise<ResolveOutcome> {
   if ('x' in target) return { ok: true, point: { x: target.x, y: target.y } };
@@ -49,6 +71,16 @@ async function resolveTarget(tabId: number, target: Target): Promise<ResolveOutc
 async function cursorInstall(tabId: number): Promise<void> {
   await evaluate(tabId, buildCursorInstallerSource()).catch(() => undefined);
 }
+/**
+ * Show the cursor pulsing at its idle corner anchor — called once at run
+ * start (src/actRun.ts's drive()) so the agent reads as alive during the
+ * page.read/LLM-reasoning stretch before its first real pointer action,
+ * instead of the page showing nothing at all until the first click.
+ */
+export async function cursorShowIdle(tabId: number): Promise<void> {
+  await cursorInstall(tabId);
+  await evaluate(tabId, `globalThis.${CURSOR_GLOBAL} && globalThis.${CURSOR_GLOBAL}.showIdle()`).catch(() => undefined);
+}
 async function cursorMove(tabId: number, x: number, y: number): Promise<void> {
   await evaluate(tabId, `globalThis.${CURSOR_GLOBAL} && globalThis.${CURSOR_GLOBAL}.moveTo(${x},${y})`, {
     awaitPromise: true,
@@ -63,6 +95,55 @@ async function cursorDrag(tabId: number, points: Point[]): Promise<void> {
   await evaluate(tabId, `globalThis.${CURSOR_GLOBAL} && globalThis.${CURSOR_GLOBAL}.dragPath(${JSON.stringify(points)})`, {
     awaitPromise: true,
   }).catch(() => undefined);
+}
+/** Fade the cursor overlay out — exported so actRun.ts can clean up at every stop point. */
+export async function cursorHide(tabId: number): Promise<void> {
+  await withTimeout(
+    evaluate(tabId, `globalThis.${CURSOR_GLOBAL} && globalThis.${CURSOR_GLOBAL}.hide()`).catch(() => undefined),
+    ATTENTION_CALL_TIMEOUT_MS,
+    undefined,
+  );
+}
+
+// ── attention overlay (glow border + Stop pill) ─────────────────────────────
+// Exported for src/actRun.ts: shown once at run start, reinstalled alongside
+// the cursor before every interact verb (so it survives a navigation the same
+// way the cursor already does), and polled for a Stop-button click at the same
+// between-turns checkpoint that already honors the panel's Stop button.
+
+/** Install (idempotent) and fade in the glow border + Stop pill. */
+export async function attentionShow(tabId: number): Promise<void> {
+  await withTimeout(evaluate(tabId, buildAttentionInstallerSource()).catch(() => undefined), ATTENTION_CALL_TIMEOUT_MS, undefined);
+  await withTimeout(
+    evaluate(tabId, `globalThis.${ATTENTION_GLOBAL} && globalThis.${ATTENTION_GLOBAL}.show()`).catch(() => undefined),
+    ATTENTION_CALL_TIMEOUT_MS,
+    undefined,
+  );
+}
+/** Fade the glow border + Stop pill out. Safe even if never shown. */
+export async function attentionHide(tabId: number): Promise<void> {
+  await withTimeout(
+    evaluate(tabId, `globalThis.${ATTENTION_GLOBAL} && globalThis.${ATTENTION_GLOBAL}.hide()`).catch(() => undefined),
+    ATTENTION_CALL_TIMEOUT_MS,
+    undefined,
+  );
+}
+/**
+ * Read and clear the page's Stop-button flag. False (never true, and never
+ * hangs) if the overlay isn't installed, the tab has no attached debugger, or
+ * the page's renderer is blocked — the panel's own storage-based Stop must
+ * stay reliable regardless of what this returns or how long the page takes.
+ */
+export async function attentionConsumeStop(tabId: number): Promise<boolean> {
+  const v = await withTimeout(
+    evaluate<boolean>(
+      tabId,
+      `globalThis.${ATTENTION_GLOBAL} ? globalThis.${ATTENTION_GLOBAL}.consumeStop() : false`,
+    ).catch(() => false),
+    ATTENTION_CALL_TIMEOUT_MS,
+    false,
+  );
+  return !!v;
 }
 
 // ── raw input ────────────────────────────────────────────────────────────────
@@ -134,6 +215,7 @@ export async function executeVerb(tabId: number, verb: BrowserVerb): Promise<Ver
       const r = await resolveTarget(tabId, verb.target);
       if (!r.ok) return { ok: false, resultText: r.error };
       await cursorInstall(tabId);
+      await attentionShow(tabId);
       await cursorMove(tabId, r.point.x, r.point.y);
       await mouse(tabId, 'mouseMoved', r.point);
       return { ok: true, resultText: `moved to ${Math.round(r.point.x)},${Math.round(r.point.y)}` };
@@ -143,6 +225,7 @@ export async function executeVerb(tabId: number, verb: BrowserVerb): Promise<Ver
       if (!r.ok) return { ok: false, resultText: r.error };
       const mods = modifierBits(verb.modifiers);
       await cursorInstall(tabId);
+      await attentionShow(tabId);
       await cursorMove(tabId, r.point.x, r.point.y);
       await cursorPress(tabId);
       await mouse(tabId, 'mouseMoved', r.point, { modifiers: mods });
@@ -165,6 +248,7 @@ export async function executeVerb(tabId: number, verb: BrowserVerb): Promise<Ver
       const mods = modifierBits(verb.modifiers);
       const path = dragSamples(from.point, to.point, verb.steps ?? 10);
       await cursorInstall(tabId);
+      await attentionShow(tabId);
       await mouse(tabId, 'mouseMoved', from.point);
       await mouse(tabId, 'mousePressed', from.point, { button: 'left', clickCount: 1, modifiers: mods });
       await cursorDrag(tabId, path);

@@ -19,8 +19,6 @@ import { DEFAULT_DRAIN } from './schema.js';
 import type { ActivityRecord, Pairing, StandaloneBrain } from './schema.js';
 import * as client from './client.js';
 import type { ImportPayload } from './client.js';
-import { runExclusive } from './brainStore.js';
-import { clearDrainAlarm } from './standaloneDrain.js';
 import {
   getActivity,
   getBrain,
@@ -93,12 +91,16 @@ export async function migrateIfNeeded(pairing: Pairing): Promise<void> {
       const { records, changed } = applyRemap(await getActivity(), res.remapped);
       if (changed) await setActivity(records);
 
-      await runExclusive(async () => {
-        await setBrain(null);
-        await setClipSeen([]);
-        await setDrainState(DEFAULT_DRAIN);
-      });
-      await clearDrainAlarm();
+      // No serialization needed here anymore — nothing else ever mutates
+      // nb.brain now that the standalone graph is gone (unlike the old
+      // brainStore.ts-serialized clear, which guarded against a concurrent
+      // drain/retract that no longer exists).
+      await setBrain(null);
+      await setClipSeen([]);
+      await setDrainState(DEFAULT_DRAIN);
+      // A pre-upgrade install may still have the legacy drain alarm armed —
+      // clear it once so it doesn't keep waking the worker for nothing.
+      await chrome.alarms.clear('nb.drainClips').catch(() => undefined);
     }
 
     // Raw clips that never got distilled locally become ordinary server clips.

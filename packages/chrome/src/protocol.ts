@@ -13,6 +13,7 @@ import type {
   ProviderTestResult,
 } from './schema.js';
 import type { ProviderId } from '@nff-brain/core/provider';
+import type { WorkflowSpec } from '@nff-brain/core/workflow';
 
 /**
  * Owned by item 0 (packages/core/src/serveConfig.ts). This is the ONLY place
@@ -522,6 +523,17 @@ export function isWorkflowsResponse(v: unknown): v is WorkflowsResponse {
   );
 }
 
+export interface WorkflowSpecResponse {
+  ok: true;
+  id: string;
+  title: string;
+  spec: WorkflowSpec;
+}
+
+export function isWorkflowSpecResponse(v: unknown): v is WorkflowSpecResponse {
+  return isObj(v) && v.ok === true && typeof v.id === 'string' && typeof v.title === 'string' && isObj(v.spec);
+}
+
 export interface TraceDistillResponse {
   ok: true;
   nodeId: string;
@@ -683,9 +695,8 @@ export interface PublicState {
   provider: ProviderId | null;
   providerModels: ModelSlots | null;
   providerLastTest: ProviderTestResult | null;
-  /** Node count of the in-browser brain while standalone; null when paired. */
-  standaloneNodes: number | null;
-  /** Local nodes awaiting migration into the paired brain; null when idle. */
+  /** A pre-upgrade user's leftover local brain, awaiting the one-time
+   *  migration sweep into the paired brain; null once none remains. */
   migrationPending: number | null;
 }
 

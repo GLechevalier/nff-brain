@@ -99,9 +99,12 @@ describe('source purity', () => {
   });
 
   it('only ever imports the browser-safe subpaths of @nff-brain/core', () => {
-    // Standalone mode widened this set (types/brainGraph/clip*/chatPrompt/
-    // jsonExtract carry the in-browser brain; provider carries the BYOK
-    // adapters). Every entry must stay node-free — guarded by
+    // provider carries the BYOK adapters (LLM reasoning only — see schema.ts's
+    // ConnectionPhase comment). A few entries here (brainGraph/clip*/
+    // chatPrompt/traceCompact/workflowDistill/workflowApply) are unused now
+    // that standalone graph storage is gone but stay allowed rather than
+    // churned — see this file's own norm against allowlist churn. Every entry
+    // must stay node-free — guarded by
     // packages/core/test/webviewImports.test.ts's browser-safe module rows.
     const allowed = new Set([
       'score',
@@ -169,16 +172,15 @@ describe('the capture choke point', () => {
 
   it('reads a hostname only where it cannot grant capture', () => {
     // activity.ts labels a buffered record; sidepanel/main.ts labels the
-    // Setup tab's "Allow this site" button; content/github.ts classifies a
+    // Settings tab's "Allow this site" button; content/github.ts classifies a
     // form's target (the worker re-gates on sender.tab.url regardless);
     // agentGate.ts is item 7's OWN separate choke point (a different question
     // — is DOM automation allowed here — never a second copy of
     // shouldCapture's decision). None of them decides capture — gate.ts alone
     // does that. actGate.ts is the web-agent ENGINE's own separate choke
     // point (yet another distinct question — may the CDP engine attach to /
-    // act on this url — never a copy of shouldCapture). standaloneTraceDistill.ts
-    // reads a hostname only to label the recorded workflow's site — never a
-    // capture decision.
+    // act on this url — never a copy of shouldCapture). Workflow-site labeling
+    // now happens server-side (traceRoutes.ts's hostOf) — no chrome-side reader.
     const readers = FILES.filter((f) => /\.hostname\b/.test(code(f.text)));
     expect(readers.map((r) => r.rel).sort()).toEqual([
       'content/githubClassify.ts',
@@ -187,7 +189,6 @@ describe('the capture choke point', () => {
       'src/activity.ts',
       'src/agentGate.ts',
       'src/gate.ts',
-      'src/standaloneTraceDistill.ts',
     ]);
   });
 
@@ -223,10 +224,8 @@ describe('MV3 service-worker discipline', () => {
     'src/agentGate.ts',
     'src/providerClient.ts',
     'src/navigateTool.ts',
-    'src/mode.ts',
-    'src/standaloneDrain.ts',
-    'src/standalone.ts',
     'src/migrate.ts',
+    'src/pairedTraceDistill.ts',
     // Web-agent action engine (CDP). Snapshot ids use crypto.randomUUID, not a
     // counter, precisely so this list stays satisfiable — see actEngine.ts.
     'src/cdp.ts',
@@ -236,25 +235,23 @@ describe('MV3 service-worker discipline', () => {
     'src/actTools.ts',
     'src/actRun.ts',
     'src/cursorScript.ts',
+    'src/attentionScript.ts',
     'src/snapshotScript.ts',
     // Record-and-automate (traceCapture.ts has the documented appendChain and is
     // asserted separately below).
-    'src/standaloneTraceDistill.ts',
   ])('%s declares no mutable module-level state', (rel) => {
     expect(topLevelBindings(FILES.find((f) => f.rel === rel)!.text)).toEqual([]);
   });
 
-  it('permits exactly four documented module-level variables', () => {
-    // connection.ts: the in-flight probe promise. brainStore.ts, actStore.ts,
-    // traceCapture.ts: their mutation/append serialization chains. All four are
-    // harmless to lose on worker death (death means nothing is in flight) and
-    // each must keep its rationale inline.
+  it('permits exactly three documented module-level variables', () => {
+    // connection.ts: the in-flight probe promise. actStore.ts, traceCapture.ts:
+    // their mutation/append serialization chains. All three are harmless to
+    // lose on worker death (death means nothing is in flight) and each must
+    // keep its rationale inline. (brainStore.ts's mutateChain — the standalone
+    // brain's write path — was removed with standalone graph storage.)
     const conn = FILES.find((f) => f.rel === 'src/connection.ts')!;
     expect(topLevelBindings(conn.text)).toEqual(['inFlightProbe']);
     expect(conn.text).toMatch(/harmless/i); // the rationale must stay next to it
-    const store = FILES.find((f) => f.rel === 'src/brainStore.ts')!;
-    expect(topLevelBindings(store.text)).toEqual(['mutateChain']);
-    expect(store.text).toMatch(/harmless/i);
     const actStore = FILES.find((f) => f.rel === 'src/actStore.ts')!;
     expect(topLevelBindings(actStore.text)).toEqual(['mutateChain']);
     expect(actStore.text).toMatch(/harmless/i);

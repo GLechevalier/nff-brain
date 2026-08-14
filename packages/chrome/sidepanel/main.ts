@@ -1,11 +1,13 @@
-// The consolidated side panel: ONE UI home with six subtabs —
-// Setup · Agent · MCP · Brain · Graph · Settings. A side panel does NOT
-// consume the active tab's debugger slot (unlike DevTools), so the CDP web
-// agent can attach to the very page the user is looking at. It is also the
-// toolbar icon's default click target now (chrome.sidePanel.setPanelBehavior
-// in src/sw.ts) — there is no more separate toolbar popup, so Setup carries
-// everything that surface used to own: pairing, capture, the allowed-domains
-// list, recorders, and record-a-task.
+// The consolidated side panel: ONE UI home with five subtabs —
+// Settings · Agent · MCP · Brain · Graph (the Settings tab is still 'setup'
+// in ids/JS identifiers below; only the visible label changed). A side panel
+// does NOT consume the active tab's debugger slot (unlike DevTools), so the
+// CDP web agent can attach to the very page the user is looking at. It is
+// also the toolbar icon's default click target now
+// (chrome.sidePanel.setPanelBehavior in src/sw.ts) — there is no more
+// separate toolbar popup or options page, so Settings carries everything
+// those surfaces used to own: pairing, capture, the allowed-domains list,
+// recorders, record-a-task, and the BYOK fallback key.
 //
 // This document is a thin client: every message rides chrome.runtime to the
 // service worker, and the pairing token / provider key never enter this realm.
@@ -94,7 +96,7 @@ const PENDING_TICK_MS = 2000;
 let currentTab: SidePanelTab = 'setup';
 let latestNodes: NodesResponse | null = null;
 
-// Setup tab
+// Settings tab
 let latestState: PublicState | null = null;
 let currentHost: string | null = null;
 
@@ -166,26 +168,29 @@ async function resolveCurrentHost(): Promise<string | null> {
 
 async function refreshNodes(): Promise<void> {
   const reply = await send({ type: 'getNodes' });
-  if (reply.type !== 'nodes') {
-    paintHeader(latestNodes, false);
-    return;
-  }
+  if (reply.type !== 'nodes') return;
   latestNodes = reply.data;
-  paintHeader(latestNodes, true);
 }
 
 /**
  * One getState fans out to every state-driven surface: the Brain adapter
- * toggle, the standalone-mode gating, and the Settings tab. Kept a single read
- * so a pair/unpair (or a key save elsewhere) reconciles the whole panel at
- * once — getState is a sub-ms local read.
+ * toggle, the unpaired-gating, the Settings tab's fallback-key section, and
+ * (via paintHeader) the global connection banner — kept here rather than in
+ * refreshNodes() because
+ * only getState carries the real ConnectionPhase; refreshNodes only ever had
+ * a success/failure boolean, which can't tell "disconnected" apart from
+ * "workspace_mismatch" (a materially different situation — the brain IS
+ * reachable, it's just paired to a different project). Single read so a
+ * pair/unpair (or a key save elsewhere) reconciles the whole panel at once —
+ * getState is a sub-ms local read.
  */
 async function refreshState(): Promise<void> {
   const reply = await send({ type: 'getState' });
   if (reply.type !== 'state') return;
   latestState = reply.state;
+  paintHeader(latestNodes, reply.state.phase);
   paintAdapter(reply.state);
-  paintStandaloneMode(reply.state.phase === 'standalone');
+  paintUnpairedGate(reply.state.phase !== 'connected');
   paintSettings(reply.state);
   paintSetup(reply.state, {
     currentHost,
@@ -194,7 +199,7 @@ async function refreshState(): Promise<void> {
   });
 }
 
-/** Setup tab's own dispatch: sends, repaints Setup on a state reply, and
+/** Settings tab's own dispatch: sends, repaints Setup on a state reply, and
  *  surfaces an error into the given field — same contract the old popup's
  *  dispatch() had. */
 async function dispatchSetup(msg: PopupToSw, errorField?: string): Promise<boolean> {
@@ -216,25 +221,26 @@ async function dispatchSetup(msg: PopupToSw, errorField?: string): Promise<boole
 }
 
 /**
- * Standalone mode: Plan/Auto and the MCP tab are intrinsically server-backed
+ * The brain graph always lives on a paired `nff-brain serve` now — there is
+ * no local fallback. Plan/Auto and the MCP tab are intrinsically server-backed
  * (web-agent state and MCP registry live in nff-brain serve), so they hide
- * rather than error. Agent/Brain(Manual)/Graph/Settings stay usable off the
- * local brain + BYOK key.
+ * rather than error while not connected. Manual-mode chat still answers a
+ * plain "navigate to X" through the BYOK tool-use loop even unpaired (that's
+ * LLM reasoning, not brain data), so it stays reachable.
  */
-function paintStandaloneMode(standalone: boolean): void {
-  $('sp-tab-mcp').classList.toggle('hidden', standalone);
-  $('mode-plan').classList.toggle('hidden', standalone);
-  $('mode-auto').classList.toggle('hidden', standalone);
-  $('adapter-row').classList.toggle('hidden', standalone);
-  // Plan/Auto are paired-only; standalone keeps Manual (chat + navigate-intent).
-  if (standalone && mode !== 'manual') setMode('manual');
-  if (standalone && currentTab === 'mcp') {
+function paintUnpairedGate(gated: boolean): void {
+  $('sp-tab-mcp').classList.toggle('hidden', gated);
+  $('mode-plan').classList.toggle('hidden', gated);
+  $('mode-auto').classList.toggle('hidden', gated);
+  $('adapter-row').classList.toggle('hidden', gated);
+  if (gated && mode !== 'manual') setMode('manual');
+  if (gated && currentTab === 'mcp') {
     currentTab = 'brain';
     switchTab('brain');
   }
 }
 
-// ── Setup tab — ported from the old toolbar popup ────────────────────────────
+// ── Settings tab — ported from the old toolbar popup ──────────────────────────
 
 /**
  * Enable runs HERE, not in the SW: chrome.permissions.request needs a user
@@ -309,7 +315,6 @@ function selectTab(tab: SidePanelTab): void {
   switchTab(tab);
   if (tab === 'mcp') void loadMcpTab();
   if (tab === 'graph') void loadGraph(true);
-  if (tab === 'settings') void refreshState();
   if (tab === 'setup') {
     void resolveCurrentHost().then((host) => {
       currentHost = host;
@@ -907,7 +912,7 @@ function wireGraphCanvas(): void {
   });
 }
 
-// ── Settings tab (BYOK provider) ──────────────────────────────────────────────
+// ── Settings tab's fallback-key section (BYOK provider) ───────────────────────
 
 function selectedProvider(): ProviderId {
   return ($('provider') as HTMLSelectElement).value as ProviderId;
@@ -968,13 +973,12 @@ async function testConnection(): Promise<void> {
 
 function wire(): void {
   // Tabs
-  $('sp-tab-setup').addEventListener('click', () => selectTab('setup'));
   $('sp-tab-brain').addEventListener('click', () => selectTab('brain'));
   $('sp-tab-mcp').addEventListener('click', () => selectTab('mcp'));
   $('sp-tab-graph').addEventListener('click', () => selectTab('graph'));
-  $('sp-tab-settings').addEventListener('click', () => selectTab('settings'));
+  $('sp-tab-setup').addEventListener('click', () => selectTab('setup'));
 
-  // Setup tab — pairing, capture, allowlist, recorders, record-a-task.
+  // Settings tab — pairing, capture, allowlist, recorders, record-a-task.
   $('setup-retry').addEventListener('click', () => void dispatchSetup({ type: 'probeNow' }));
   $('setup-connect').addEventListener('click', () => {
     const port = Number(($('setup-port') as HTMLInputElement).value || DEFAULT_PORT);
@@ -1032,7 +1036,7 @@ function wire(): void {
     }
   });
 
-  // Settings tab
+  // Settings tab — fallback AI key (#setup-byok)
   $('provider').addEventListener('change', () => fillModelDatalists(selectedProvider()));
   $('key-save').addEventListener('click', () => void saveKey());
   $('api-key').addEventListener('keydown', (e) => {
@@ -1053,7 +1057,7 @@ function wire(): void {
   $('test').addEventListener('click', () => void testConnection());
 
   // The SW pushes storage changes; reconcile the Agent run/workflows and the
-  // shared state (header/adapter/standalone/Setup/settings) when it does.
+  // shared state (header/adapter/Settings incl. its fallback-key section) when it does.
   chrome.storage.onChanged.addListener((_c, area) => {
     if (area !== 'local') return;
     void pollActStatus();
@@ -1085,7 +1089,7 @@ async function boot(): Promise<void> {
   void send({ type: 'probeNow' });
   currentHost = await resolveCurrentHost();
   await refreshNodes();
-  await refreshState(); // may re-gate the initial tab if standalone
+  await refreshState(); // may re-gate the initial tab (e.g. hide MCP while unpaired)
   void refreshTrace();
   await loadGoalOptionServers();
   await pollAgentStatus();

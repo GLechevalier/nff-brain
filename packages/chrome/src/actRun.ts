@@ -13,6 +13,7 @@ import { ACT_MAX_ACTIONS_CEILING, ACT_MAX_ACTIONS_DEFAULT } from './schema.js';
 import type { ActRunState } from './schema.js';
 import { isRestrictedUrl, originOf } from './actGate.js';
 import { detach, ensureAttached, hasDebuggerPermission } from './cdp.js';
+import { attentionConsumeStop, attentionHide, attentionShow, cursorHide, cursorShowIdle } from './actEngine.js';
 import {
   buildActTools,
   buildPairedActPrompt,
@@ -24,8 +25,7 @@ import {
 } from './actTools.js';
 import { appendTranscript, clearActRun, mutateActRun, startActRun } from './actStore.js';
 import { runChatWithTools } from './providerClient.js';
-import { postActStep } from './client.js';
-import { readLocalBrain } from './brainStore.js';
+import { getWorkflow, postActStep } from './client.js';
 import { getActHostAllow, getActRun, getPairing, setActHostAllow } from './storage.js';
 import type { WorkflowSpec } from '@nff-brain/core/workflow';
 
@@ -56,17 +56,24 @@ function clampMax(raw: number | undefined): number {
  * the loop starts immediately; otherwise the run parks in 'awaiting_grant' and
  * the panel prompts before any action. Reads/navigation never need a grant.
  */
-/** Load a workflow spec from the local brain by its node id. */
+/** Load a workflow spec from the paired brain by its node id. Recorded
+ *  workflows require pairing — there is no local fallback store. */
 async function loadWorkflow(workflowId: string): Promise<WorkflowSpec | null> {
-  const brain = await readLocalBrain();
-  const node = brain.nodes.find((n) => n.id === workflowId && n.origin === 'workflow');
-  return node?.workflow ?? null;
+  const pairing = await getPairing();
+  if (!pairing) return null;
+  try {
+    return (await getWorkflow(pairing.port, pairing.token, workflowId)).spec;
+  } catch {
+    return null;
+  }
 }
 
 export async function startActionRun(goal: string, tabId: number, maxActions?: number, workflowId?: string): Promise<StartResult> {
   if (!goal.trim()) return { ok: false, error: 'enter a goal first' };
   if (!(await hasDebuggerPermission())) return { ok: false, error: 'the debugger permission is missing — remove and reload the extension' };
-  if (workflowId && !(await loadWorkflow(workflowId))) return { ok: false, error: 'that workflow is no longer in your brain' };
+  if (workflowId && !(await loadWorkflow(workflowId))) {
+    return { ok: false, error: (await getPairing()) ? 'that workflow is no longer in your brain' : 'pair with `nff-brain serve` to replay saved workflows' };
+  }
 
   let url: string | undefined;
   try {
@@ -146,7 +153,11 @@ export async function stopActionRun(): Promise<void> {
 /** Detach the debugger and drop the run record. */
 export async function endActionRun(): Promise<void> {
   const run = await getActRun();
-  if (run) await detach(run.tabId);
+  if (run) {
+    await attentionHide(run.tabId);
+    await cursorHide(run.tabId);
+    await detach(run.tabId);
+  }
   await clearActRun();
 }
 
@@ -172,6 +183,8 @@ async function drive(runId: string, tabId: number): Promise<void> {
     });
     return;
   }
+  await attentionShow(tabId);
+  await cursorShowIdle(tabId);
 
   const ctx: ActContext = {
     tabId,
@@ -200,6 +213,8 @@ async function drive(runId: string, tabId: number): Promise<void> {
       r.phase = 'error';
       r.error = outcome.error;
     });
+    await attentionHide(ctx.tabId);
+    await cursorHide(ctx.tabId);
     await detach(ctx.tabId);
     return;
   }
@@ -208,13 +223,23 @@ async function drive(runId: string, tabId: number): Promise<void> {
   await mutateActRun((r) => {
     if (r.phase === 'running' || r.phase === 'stopping') r.phase = ctx.stopped || r.phase === 'stopping' ? 'stopped' : 'done';
   });
+  await attentionHide(ctx.tabId);
+  await cursorHide(ctx.tabId);
   await detach(ctx.tabId);
 }
 
 type LoopOutcome = { ok: true; answer: string } | { ok: false; error: string };
 
-/** Between-turns checkpoint shared by both loops: honor Stop and the action budget. */
+/**
+ * Between-turns checkpoint shared by both loops: honor Stop (from the panel's
+ * storage-based flag, OR the page's in-page Stop pill) and the action budget.
+ */
 async function keepGoing(ctx: ActContext, runId: string): Promise<boolean> {
+  if (await attentionConsumeStop(ctx.tabId)) {
+    await stopActionRun();
+    ctx.stopped = true;
+    return false;
+  }
   const cur = await getActRun();
   if (!cur || cur.id !== runId || cur.phase === 'stopping' || cur.phase === 'stopped') {
     ctx.stopped = true;

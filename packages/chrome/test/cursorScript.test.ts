@@ -59,6 +59,7 @@ class FakeElement {
 class FakeDocument {
   documentElement = new FakeElement('html');
   body = new FakeElement('body');
+  defaultView: { innerWidth: number } | null = { innerWidth: 1000 };
   createElement(tag: string) {
     return new FakeElement(tag);
   }
@@ -104,6 +105,25 @@ describe('createCursorController (DOM behavior)', () => {
     const cursor = doc.getElementById('nff-brain-agent-cursor')!.shadowRoot!.getElementById('cursor')!;
     // DOT is 16 → offset by 8 so the dot's center lands on 100,200.
     expect(cursor.style.transform).toBe('translate3d(92px,192px,0)');
+  });
+
+  it('showIdle() shows and pulses the dot at a top-right anchor', () => {
+    const doc = new FakeDocument();
+    createCursorController(doc as unknown as Document).showIdle();
+    const cursor = doc.getElementById('nff-brain-agent-cursor')!.shadowRoot!.getElementById('cursor')!;
+    expect(cursor.classList.contains('visible')).toBe(true);
+    expect(cursor.classList.contains('idle')).toBe(true);
+    // innerWidth 1000, IDLE_MARGIN 32, DOT 16 → x = 1000-32-8=960, y = 32-8=24.
+    expect(cursor.style.transform).toBe('translate3d(960px,24px,0)');
+  });
+
+  it('moveTo() after showIdle() clears the idle (breathing) class', () => {
+    const doc = new FakeDocument();
+    const c = createCursorController(doc as unknown as Document);
+    c.showIdle();
+    c.moveTo(100, 200);
+    const cursor = doc.getElementById('nff-brain-agent-cursor')!.shadowRoot!.getElementById('cursor')!;
+    expect(cursor.classList.contains('idle')).toBe(false);
   });
 });
 

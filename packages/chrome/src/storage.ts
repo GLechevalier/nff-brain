@@ -149,7 +149,7 @@ export async function setAgentTab(ref: AgentTabRef | null): Promise<void> {
   await chrome.storage.local.set({ [KEYS.agentTab]: ref });
 }
 
-// ── standalone mode ─────────────────────────────────────────────────────────
+// ── BYOK provider settings (LLM reasoning only — never a graph store) ───────
 
 export function getProviderSettings(): Promise<ProviderSettings | null> {
   return raw<ProviderSettings | null>(
@@ -164,6 +164,11 @@ export function getProviderSettings(): Promise<ProviderSettings | null> {
 export async function setProviderSettings(p: ProviderSettings | null): Promise<void> {
   await chrome.storage.local.set({ [KEYS.provider]: p });
 }
+
+// ── legacy, migration-only ───────────────────────────────────────────────────
+// Reads/writes a pre-upgrade user's leftover local brain — see KEYS' and
+// schema.ts's comments. The ONLY caller is migrate.ts's migrateIfNeeded();
+// nothing else may read or write these again.
 
 export function getBrain(): Promise<StandaloneBrain | null> {
   return raw<StandaloneBrain | null>(
@@ -185,28 +190,12 @@ export async function setClipQueue(queue: StandaloneClip[]): Promise<void> {
   await chrome.storage.local.set({ [KEYS.clipQueue]: queue });
 }
 
-export function getClipSeen(): Promise<string[]> {
-  return raw<string[]>(KEYS.clipSeen, [], (v) => Array.isArray(v));
-}
-
 export async function setClipSeen(ids: string[]): Promise<void> {
   await chrome.storage.local.set({ [KEYS.clipSeen]: ids });
 }
 
-export function getDrainState(): Promise<DrainState> {
-  return raw<DrainState>(KEYS.drain, DEFAULT_DRAIN, (v) => isObj(v) && typeof v.nextDrainAtMs === 'number');
-}
-
 export async function setDrainState(state: DrainState): Promise<void> {
   await chrome.storage.local.set({ [KEYS.drain]: state });
-}
-
-export function getMigrationBackup(): Promise<MigrationBackup | null> {
-  return raw<MigrationBackup | null>(
-    KEYS.migrationBackup,
-    null,
-    (v) => v === null || (isObj(v) && isObj(v.brain) && typeof v.migratedAt === 'string'),
-  );
 }
 
 export async function setMigrationBackup(backup: MigrationBackup | null): Promise<void> {
@@ -259,27 +248,6 @@ export function getTracePending(): Promise<TracePending | null> {
 
 export async function setTracePending(rec: TracePending | null): Promise<void> {
   await chrome.storage.local.set({ [KEYS.tracePending]: rec });
-}
-
-/**
- * The standalone drain's commit: ONE multi-key set, so a worker kill either
- * loses the whole drain (clips redeliver — at-least-once, deduped by the seen
- * ring) or lands it fully consistent. Never split this into separate sets.
- */
-export async function commitDrain(w: {
-  brain: StandaloneBrain;
-  queue: StandaloneClip[];
-  seen: string[];
-  activity: ActivityRecord[];
-  drain: DrainState;
-}): Promise<void> {
-  await chrome.storage.local.set({
-    [KEYS.brain]: w.brain,
-    [KEYS.clipQueue]: w.queue,
-    [KEYS.clipSeen]: w.seen,
-    [KEYS.activity]: w.activity,
-    [KEYS.drain]: w.drain,
-  });
 }
 
 export async function getState(): Promise<StoredState> {

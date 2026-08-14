@@ -68,6 +68,27 @@ const workflows: Handler = (_req, res, ctx) => {
   sendJson(res, 200, { ok: true, items }, ctx.cors);
 };
 
+// ── GET /v1/workflow — ONE workflow's full replayable spec ───────────────────
+
+const WORKFLOW_ID_MAX = 80;
+
+/** The web agent's workflow-replay path (actRun.ts's loadWorkflow) needs the
+ *  full WorkflowSpec (steps included), unlike /v1/workflows' summary list. */
+const workflow: Handler = (req, res, ctx) => {
+  const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+  const id = (url.searchParams.get('id') ?? '').slice(0, WORKFLOW_ID_MAX);
+  if (!id) {
+    sendError(res, 400, 'bad_request', 'a workflow id is required', ctx.cors);
+    return;
+  }
+  const node = ctx.state.mergedBrain().nodes.find((n) => n.id === id && n.origin === 'workflow' && n.workflow);
+  if (!node) {
+    sendError(res, 404, 'not_found', 'no such workflow', ctx.cors);
+    return;
+  }
+  sendJson(res, 200, { ok: true, id: node.id, title: node.title, spec: node.workflow }, ctx.cors);
+};
+
 // ── POST /v1/trace ───────────────────────────────────────────────────────────
 
 export interface TraceRouteDeps {
@@ -140,5 +161,6 @@ export function makeTraceHandler(deps: TraceRouteDeps = {}): Handler {
 
 export const TRACE_ROUTES: Record<string, Route> = {
   '/v1/workflows': { method: 'GET', auth: 'client', origin: 'paired', handler: workflows },
+  '/v1/workflow': { method: 'GET', auth: 'client', origin: 'paired', handler: workflow },
   '/v1/trace': { method: 'POST', auth: 'client', origin: 'paired', handler: makeTraceHandler() },
 };
