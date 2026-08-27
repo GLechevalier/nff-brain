@@ -67,8 +67,12 @@ ingest secret in Settings (which also asks Chrome for permission to reach
 `admin.nanoforgeflow.com`), then each time **you yourself** click Send on a
 LinkedIn connection invitation — and only when the LinkedIn recorder is also
 enabled — the extension sends the invitee's name, their profile URL when the
-page shows one, and the invite note you wrote to your own nff-admin CRM at
-`admin.nanoforgeflow.com`, so the person appears as a contact there. Nothing
+page shows one, the invite note you wrote, and the profile top card you were
+looking at when you clicked send (their headline, and location when shown) to
+your own nff-admin CRM at `admin.nanoforgeflow.com`, so the person appears as
+a contact there with their role and company. This reads only the page you
+were viewing at the moment of your own action — never profiles you did not
+visit, and never in the background. Nothing
 else is ever sent to that host. The secret is stored only in local browser
 storage, never displayed back, and removed by **Forget secret** (which also
 releases the site permission) or by uninstalling.

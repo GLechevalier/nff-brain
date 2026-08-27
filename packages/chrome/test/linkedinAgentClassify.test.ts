@@ -32,17 +32,30 @@ describe('nameFromConnectLabel', () => {
 describe('parseCardText', () => {
   it('splits a "Role at Company" headline', () => {
     const r = parseCardText('Ada Lovelace', 'Robotics Engineer at Acme Robotics');
-    expect(r).toEqual({ name: 'Ada Lovelace', headline: 'Robotics Engineer at Acme Robotics', company: 'Acme Robotics' });
+    expect(r).toEqual({
+      name: 'Ada Lovelace',
+      headline: 'Robotics Engineer at Acme Robotics',
+      role: 'Robotics Engineer',
+      company: 'Acme Robotics',
+    });
   });
 
   it('splits a "Role @ Company" headline', () => {
     const r = parseCardText('Ada Lovelace', 'Robotics Engineer @ Acme Robotics');
     expect(r.company).toBe('Acme Robotics');
+    expect(r.role).toBe('Robotics Engineer');
   });
 
-  it('omits company rather than guessing when the shape does not match', () => {
+  it('splits a French "Role chez Company" headline', () => {
+    const r = parseCardText('Ada Lovelace', 'Ingénieure robotique chez Acme Robotics');
+    expect(r.company).toBe('Acme Robotics');
+    expect(r.role).toBe('Ingénieure robotique');
+  });
+
+  it('omits company rather than guessing when the shape does not match; role falls back to the headline', () => {
     const r = parseCardText('Ada Lovelace', 'Building robots since 2019');
     expect(r.company).toBeUndefined();
+    expect(r.role).toBe('Building robots since 2019');
   });
 
   it('clamps overlong fields', () => {

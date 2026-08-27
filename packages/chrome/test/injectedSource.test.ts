@@ -64,6 +64,9 @@ type Builders = {
   buildFingerprintSource(): string;
   buildCursorInstallerSource(): string;
   buildAttentionInstallerSource(): string;
+  // Not a source builder: executeScript({func}) serializes THIS function at
+  // runtime — the program under test is its minified .toString().
+  scrapeProfileTopCard(): unknown;
 };
 
 // Mirrors build.mjs's `common` — same resolution conditions and syntax floor,
@@ -75,6 +78,7 @@ async function loadMinifiedBuilders(): Promise<Builders> {
         "export { buildSnapshotSource, buildResolveSource, buildFingerprintSource } from './src/snapshotScript.js';",
         "export { buildCursorInstallerSource } from './src/cursorScript.js';",
         "export { buildAttentionInstallerSource } from './src/attentionScript.js';",
+        "export { scrapeProfileTopCard } from './src/profileScrapeScript.js';",
       ].join('\n'),
       resolveDir: ROOT,
       sourcefile: 'injectedSource.entry.ts',
@@ -242,6 +246,9 @@ describe('injected CDP programs (minified, as shipped)', () => {
       ['buildFingerprintSource', b.buildFingerprintSource()],
       ['buildCursorInstallerSource', b.buildCursorInstallerSource()],
       ['buildAttentionInstallerSource', b.buildAttentionInstallerSource()],
+      // chrome.scripting.executeScript({func}) reflects the function source the
+      // same way the CDP builders do — same leak class, same check.
+      ['scrapeProfileTopCard (executeScript func)', `(${String(b.scrapeProfileTopCard)})()`],
     ];
     for (const [name, src] of programs) {
       expect(

@@ -12,7 +12,9 @@ import { currentPhase } from './connection.js';
 import { maybeSyncCrmContact } from './crmSync.js';
 import { isAllowed, shouldCapture } from './gate.js';
 import { classifyInviteRequest, dayBucket, nameFromTabTitle } from './inviteNet.js';
+import { scrapeProfileTopCard, type ProfileTopCard } from './profileScrapeScript.js';
 import { canonicalProfileUrl } from '../content/linkedinClassify.js';
+import { parseCardText } from '../content/linkedinAgentClassify.js';
 import { resolveBrainMode } from './mode.js';
 import { enqueueStandaloneClip } from './standaloneDrain.js';
 import { ADAPTERS, adapterById } from './recorderRegistry.js';
@@ -228,7 +230,25 @@ export async function onLinkedinInviteRequest(details: {
   if (!linkedin) return; // not a profile page — no honest identity, never guess
   const name = nameFromTabTitle(tab.title ?? '');
   if (!name) return;
-  await deliverRecorderClip(url, {
+
+  // Best-effort top-card scrape of the page the user is looking at (headline,
+  // location) — see profileScrapeScript.ts for the self-containment rule.
+  // Any failure degrades to name+linkedin; enrichment is never load-bearing.
+  let scraped: ProfileTopCard = { name: '', headline: '', location: '' };
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: details.tabId },
+      func: scrapeProfileTopCard,
+    });
+    if (res?.result) scraped = res.result as ProfileTopCard;
+  } catch {
+    // no scripting access / tab gone — enrichment simply absent
+  }
+  const parsed = parseCardText(scraped.name || name, scraped.headline);
+
+  // Scraped page text is UNTRUSTED — route the whole event through the same
+  // validator the content-script sink uses (clamps keys/values, drops junk).
+  const msg = validateRecorderEvent({
     type: 'recorderEvent',
     adapter: 'linkedin',
     action: 'linkedin.invite_sent',
@@ -237,8 +257,17 @@ export async function onLinkedinInviteRequest(details: {
     key: `linkedin.invite_sent:${name}:${dayBucket()}`,
     at: new Date().toISOString(),
     title: `Invited ${name} to connect`,
-    fields: { name, linkedin },
+    fields: {
+      name,
+      linkedin,
+      ...(parsed.headline && { headline: parsed.headline }),
+      ...(parsed.company && { company: parsed.company }),
+      ...(parsed.headline && parsed.role !== parsed.headline && { role: parsed.role }),
+      ...(scraped.location && { location: scraped.location }),
+    },
   });
+  if (!msg) return;
+  await deliverRecorderClip(url, msg);
 }
 
 /** The content-script event sink — the second registered shouldCapture caller (via deliverRecorderClip). */

@@ -26,15 +26,20 @@ export function nameFromConnectLabel(label: string, fallback: string): string {
 }
 
 /**
- * Best-effort split of a card's raw text into name/headline/company.
- * LinkedIn headlines are commonly "<Role> at <Company>" or "<Role> @
- * <Company>" — when that shape isn't present, company is simply omitted
- * rather than guessed.
+ * Best-effort split of a card's raw text into name/headline/company/role.
+ * LinkedIn headlines are commonly "<Role> at <Company>" / "<Role> @
+ * <Company>" / "<Role> chez <Company>" (fr) — when that shape isn't present,
+ * company is simply omitted rather than guessed and role is the whole
+ * headline.
  */
-export function parseCardText(nameText: string, subtitleText: string): { name: string; headline: string; company?: string } {
+export function parseCardText(
+  nameText: string,
+  subtitleText: string,
+): { name: string; headline: string; role: string; company?: string } {
   const name = nameText.trim().replace(/\s+/g, ' ').slice(0, NAME_MAX);
   const headline = subtitleText.trim().replace(/\s+/g, ' ').slice(0, HEADLINE_MAX);
-  const m = /^(.*?)\s+(?:at|@)\s+(.+)$/i.exec(headline);
+  const m = /^(.*?)\s+(?:at|@|chez)\s+(.+)$/i.exec(headline);
   const company = m?.[2]?.trim().slice(0, COMPANY_MAX);
-  return company ? { name, headline, company } : { name, headline };
+  const role = (m?.[1]?.trim() || headline).slice(0, HEADLINE_MAX);
+  return company ? { name, headline, role, company } : { name, headline, role };
 }

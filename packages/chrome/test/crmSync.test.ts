@@ -81,6 +81,46 @@ describe('maybeSyncCrmContact', () => {
     expect(row.delivery).toBe('delivered');
   });
 
+  it('sends profile enrichment: role/company from the parsed headline, snapshot note with location', async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({ id: 'c1', created: true }) }));
+    vi.stubGlobal('fetch', fetchSpy);
+    getCrmSync.mockResolvedValue(cfg);
+
+    await maybeSyncCrmContact(
+      invite({
+        name: 'Ada Lovelace',
+        linkedin: 'https://www.linkedin.com/in/ada',
+        headline: 'Robotics Engineer at Acme Robotics',
+        role: 'Robotics Engineer',
+        company: 'Acme Robotics',
+        location: 'Paris, Île-de-France, France',
+      }),
+    );
+
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      name: 'Ada Lovelace',
+      linkedin: 'https://www.linkedin.com/in/ada',
+      role: 'Robotics Engineer',
+      company_name: 'Acme Robotics',
+      how_we_met: 'LinkedIn connection request',
+      note_body: 'Robotics Engineer at Acme Robotics · Paris, Île-de-France, France',
+      note_type: 'note',
+      note_date: '2026-08-27T10:00:00.000Z',
+    });
+  });
+
+  it('an explicit invite note wins the note slot over the profile snapshot', async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({ id: 'c1', created: true }) }));
+    vi.stubGlobal('fetch', fetchSpy);
+    getCrmSync.mockResolvedValue(cfg);
+    await maybeSyncCrmContact(invite({ name: 'Ada', note: 'hello!', headline: 'Engineer', location: 'Paris' }));
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body.note_body).toBe('hello!');
+    expect(body.role).toBe('Engineer'); // headline fallback when no role field
+  });
+
   it('reports an existing contact as already tracking', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ id: 'c1', created: false }) })));
     getCrmSync.mockResolvedValue(cfg);
