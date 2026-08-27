@@ -56,6 +56,7 @@ const BROWSER_GLOBALS = new Set([
   'clearTimeout',
   'Element',
   'Date',
+  'decodeURIComponent', // scrapeProfileTopCard decodes the /in/<slug> from the URL
 ]);
 
 type Builders = {

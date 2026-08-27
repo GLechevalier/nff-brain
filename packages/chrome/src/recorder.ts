@@ -241,8 +241,10 @@ export async function onLinkedinInviteRequest(details: {
       func: scrapeProfileTopCard,
     });
     if (res?.result) scraped = res.result as ProfileTopCard;
-  } catch {
+    console.debug('[nff-brain] profile scrape', JSON.stringify(scraped).slice(0, 300));
+  } catch (err) {
     // no scripting access / tab gone — enrichment simply absent
+    console.debug('[nff-brain] profile scrape failed', err instanceof Error ? err.message : String(err));
   }
   const parsed = parseCardText(scraped.name || name, scraped.headline);
 
