@@ -64,6 +64,8 @@ export const KEYS = {
   // FileSystemDirectoryHandle itself is structured-cloneable but not JSON, so
   // it lives in IndexedDB (src/fsHandles.ts — the one IDB module), never here.
   codeProject: 'nb.codeProject',
+  // CRM sync: LinkedIn invite → nff-admin contact ingest (src/crmSync.ts).
+  crmSync: 'nb.crmSync',
 } as const;
 
 // ── pairing ──────────────────────────────────────────────────────────────────
@@ -225,6 +227,19 @@ export interface ProviderSettings {
   models: ModelSlots;
   addedAt: string;
   lastTest: ProviderTestResult | null;
+}
+
+// ── CRM sync (nff-admin ingest) ─────────────────────────────────────────────
+
+export interface CrmSyncSettings {
+  enabled: boolean;
+  /**
+   * The shared ingest secret. Same posture as ProviderSettings.apiKey: it
+   * NEVER crosses the panel channel outward — not even a last-4 hint. Inbound
+   * once, via the setCrmSyncSecret message; PublicState carries booleans only.
+   */
+  secret: string;
+  addedAt: string;
 }
 
 // ── the local brain (BYOK retrieval fuel) ───────────────────────────────────

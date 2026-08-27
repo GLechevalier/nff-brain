@@ -78,12 +78,15 @@ describe('manifest.json', () => {
   it('keeps every host permission OPTIONAL, requested only on demand', () => {
     // Loopback: the escape hatch if Chrome's local-network rules tighten.
     // github/linkedin: one per recorder adapter, requested only when the user
-    // flips that recorder on and RELEASED again on disable. Declared, never
-    // requested at install, so the install dialog stays warning-free.
+    // flips that recorder on and RELEASED again on disable. admin.nanoforgeflow.com:
+    // CRM sync, requested only when the user saves an ingest secret and released
+    // on "Forget secret". Declared, never requested at install, so the install
+    // dialog stays warning-free.
     expect(manifest.optional_host_permissions).toEqual([
       'http://127.0.0.1/*',
       'https://github.com/*',
       'https://www.linkedin.com/*',
+      'https://admin.nanoforgeflow.com/*',
     ]);
   });
 
@@ -104,12 +107,12 @@ describe('manifest.json', () => {
     expect(csp).not.toMatch(/unsafe-inline/);
     expect(csp).not.toMatch(/localhost/); // dual-stack; can resolve to ::1
     // Pinned as the FULL string now that it is a compound claim: Chrome
-    // enforces that requests reach loopback or api.anthropic.com and nowhere
-    // else. Adding a provider host is a deliberate act with a privacy-policy
-    // edit attached (store/privacy-policy.md and bundlePurity's
-    // PROVIDER_API_URLS must move in the same commit).
+    // enforces that requests reach loopback, api.anthropic.com or the CRM
+    // ingest host and nowhere else. Adding a host is a deliberate act with a
+    // privacy-policy edit attached (store/privacy-policy.md and bundlePurity's
+    // PROVIDER_API_URLS/CRM_INGEST_URLS must move in the same commit).
     expect(csp).toBe(
-      "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:* https://api.anthropic.com",
+      "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:* https://api.anthropic.com https://admin.nanoforgeflow.com",
     );
   });
 

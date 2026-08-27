@@ -68,6 +68,7 @@ import {
   getBrain,
   getBrainModePref,
   getCapture,
+  getCrmSync,
   getHealth,
   getPairing,
   getProviderSettings,
@@ -75,8 +76,10 @@ import {
   setAllowlist,
   setBrainModePref,
   setCapture,
+  setCrmSync,
   setProviderSettings,
 } from './storage.js';
+import { CRM_ORIGIN_PATTERN } from './protocol.js';
 import { deriveBrainMode, resolveBrainMode } from './mode.js';
 import { byokChatAsk } from './byokChat.js';
 import { listLocalWorkflows, syncWorkflowsFromServer } from './workflowStore.js';
@@ -96,7 +99,7 @@ import { PROVIDERS } from '@nff-brain/core/provider';
 import type { PopupToSw, PublicState, SwToPopup } from './protocol.js';
 
 async function publicState(): Promise<PublicState> {
-  const [pairing, health, capture, allowlist, activity, provider, legacyBrain, brainModePref] = await Promise.all([
+  const [pairing, health, capture, allowlist, activity, provider, legacyBrain, brainModePref, crmSync] = await Promise.all([
     getPairing(),
     getHealth(),
     getCapture(),
@@ -108,6 +111,7 @@ async function publicState(): Promise<PublicState> {
     // local brain so migrateIfNeeded() (migrate.ts) has something to finish.
     getBrain(),
     getBrainModePref(),
+    getCrmSync(),
   ]);
   const { nextProbeAtMs, ...rest } = health;
   void nextProbeAtMs; // internal scheduling; the UI has no use for it
@@ -125,6 +129,8 @@ async function publicState(): Promise<PublicState> {
     navigateHostAllow: await navigateHostAllowPublicState(),
     providerConfigured: provider !== null,
     provider: provider?.provider ?? null,
+    crmSyncConfigured: crmSync !== null,
+    crmSyncEnabled: crmSync?.enabled === true,
     providerModels: provider?.models ?? null,
     providerLastTest: provider?.lastTest ?? null,
     brainMode: deriveBrainMode(brainModePref, pairing !== null, provider !== null),
@@ -405,6 +411,33 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'testProvider':
       return { type: 'providerTest', result: await testProviderKey() };
+
+    // CRM sync (Settings). setCrmSyncSecret is the ONE inbound path for the
+    // ingest secret; no reply ever carries it back out.
+    case 'setCrmSyncSecret': {
+      const secret = msg.secret.trim();
+      if (!secret) return { type: 'error', message: 'an ingest secret is required' };
+      await setCrmSync({ enabled: true, secret, addedAt: new Date().toISOString() });
+      break;
+    }
+
+    case 'setCrmSyncEnabled': {
+      const existing = await getCrmSync();
+      if (!existing) return { type: 'error', message: 'save the ingest secret first' };
+      await setCrmSync({ ...existing, enabled: msg.enabled });
+      break;
+    }
+
+    case 'clearCrmSync':
+      await setCrmSync(null);
+      // Best-effort: the grant is useless without a secret. Mirrors recorder
+      // disable; failure is fine (the permission may already be gone).
+      try {
+        await chrome.permissions.remove({ origins: [CRM_ORIGIN_PATTERN] });
+      } catch {
+        // ignore
+      }
+      break;
 
     case 'setBrainMode':
       if (msg.mode !== 'paired' && msg.mode !== 'byok') return { type: 'error', message: 'unknown brain mode' };

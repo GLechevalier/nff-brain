@@ -27,6 +27,11 @@ import type { BrainEdge, BrainNode } from '@nff-brain/core/types';
 export const DEFAULT_PORT = 7373;
 export const PORT_PROBE_COUNT = 5;
 
+/** CRM sync host (optional_host_permissions + CSP connect-src). Lives here —
+ *  not in crmSync.ts — so the side panel can request the grant without
+ *  bundling the SW-side sync module. */
+export const CRM_ORIGIN_PATTERN = 'https://admin.nanoforgeflow.com/*';
+
 /** Always the literal loopback IP: `localhost` is dual-stack and can resolve to
  *  ::1, which the server deliberately does not bind. */
 export const HOST = '127.0.0.1';
@@ -666,6 +671,11 @@ export type PopupToSw =
   | { type: 'setProviderModels'; models: ModelSlots }
   | { type: 'clearProvider' }
   | { type: 'testProvider' }
+  // CRM sync (Settings). setCrmSyncSecret is the ONE message that carries the
+  // ingest secret inbound; nothing ever carries it back out.
+  | { type: 'setCrmSyncSecret'; secret: string }
+  | { type: 'setCrmSyncEnabled'; enabled: boolean }
+  | { type: 'clearCrmSync' }
   // Explicit brain-mode preference (Settings segmented control) — which
   // backend drives LLM work when both are configured. See mode.ts.
   | { type: 'setBrainMode'; mode: BrainModePref }
@@ -746,6 +756,9 @@ export interface PublicState {
   // not even a last-4 hint; same total-omission posture as the bearer token.
   providerConfigured: boolean;
   provider: ProviderId | null;
+  // CRM sync — booleans only, same total-omission posture as the secrets above.
+  crmSyncConfigured: boolean;
+  crmSyncEnabled: boolean;
   providerModels: ModelSlots | null;
   providerLastTest: ProviderTestResult | null;
   /** RESOLVED brain mode — which backend drives LLM work right now (mode.ts).

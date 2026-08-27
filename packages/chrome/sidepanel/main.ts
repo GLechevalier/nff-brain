@@ -23,7 +23,7 @@
 
 import { detectActionIntent, type ActionIntent } from '../src/actionIntent.js';
 import { detectPageActionIntent } from '../src/pageActionIntent.js';
-import { DEFAULT_PORT, PANEL_POLL_MS } from '../src/protocol.js';
+import { CRM_ORIGIN_PATTERN, DEFAULT_PORT, PANEL_POLL_MS } from '../src/protocol.js';
 import type {
   ChatTurn,
   GraphEdge,
@@ -298,6 +298,33 @@ async function toggleRecorder(id: string, enable: boolean): Promise<void> {
     return;
   }
   await dispatchSetup({ type: 'setRecorderEnabled', id, enabled: true }, 'setup-recorder-error');
+}
+
+/**
+ * Same gesture rule as toggleRecorder: chrome.permissions.request must run in
+ * this click handler. The secret is sent inbound once and the field cleared —
+ * it is never painted back (see paintCrmSync).
+ */
+async function saveCrmSecret(): Promise<void> {
+  const input = $('crm-sync-secret') as HTMLInputElement;
+  const secret = input.value.trim();
+  if (!secret) {
+    showFieldError('crm-sync-error', 'paste the ingest secret first');
+    return;
+  }
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ origins: [CRM_ORIGIN_PATTERN] });
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    showFieldError('crm-sync-error', 'Chrome permission for admin.nanoforgeflow.com was not granted — CRM sync stays off.');
+    return;
+  }
+  const ok = await dispatchSetup({ type: 'setCrmSyncSecret', secret }, 'crm-sync-error');
+  if (ok) input.value = '';
+  await refreshState();
 }
 
 function paintTrace(recording: boolean, eventCount: number, pending: { events: number; startUrl: string } | null): void {
@@ -1111,6 +1138,19 @@ function wire(): void {
     void dispatchSetup({ type: 'clearActivity', alsoRemoveNodes }).then(hideClearConfirm);
   });
   $('setup-trace-toggle').addEventListener('click', () => void toggleTrace());
+
+  // Settings tab — CRM sync (LinkedIn invites → nff-admin).
+  $('crm-sync-save').addEventListener('click', () => void saveCrmSecret());
+  $('crm-sync-secret').addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') void saveCrmSecret();
+  });
+  $('crm-sync-toggle').addEventListener('click', () => {
+    void dispatchSetup({ type: 'setCrmSyncEnabled', enabled: !(latestState?.crmSyncEnabled ?? false) }, 'crm-sync-error')
+      .then(() => refreshState());
+  });
+  $('crm-sync-clear').addEventListener('click', () => {
+    void dispatchSetup({ type: 'clearCrmSync' }, 'crm-sync-error').then(() => refreshState());
+  });
 
   // Brain tab — Claude-Code-style modes. The act Stop/Clear/grant controls drive
   // a REPLAYED workflow (record-and-automate), shown in the workflows section.

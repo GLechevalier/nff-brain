@@ -67,6 +67,15 @@ const NAMESPACE_URIS = new Set(['http://www.w3.org']);
  */
 const PROVIDER_API_URLS = new Set(['https://api.anthropic.com']);
 
+/**
+ * CRM sync ingest — the SECOND deliberate egress class (src/crmSync.ts).
+ * Secret-gated (nothing is sent until the user saves the ingest secret in
+ * Settings, which also requests the host permission), opt-in per event class
+ * (only linkedin.invite_sent, only through deliverRecorderClip's choke point),
+ * and CSP-enumerated. Same one-commit discipline as PROVIDER_API_URLS.
+ */
+const CRM_INGEST_URLS = new Set(['https://admin.nanoforgeflow.com']);
+
 /** Absolute URL literals with a concrete host. `http://${HOST}` is fine. */
 function offDeviceUrls(text: string): string[] {
   return [...text.matchAll(/https?:\/\/[A-Za-z0-9.-]+/g)]
@@ -76,7 +85,8 @@ function offDeviceUrls(text: string): string[] {
         !u.startsWith('http://127.0.0.1') &&
         !RECORDER_SITE_URLS.has(u) &&
         !NAMESPACE_URIS.has(u) &&
-        !PROVIDER_API_URLS.has(u),
+        !PROVIDER_API_URLS.has(u) &&
+        !CRM_INGEST_URLS.has(u),
     );
 }
 

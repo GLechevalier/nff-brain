@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classifyGithubAction } from '../content/githubClassify.js';
-import { inviteeFromText, isSendInviteLabel } from '../content/linkedinClassify.js';
+import { canonicalProfileUrl, inviteeFromText, isSendInviteLabel } from '../content/linkedinClassify.js';
 import {
   formatRecorderClip,
   pushRecorderSeen,
@@ -112,6 +112,19 @@ describe('linkedin classifier (pure)', () => {
     expect(inviteeFromText('Invite Ada Lovelace to connect')).toBe('Ada Lovelace');
     expect(inviteeFromText('Send invitation to Grace Hopper')).toBe('Grace Hopper');
     expect(inviteeFromText('Manage your network')).toBe('');
+  });
+
+  it('canonicalizes profile URLs and refuses everything else', () => {
+    expect(canonicalProfileUrl('https://www.linkedin.com/in/ada-lovelace/')).toBe(
+      'https://www.linkedin.com/in/ada-lovelace',
+    );
+    expect(canonicalProfileUrl('https://linkedin.com/in/ada?trk=x')).toBe('https://www.linkedin.com/in/ada');
+    expect(canonicalProfileUrl('https://www.linkedin.com/in/ada/details/experience/')).toBe(
+      'https://www.linkedin.com/in/ada',
+    );
+    expect(canonicalProfileUrl('https://www.linkedin.com/search/results/people/')).toBe('');
+    expect(canonicalProfileUrl('https://evil.example/in/ada')).toBe('');
+    expect(canonicalProfileUrl('not a url')).toBe('');
   });
 });
 

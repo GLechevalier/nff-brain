@@ -14,6 +14,17 @@ export function isSendInviteLabel(label: string): boolean {
   );
 }
 
+/**
+ * Canonical profile URL from an href/location, or '' when it is not a
+ * linkedin.com/in/ profile. String-prefix checks on purpose (no URL parsing):
+ * keeps this file out of bundlePurity's hostname-reader pin.
+ */
+export function canonicalProfileUrl(href: string): string {
+  const m = /^https:\/\/(?:www\.)?linkedin\.com\/in\/([^/?#]+)/i.exec(href.trim());
+  if (!m) return '';
+  return `https://www.linkedin.com/in/${m[1]}`;
+}
+
 /** Pull the invitee's name out of a modal heading or button label. */
 export function inviteeFromText(text: string): string {
   // "Invite Ada Lovelace to connect" · "Send invitation to Ada Lovelace"

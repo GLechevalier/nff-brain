@@ -28,9 +28,10 @@ Nothing is captured unless capture is switched **on** (it is off after install)
 By default, exclusively to `nff-brain serve`, a program **you** start on your
 own computer, reachable only at `127.0.0.1` (your machine's loopback address).
 The extension's Content Security Policy (`connect-src 'self'
-http://127.0.0.1:* https://api.anthropic.com`) restricts it to exactly two
-destinations — your own loopback server, and the one AI provider endpoint used
-by the optional bring-your-own-key mode below. This is enforced by Chrome
+http://127.0.0.1:* https://api.anthropic.com https://admin.nanoforgeflow.com`)
+restricts it to exactly three destinations — your own loopback server, the one
+AI provider endpoint used by the optional bring-your-own-key mode below, and
+the optional CRM sync endpoint below. This is enforced by Chrome
 itself, not merely promised, and verified by the extension's automated test
 suite. There are no analytics, no telemetry, no crash reporting, and no remote
 code.
@@ -58,6 +59,19 @@ When you save a key:
 
 If you later pair with a local server, the notes built in your browser are
 moved into your own local brain and standalone mode ends.
+
+## Optional: CRM sync (LinkedIn invites)
+
+Entirely optional and **off by default**. If you paste your own nff-admin
+ingest secret in Settings (which also asks Chrome for permission to reach
+`admin.nanoforgeflow.com`), then each time **you yourself** click Send on a
+LinkedIn connection invitation — and only when the LinkedIn recorder is also
+enabled — the extension sends the invitee's name, their profile URL when the
+page shows one, and the invite note you wrote to your own nff-admin CRM at
+`admin.nanoforgeflow.com`, so the person appears as a contact there. Nothing
+else is ever sent to that host. The secret is stored only in local browser
+storage, never displayed back, and removed by **Forget secret** (which also
+releases the site permission) or by uninstalling.
 
 ## What is stored locally in your browser
 

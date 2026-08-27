@@ -10,10 +10,10 @@
 // classifiers are pure functions so selector rot is a test failure, not a
 // mystery.
 
-import { inviteeFromText, isSendInviteLabel } from './linkedinClassify.js';
+import { canonicalProfileUrl, inviteeFromText, isSendInviteLabel } from './linkedinClassify.js';
 import { dayBucket, emit } from './runtime.js';
 
-function findModalContext(button: Element): { name: string; note: string } {
+function findModalContext(button: Element): { name: string; note: string; linkedin: string } {
   // The send button lives inside the invite dialog; the dialog heading names
   // the invitee and its textarea holds the note. Fall back to the profile
   // page's top-card h1 when the flow skips the modal.
@@ -28,7 +28,12 @@ function findModalContext(button: Element): { name: string; note: string } {
     name = document.querySelector('main h1')?.textContent?.trim().slice(0, 80) ?? '';
   }
   const note = dialog.querySelector('textarea')?.value.trim().slice(0, 280) ?? '';
-  return { name, note };
+  // Profile URL: a /in/ link inside the dialog, else the page itself when the
+  // invite came from a profile page. Search/My Network sends have neither —
+  // the field is honestly absent, never guessed.
+  const profileLink = dialog.querySelector<HTMLAnchorElement>('a[href*="/in/"]');
+  const linkedin = canonicalProfileUrl(profileLink?.href ?? '') || canonicalProfileUrl(location.href);
+  return { name, note, linkedin };
 }
 
 document.addEventListener(
@@ -41,7 +46,7 @@ document.addEventListener(
     const label = button.getAttribute('aria-label') ?? button.textContent ?? '';
     if (!isSendInviteLabel(label)) return;
 
-    const { name, note } = findModalContext(button);
+    const { name, note, linkedin } = findModalContext(button);
     if (!name) return; // no honest name → no event; never guess
 
     emit({
@@ -49,7 +54,7 @@ document.addEventListener(
       action: 'linkedin.invite_sent',
       key: `linkedin.invite_sent:${name}:${dayBucket()}`,
       title: `Invited ${name} to connect`,
-      fields: note ? { name, note } : { name },
+      fields: { name, ...(note && { note }), ...(linkedin && { linkedin }) },
     });
   },
   { capture: true },

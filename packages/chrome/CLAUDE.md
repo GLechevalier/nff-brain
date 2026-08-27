@@ -35,8 +35,9 @@ other one, never to a dead end.
   browser. The local brain is RETRIEVAL FUEL only — the Graph/MCP tabs stay
   server-backed and simply gate on the pairing's health, not on the mode.
 
-`connect-src` in the CSP is pinned to loopback + `api.anthropic.com` — the only
-two hosts the extension may ever reach.
+`connect-src` in the CSP is pinned to loopback + `api.anthropic.com` +
+`admin.nanoforgeflow.com` (the opt-in CRM sync, `src/crmSync.ts`) — the only
+three hosts the extension may ever reach.
 
 ---
 

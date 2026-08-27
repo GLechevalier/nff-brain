@@ -9,6 +9,7 @@ import { appendActivity, markDelivery } from './activity.js';
 import { flashCaptured, paintBadge } from './badge.js';
 import { HttpError, postClip } from './client.js';
 import { currentPhase } from './connection.js';
+import { maybeSyncCrmContact } from './crmSync.js';
 import { isAllowed, shouldCapture } from './gate.js';
 import { resolveBrainMode } from './mode.js';
 import { enqueueStandaloneClip } from './standaloneDrain.js';
@@ -145,6 +146,12 @@ export async function deliverRecorderClip(url: string, msg: RecorderEventMsg): P
   const ring = await getRecorderSeen();
   if (recorderSeenRecently(ring, msg.key, nowMs)) return;
   await setRecorderSeen(pushRecorderSeen(ring, msg.key, nowMs));
+
+  // CRM sync (LinkedIn invites → nff-admin). After the choke point and the
+  // ring so pause/allowlist and the per-day key govern it; before the mode
+  // fork so paired and BYOK sync identically. Never throws, no-op unless
+  // configured — see crmSync.ts.
+  await maybeSyncCrmContact(msg);
 
   const { text, title } = formatRecorderClip(msg);
   const pairing = await getPairing();

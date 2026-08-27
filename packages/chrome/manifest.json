@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "nff-brain",
-  "version": "0.1.0.64",
+  "version": "0.1.0.65",
   "description": "Local-first memory and a web agent that drives your browser. Reasons through a local nff-brain server (Claude Code) or directly with your own AI API key — no server or Claude Code required in Direct API mode.",
   "minimum_chrome_version": "116",
   "incognito": "not_allowed",
@@ -18,7 +18,8 @@
   "optional_host_permissions": [
     "http://127.0.0.1/*",
     "https://github.com/*",
-    "https://www.linkedin.com/*"
+    "https://www.linkedin.com/*",
+    "https://admin.nanoforgeflow.com/*"
   ],
   "side_panel": {
     "default_path": "sidepanel.html"
@@ -42,6 +43,6 @@
     "128": "icons/128.png"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:* https://api.anthropic.com"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:* https://api.anthropic.com https://admin.nanoforgeflow.com"
   }
 }

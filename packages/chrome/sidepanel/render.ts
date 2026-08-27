@@ -748,6 +748,25 @@ export function paintSettings(state: PublicState): void {
     ($('model-background') as HTMLInputElement).value = models.background;
     ($('model-chat') as HTMLInputElement).value = models.chat;
   }
+
+  paintCrmSync(state);
+}
+
+/** CRM sync block — booleans only; the secret input is NEVER painted. */
+function paintCrmSync(state: PublicState): void {
+  const status = $('crm-sync-status');
+  const toggle = $('crm-sync-toggle') as HTMLButtonElement;
+  const clear = $('crm-sync-clear') as HTMLButtonElement;
+  if (state.crmSyncConfigured) {
+    status.textContent = state.crmSyncEnabled ? 'On — invites sync to your CRM' : 'Off';
+    toggle.textContent = state.crmSyncEnabled ? 'Disable' : 'Enable';
+    toggle.classList.remove('hidden');
+    clear.classList.remove('hidden');
+  } else {
+    status.textContent = 'Not configured';
+    toggle.classList.add('hidden');
+    clear.classList.add('hidden');
+  }
 }
 
 // ── Settings tab (pairing/capture/allowlist/recorders/activity) — was

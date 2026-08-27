@@ -24,6 +24,7 @@ import type {
   Health,
   MigrationBackup,
   Pairing,
+  CrmSyncSettings,
   ProviderSettings,
   RecentClip,
   StandaloneBrain,
@@ -176,6 +177,20 @@ export function getProviderSettings(): Promise<ProviderSettings | null> {
 
 export async function setProviderSettings(p: ProviderSettings | null): Promise<void> {
   await chrome.storage.local.set({ [KEYS.provider]: p });
+}
+
+// ── CRM sync settings (nff-admin ingest — see src/crmSync.ts) ───────────────
+
+export function getCrmSync(): Promise<CrmSyncSettings | null> {
+  return raw<CrmSyncSettings | null>(
+    KEYS.crmSync,
+    null,
+    (v) => v === null || (isObj(v) && typeof v.enabled === 'boolean' && typeof v.secret === 'string'),
+  );
+}
+
+export async function setCrmSync(s: CrmSyncSettings | null): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.crmSync]: s });
 }
 
 // ── the local brain + clip pipeline (BYOK) ──────────────────────────────────
