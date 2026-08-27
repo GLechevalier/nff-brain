@@ -2,7 +2,9 @@
 // DOM churns without notice; keeping the string logic here means rot shows up
 // as a failing test naming the exact pattern, not as a silently dead recorder.
 
-/** Is this the accessible label of an invitation send button? */
+/** Is this the accessible label of an invitation send button? (en + fr —
+ *  LinkedIn localizes these; the network path in src/inviteNet.ts is the
+ *  locale-independent detector, this classifier is the note-carrying backup.) */
 export function isSendInviteLabel(label: string): boolean {
   const l = label.trim().toLowerCase();
   return (
@@ -10,7 +12,12 @@ export function isSendInviteLabel(label: string): boolean {
     l === 'send now' ||
     l === 'send invitation' ||
     l === 'send without a note' ||
-    l.startsWith('send invitation to')
+    l.startsWith('send invitation to') ||
+    // fr — deliberately NO bare 'envoyer': that is also the chat send button.
+    l === 'envoyer maintenant' ||
+    l === 'envoyer une invitation' ||
+    l === 'envoyer sans note' ||
+    l.startsWith('envoyer une invitation à')
   );
 }
 

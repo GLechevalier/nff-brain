@@ -46,7 +46,7 @@ import { HEALTH_ALARM, currentPhase, ensureAlarm, pairWithServer, probe, unpair 
 import { clearActivity, removableNodeCount } from './activity.js';
 import { parseRuleInput, ruleLabel } from './gate.js';
 import { derivePhase } from './health.js';
-import { ensureRecorderScripts, onRecorderEvent, recorderPublicState, setRecorderEnabled } from './recorder.js';
+import { ensureRecorderScripts, onLinkedinInviteRequest, onRecorderEvent, recorderPublicState, setRecorderEnabled } from './recorder.js';
 import {
   AGENT_POLL_ALARM,
   agentActionAllowPublicState,
@@ -681,6 +681,15 @@ chrome.permissions.onAdded.addListener(() => void probe({ force: true }));
 // permission is granted. Registered here (top level) so an infobar Cancel is
 // heard whenever the permission was already granted at worker start.
 if (chrome.debugger) chrome.debugger.onDetach.addListener((source, reason) => void onDebuggerDetach(source, reason));
+// LinkedIn invite detection at the NETWORK level (see inviteNet.ts): the
+// Voyager invite POST is locale-independent and observed here in the SW, so
+// stale tabs and shadow-DOM modals can't lose it. Events only flow while the
+// linkedin.com optional host is granted (i.e. the recorder was enabled);
+// the handler re-checks the recorder toggle itself.
+chrome.webRequest.onCompleted.addListener(
+  (details) => void onLinkedinInviteRequest(details),
+  { urls: ['https://www.linkedin.com/voyager/api/*'], types: ['xmlhttprequest'] },
+);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Recorder events come from content scripts, are fire-and-forget, and must

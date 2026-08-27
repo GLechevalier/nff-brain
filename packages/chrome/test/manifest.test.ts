@@ -29,7 +29,7 @@ describe('manifest.json', () => {
     expect(manifest.permissions).toContain('sidePanel');
   });
 
-  it('requests EXACTLY the five warning-free permissions plus debugger + tabs + sidePanel', () => {
+  it('requests EXACTLY the warning-free permissions plus debugger + tabs', () => {
     // storage   — pairing token, capture flag, allowlist, activity buffer; all
     //             must survive service-worker death and browser restart.
     // alarms    — the health heartbeat; a setInterval dies with the worker.
@@ -48,10 +48,14 @@ describe('manifest.json', () => {
     //             is undefined for a tab the extension has no host grant for.
     //             Strictly less exposure than the `debugger` it accompanies.
     // sidePanel — hosts the agent UI beside the active tab (warning-free).
+    // webRequest — observes LinkedIn's own invite POST (src/inviteNet.ts):
+    //             locale-independent invite detection in the SW. Warning-free
+    //             by itself; it only sees hosts the user granted (the optional
+    //             linkedin.com grant made at recorder-enable time).
     // debugger + tabs are the install-time warnings the web-agent feature
     // accepts; adding any OTHER warning-bearing permission is what this stops.
     expect(new Set(manifest.permissions)).toEqual(
-      new Set(['storage', 'alarms', 'activeTab', 'contextMenus', 'scripting', 'debugger', 'tabs', 'sidePanel']),
+      new Set(['storage', 'alarms', 'activeTab', 'contextMenus', 'scripting', 'debugger', 'tabs', 'sidePanel', 'webRequest']),
     );
   });
 

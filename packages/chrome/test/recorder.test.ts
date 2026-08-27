@@ -7,6 +7,7 @@ import {
   recorderSeenRecently,
   validateRecorderEvent,
 } from '../src/recorderFormat.js';
+import { classifyInviteRequest, dayBucket, nameFromTabTitle } from '../src/inviteNet.js';
 import { ADAPTERS, adapterById } from '../src/recorderRegistry.js';
 import { RECORDER_SEEN_MAX, RECORDER_SEEN_TTL_MS } from '../src/recorderTypes.js';
 import type { RecorderSeenEntry } from '../src/recorderTypes.js';
@@ -100,10 +101,18 @@ describe('github classifier (pure — selector rot is a test failure here)', () 
 
 describe('linkedin classifier (pure)', () => {
   it('recognizes send-invitation button labels and nothing else', () => {
-    for (const label of ['Send now', 'Send invitation', 'send without a note', 'Send invitation to Ada Lovelace']) {
+    for (const label of [
+      'Send now',
+      'Send invitation',
+      'send without a note',
+      'Send invitation to Ada Lovelace',
+      'Envoyer sans note',
+      'Envoyer maintenant',
+      'envoyer une invitation à Ada Lovelace',
+    ]) {
       expect(isSendInviteLabel(label), label).toBe(true);
     }
-    for (const label of ['Send message', 'Sending', 'Follow', 'Connect']) {
+    for (const label of ['Send message', 'Sending', 'Follow', 'Connect', 'Se connecter', 'Envoyer un message']) {
       expect(isSendInviteLabel(label), label).toBe(false);
     }
   });
@@ -125,6 +134,49 @@ describe('linkedin classifier (pure)', () => {
     expect(canonicalProfileUrl('https://www.linkedin.com/search/results/people/')).toBe('');
     expect(canonicalProfileUrl('https://evil.example/in/ada')).toBe('');
     expect(canonicalProfileUrl('not a url')).toBe('');
+  });
+});
+
+describe('invite network classifier (pure — locale-independent detection)', () => {
+  const V = 'https://www.linkedin.com/voyager/api';
+
+  it('matches successful invitation-sending POSTs across endpoint renames', () => {
+    for (const url of [
+      `${V}/voyagerRelationshipsDashMemberRelationships?action=sendInvitation`,
+      `${V}/growth/normInvitations`,
+      `${V}/voyagerRelationshipsDashInvitations?action=create`,
+    ]) {
+      expect(classifyInviteRequest('POST', url, 200), url).toBe(true);
+    }
+  });
+
+  it('rejects non-POSTs, failures, other hosts, and not-you-inviting verbs', () => {
+    const send = `${V}/growth/normInvitations`;
+    expect(classifyInviteRequest('GET', send, 200)).toBe(false);
+    expect(classifyInviteRequest('POST', send, 429)).toBe(false);
+    expect(classifyInviteRequest('POST', 'https://evil.example/voyager/api/normInvitations', 200)).toBe(false);
+    for (const url of [
+      `${V}/voyagerRelationshipsDashMemberRelationships?action=verifyQuickConnect`, // modal open, not send
+      `${V}/relationships/invitations/123?action=withdraw`,
+      `${V}/relationships/invitations/123?action=accept`,
+      `${V}/relationships/invitations/123?action=ignore`,
+      `${V}/voyagerRelationshipsDashInvitationsSummary`,
+      `${V}/messaging/conversations`,
+    ]) {
+      expect(classifyInviteRequest('POST', url, 200), url).toBe(false);
+    }
+  });
+
+  it('extracts the invitee name from a profile tab title in any locale', () => {
+    expect(nameFromTabTitle('Merchrist K. | LinkedIn')).toBe('Merchrist K.');
+    expect(nameFromTabTitle('(3) Ada Lovelace | LinkedIn')).toBe('Ada Lovelace');
+    expect(nameFromTabTitle('Recherche | LinkedIn')).toBe('Recherche'); // caller gates on /in/ URL, not us
+    expect(nameFromTabTitle('LinkedIn')).toBe('');
+    expect(nameFromTabTitle('Something else entirely')).toBe('');
+  });
+
+  it('buckets by day exactly like the content-script emitter (shared dedupe key)', () => {
+    expect(dayBucket(new Date('2026-08-27T23:59:00Z'))).toBe('2026-08-27');
   });
 });
 

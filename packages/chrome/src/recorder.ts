@@ -11,6 +11,8 @@ import { HttpError, postClip } from './client.js';
 import { currentPhase } from './connection.js';
 import { maybeSyncCrmContact } from './crmSync.js';
 import { isAllowed, shouldCapture } from './gate.js';
+import { classifyInviteRequest, dayBucket, nameFromTabTitle } from './inviteNet.js';
+import { canonicalProfileUrl } from '../content/linkedinClassify.js';
 import { resolveBrainMode } from './mode.js';
 import { enqueueStandaloneClip } from './standaloneDrain.js';
 import { ADAPTERS, adapterById } from './recorderRegistry.js';
@@ -186,6 +188,57 @@ export async function deliverRecorderClip(url: string, msg: RecorderEventMsg): P
   setTimeout(() => {
     void currentPhase().then((phase) => paintBadge(phase, capture.enabled));
   }, 1200);
+}
+
+/**
+ * The NETWORK event sink: LinkedIn's own Voyager invite POST, observed via
+ * chrome.webRequest (registered top-level in sw.ts). Locale-independent and
+ * immune to stale tabs / shadow-DOM modals — the failure modes that killed the
+ * click path (see inviteNet.ts). Identity comes from the TAB (url + title),
+ * which the SW reads itself; only /in/ profile pages carry an honest name, so
+ * invites sent from search/My-Network pages are skipped.
+ * ponytail: no request body read — the invite note is lost on this path; add
+ * an onBeforeRequest requestBody correlation if notes ever matter.
+ */
+export async function onLinkedinInviteRequest(details: {
+  method: string;
+  url: string;
+  statusCode: number;
+  tabId: number;
+}): Promise<void> {
+  const matched = classifyInviteRequest(details.method, details.url, details.statusCode);
+  // Deliberate breadcrumb (SW console): LinkedIn renames these endpoints, and
+  // this one line is what turns "invite didn't sync" into the URL to add to
+  // the classifier. POSTs only — reads are noise.
+  if (details.method.toUpperCase() === 'POST') {
+    console.debug('[nff-brain] voyager POST', matched ? 'MATCHED' : 'ignored', details.url.slice(0, 200));
+  }
+  if (!matched) return;
+  const state = await getRecorders();
+  if (state.byId['linkedin']?.enabled !== true) return;
+  if (details.tabId < 0) return;
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(details.tabId);
+  } catch {
+    return;
+  }
+  const url = tab.url ?? '';
+  const linkedin = canonicalProfileUrl(url);
+  if (!linkedin) return; // not a profile page — no honest identity, never guess
+  const name = nameFromTabTitle(tab.title ?? '');
+  if (!name) return;
+  await deliverRecorderClip(url, {
+    type: 'recorderEvent',
+    adapter: 'linkedin',
+    action: 'linkedin.invite_sent',
+    // Same key shape as content/linkedin.ts — the nb.recorderSeen ring is what
+    // collapses a click-path and net-path double-observation into one event.
+    key: `linkedin.invite_sent:${name}:${dayBucket()}`,
+    at: new Date().toISOString(),
+    title: `Invited ${name} to connect`,
+    fields: { name, linkedin },
+  });
 }
 
 /** The content-script event sink — the second registered shouldCapture caller (via deliverRecorderClip). */
