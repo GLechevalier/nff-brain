@@ -77,3 +77,48 @@ export function breathePeriodMs(intensity: number): number {
   const t = Math.min(1, Math.max(0, intensity));
   return Math.round(6000 - t * (6000 - 2400));
 }
+
+// ── glow heat map ────────────────────────────────────────────────────────────
+// The decay/recompute step every glow UI (the VS Code webview, nff-admin's
+// brain graph) needs on top of the timing math above. Framework-free — each
+// caller owns its own heat Map and re-render trigger; this just does the math.
+
+export interface Heat {
+  at: number; // epoch ms of the touch
+  base: number; // starting intensity (by event kind)
+  delayMs: number; // wave stagger for the arrival flash
+}
+
+export interface GlowInfo {
+  intensity: number; // 0..1 current (decayed) heat — drives opacity
+  fresh: boolean; // touched <4s ago → arrival flash + wave stagger
+  delayMs: number; // wave stagger for the arrival flash
+  periodMs: number; // breathing period, slows as the node cools
+}
+
+export const GLOW_FRESH_MS = 4_000;
+
+/**
+ * Decay every tracked touch to its current GlowInfo as of `now`, deleting
+ * (mutating `heat`) anything that has cooled past GLOW_FLOOR so its halo
+ * unmounts. Pure aside from that prune — callers own the Map and their own
+ * re-render trigger (a 10s tick is typical; see useActivityGlow.ts).
+ */
+export function recomputeGlow(heat: Map<string, Heat>, now: number): Map<string, GlowInfo> {
+  const next = new Map<string, GlowInfo>();
+  for (const [id, h] of heat) {
+    const age = now - h.at;
+    const intensity = h.base * glowIntensity(age);
+    if (intensity < GLOW_FLOOR) {
+      heat.delete(id);
+      continue;
+    }
+    next.set(id, {
+      intensity,
+      fresh: age < GLOW_FRESH_MS,
+      delayMs: h.delayMs,
+      periodMs: breathePeriodMs(intensity),
+    });
+  }
+  return next;
+}

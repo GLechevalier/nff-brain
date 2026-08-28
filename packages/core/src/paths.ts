@@ -5,6 +5,7 @@ import * as path from 'node:path';
 export const BRAIN_DIR = '.nff-brain';
 export const BRAIN_FILE = 'brain.json';
 export const VECTORS_FILE = 'vectors.json';
+export const SUPABASE_CONFIG_FILE = 'supabase.json';
 
 /**
  * The global nff-brain data directory (default `~/.nff-brain`). NFF_BRAIN_HOME
@@ -70,6 +71,13 @@ export function brainLogPath(brainPath: string, name: string): string {
 
 export function vectorsPath(brainPath: string): string {
   return brainLogPath(brainPath, VECTORS_FILE);
+}
+
+// Table include/exclude list + row limit for the Supabase source. Sidecar, not
+// inside brain.json, for the same reason vectors.json is: derived config, not
+// knowledge — and it must never hold the connection string (see ingestSupabase.ts).
+export function supabaseConfigPath(brainPath: string): string {
+  return brainLogPath(brainPath, SUPABASE_CONFIG_FILE);
 }
 
 /**

@@ -17,6 +17,7 @@ export interface Args {
 const VALUE_FLAGS = new Set([
   'query', 'transcript', 'session', 'title', 'category', 'content', 'id', 'strength', 'delta', 'ratio', 'model', 'limit',
   'dir', 'max-per-repo',
+  'conn', 'tables', 'exclude', 'row-limit',
   'since', 'project', 'min-confidence', 'concurrency', 'max-new',
   'port', 'target', 'allow-origin', 'revoke', 'name',
   'client', 'max-actions', 'run',

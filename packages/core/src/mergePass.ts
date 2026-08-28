@@ -46,6 +46,7 @@ export function chooseSurvivor(
   // since they describe the same sub-problem in similar words.
   if (isSkillNode(a) || isSkillNode(b)) return null;
   if (a.origin === 'graphify' || b.origin === 'graphify') return null;
+  if (a.origin === 'supabase' || b.origin === 'supabase') return null;
   if (a.origin === 'clip' || b.origin === 'clip') return null;
   const aSeed = a.origin === 'seed';
   const bSeed = b.origin === 'seed';
@@ -193,7 +194,12 @@ const MIN_KEEP = 8;
  */
 export function foldLeastUsed(brain: BrainFile, fraction = 0.25, now = new Date()): number {
   const foldable = brain.nodes.filter(
-    (n) => n.origin !== 'seed' && n.origin !== 'graphify' && n.origin !== 'clip' && n.category !== 'core',
+    (n) =>
+      n.origin !== 'seed' &&
+      n.origin !== 'graphify' &&
+      n.origin !== 'supabase' &&
+      n.origin !== 'clip' &&
+      n.category !== 'core',
   );
   const budget = Math.min(
     Math.floor(foldable.length * fraction),
@@ -223,6 +229,7 @@ export function foldLeastUsed(brain: BrainFile, fraction = 0.25, now = new Date(
         n.id !== victim.id &&
         !victimIds.has(n.id) &&
         n.origin !== 'graphify' &&
+        n.origin !== 'supabase' &&
         n.origin !== 'clip' &&
         !isSkillNode(n),
     );

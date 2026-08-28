@@ -38,6 +38,7 @@ export * from './importState.js';
 export * from './claude.js';
 export * from './distill.js';
 export * from './ingestGraphify.js';
+export * from './ingestSupabase.js';
 export * from './skillFile.js';
 export * from './skillApply.js';
 export * from './mergePass.js';

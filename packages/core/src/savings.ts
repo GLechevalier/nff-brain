@@ -56,6 +56,14 @@ export function rediscoveryTokens(node: BrainNode): number {
     const children = node.graphifyRef?.children?.length ?? 0;
     return Math.min(children * SAVINGS_MODEL.graphifyPerChildTokens, SAVINGS_MODEL.graphifyMaxTokens);
   }
+  if (node.origin === 'supabase') {
+    // A table-master node stands in for reading its rows, same shape as a
+    // graphify area; a row node has no children and falls back to the default.
+    const children = node.supabaseRef?.children?.length ?? 0;
+    if (children > 0) {
+      return Math.min(children * SAVINGS_MODEL.graphifyPerChildTokens, SAVINGS_MODEL.graphifyMaxTokens);
+    }
+  }
   if (node.origin === 'clip') return SAVINGS_MODEL.rediscoverClipTokens;
   return node.origin === 'seed' ? SAVINGS_MODEL.rediscoverSeedTokens : SAVINGS_MODEL.rediscoverAgentTokens;
 }
@@ -84,6 +92,7 @@ export function brainSavings(nodes: readonly BrainNode[]): BrainSavings {
     import: 0,
     clip: 0,
     workflow: 0,
+    supabase: 0,
   };
   let total = 0;
   let injections = 0;

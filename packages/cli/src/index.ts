@@ -6,6 +6,7 @@ import { cmdInstallHooks, cmdUninstallHooks } from './commands/hooks.js';
 import { cmdImport } from './commands/import.js';
 import { cmdIndex } from './commands/indexVectors.js';
 import { cmdExpand, cmdIngestGraphify } from './commands/ingestGraphify.js';
+import { cmdIngestSupabase } from './commands/ingestSupabase.js';
 import { cmdInit } from './commands/init.js';
 import { cmdLayout } from './commands/layout.js';
 import { cmdMcp } from './commands/mcp.js';
@@ -115,6 +116,18 @@ codebase map (graphify bridge)
                                    import a graphify graph as ≤10 intent nodes per repo
   expand <id>                      list a codebase-map node's underlying code entities
 
+database source (Supabase/Postgres bridge)
+  ingest-supabase list --conn <url>
+                                   connect and print every table with its estimated row
+                                   count and a skip-by-default hint for large/log-like ones
+                                   (NFF_BRAIN_SUPABASE_URL works instead of --conn)
+  ingest-supabase sync --conn <url> --tables a,b,c [--exclude x,y] [--row-limit 2000]
+                                   mirror the chosen tables as a master node per table plus
+                                   one node per row, cross-linked by real foreign keys.
+                                   The connection string is never written to disk — only
+                                   the table list persists, in .nff-brain/supabase.json.
+                                   Re-running replaces every supabase-origin node wholesale
+
 skills (BRAIN-NODE.json)
   skill add <file.json> [--global] [--force] [--dry-run]
                                    expand a skill TREE into the brain — one node per step,
@@ -187,6 +200,7 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   index: cmdIndex,
   'ingest-graphify': cmdIngestGraphify,
   expand: cmdExpand,
+  'ingest-supabase': cmdIngestSupabase,
   skill: cmdSkill,
   serve: cmdServe,
   pair: cmdPair,

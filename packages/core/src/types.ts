@@ -50,6 +50,21 @@ export interface GraphifyRef {
 }
 
 /**
+ * Bridge from an imported Supabase/Postgres node down to the real database row
+ * it summarizes — the "no duplication" contract: `content` is a short
+ * synthesized label, the authoritative data stays in the table. `source` is a
+ * short alias for the configured connection, NEVER the raw connection string
+ * (which is never written to brain.json — see ingestSupabase.ts).
+ */
+export interface SupabaseRef {
+  source: string;
+  table: string;
+  kind: 'table' | 'row';
+  id?: string | number; // row primary key, present when kind === 'row'
+  children?: string[]; // row node ids this table node summarizes, when kind === 'table'
+}
+
+/**
  * A node's place in a SKILL TREE imported from a BRAIN-NODE.json file.
  *
  * The tree lives HERE and not in edges, because edges are effectively
@@ -113,7 +128,9 @@ export interface BrainNode {
   // workflow = a recorded, generalized browser task (own cap MAX_WORKFLOW_NODES,
   //        never merged/folded — the `workflow` payload is the truth; must stay
   //        retractable from the extension, same trust tier as clip)
-  origin: 'seed' | 'agent' | 'graphify' | 'import' | 'clip' | 'workflow';
+  // supabase = mirrored from a configured Postgres table (replaced wholesale on
+  //        re-ingest, never folded — see ingestSupabase.ts, same contract as graphify)
+  origin: 'seed' | 'agent' | 'graphify' | 'import' | 'clip' | 'workflow' | 'supabase';
   sourceSession?: string;
   // http(s) page the clip was captured from (origin 'clip'), or the workflow's
   // start url (origin 'workflow').
@@ -122,6 +139,7 @@ export interface BrainNode {
   recallCount: number;
   lastRecalledAt?: string; // ISO
   graphifyRef?: GraphifyRef;
+  supabaseRef?: SupabaseRef;
   // The replayable workflow this node carries (origin 'workflow' only). Like
   // graphifyRef, a structured machine payload alongside the human-readable
   // content; edits to `content` never desync it.

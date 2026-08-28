@@ -11,7 +11,9 @@ import {
   parseActivityLines,
   readNewActivity,
   readRecentActivity,
+  recomputeGlow,
   waveDelayMs,
+  type Heat,
 } from '../src/index.js';
 
 let dir: string;
@@ -73,6 +75,24 @@ describe('glow math', () => {
     expect(breathePeriodMs(0)).toBe(6000);
     expect(breathePeriodMs(0.5)).toBeGreaterThan(2400);
     expect(breathePeriodMs(0.5)).toBeLessThan(6000);
+  });
+});
+
+describe('recomputeGlow', () => {
+  it('decays a fresh touch, marks it fresh, and prunes it once cold', () => {
+    const heat = new Map<string, Heat>([['a', { at: 0, base: 1, delayMs: 40 }]]);
+    const hot = recomputeGlow(heat, 0);
+    expect(hot.get('a')).toMatchObject({ intensity: 1, fresh: true, delayMs: 40, periodMs: 2400 });
+    expect(heat.has('a')).toBe(true); // still tracked — not cold yet
+
+    const stale = recomputeGlow(heat, 60 * 60_000); // an hour later
+    expect(stale.has('a')).toBe(false);
+    expect(heat.has('a')).toBe(false); // pruned from the source map too
+  });
+
+  it('is not fresh past GLOW_FRESH_MS', () => {
+    const heat = new Map<string, Heat>([['a', { at: 0, base: 1, delayMs: 0 }]]);
+    expect(recomputeGlow(heat, 5_000).get('a')?.fresh).toBe(false);
   });
 });
 
