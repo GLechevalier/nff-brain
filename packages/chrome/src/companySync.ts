@@ -38,11 +38,19 @@ export async function syncBrainToCompany(): Promise<{ ok: boolean; message: stri
   let edges: BrainEdge[];
   const pairing = await getPairing();
   if (pairing) {
+    // Paired = the server's merged brain IS the brain. Never silently fall
+    // back to the (usually empty) in-browser brain — that turned "old server
+    // without /v1/export" into a baffling "this brain is empty" while the
+    // panel showed 160 nodes. Surface the real failure instead.
     try {
       const exported = await getExport(pairing.port, pairing.token);
       ({ nodes, edges } = exported);
-    } catch {
-      ({ nodes, edges } = await readLocalBrain()); // server down — sync what we hold
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        message: `could not read the paired brain (${detail}) — if \`nff-brain serve\` predates /v1/export, update and restart it`,
+      };
     }
   } else {
     ({ nodes, edges } = await readLocalBrain());
