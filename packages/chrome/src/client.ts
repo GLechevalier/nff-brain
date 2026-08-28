@@ -12,6 +12,7 @@ import {
   isChatResponse,
   isClipsMapResponse,
   isExportResponse,
+  isFlagsResponse,
   isGraphResponse,
   isHelloResponse,
   isImportResponse,
@@ -37,6 +38,7 @@ import type {
   ClipResponse,
   ClipsMapResponse,
   ExportResponse,
+  FlagsResponse,
   GraphResponse,
   HelloResponse,
   ImportResponse,
@@ -210,6 +212,18 @@ export async function getExport(port: number, token: string): Promise<ExportResp
 export async function moveGraphNode(port: number, token: string, id: string, x: number, y: number): Promise<LayoutResponse> {
   const body = await call(port, '/v1/layout', { method: 'POST', token, body: JSON.stringify({ id, x, y }) });
   if (!isLayoutResponse(body)) throw new HttpError(0, 'protocol', 'unexpected layout response');
+  return body;
+}
+
+/** Persist a node's company-sync flags (private / shared) on the server's brain. */
+export async function setNodeFlags(
+  port: number,
+  token: string,
+  id: string,
+  flags: { private?: boolean; shared?: boolean },
+): Promise<FlagsResponse> {
+  const body = await call(port, '/v1/flags', { method: 'POST', token, body: JSON.stringify({ id, ...flags }) });
+  if (!isFlagsResponse(body)) throw new HttpError(0, 'protocol', 'unexpected flags response');
   return body;
 }
 

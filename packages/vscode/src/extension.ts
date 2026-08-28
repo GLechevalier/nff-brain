@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import {
   activityPath,
   asCategory,
+  buildCompanySyncPayload,
   CATEGORIES,
   eventSavings,
   foldLeastUsed,
@@ -85,6 +86,8 @@ function loadGraph(): GraphSnapshot {
     recallCount: n.recallCount ?? 0,
     lastRecalledAt: n.lastRecalledAt,
     confidence: n.confidence,
+    private: n.private,
+    shared: n.shared,
     source: merged.sourceById.get(n.id) ?? 'project',
     relatedIds: related.get(n.id) ?? [],
   }));
@@ -105,6 +108,66 @@ function broadcastGraph(): void {
 
 function fileFor(source: NodeSource): string {
   return source === 'project' ? paths.project : paths.global;
+}
+
+// ── company brain sync ──────────────────────────────────────────────────────
+// Push the merged brain (minus nodes marked private — buildCompanySyncPayload
+// is THE shared filter, the Chrome extension uses the same one) to nff-admin's
+// employee ingest. The per-employee token lives in SecretStorage; settings
+// carry only the toggle + endpoint. Fire-and-forget: a failure surfaces as a
+// message (manual) or a log line (auto), and auto retries on the next change.
+
+const SECRET_COMPANY_SYNC_TOKEN = 'nffBrain.companySyncToken';
+let extSecrets: vscode.SecretStorage;
+let companySyncTokenPresent = false; // mirror for the sync-path + launcher row (secrets.get is async)
+let companySyncLastAt = '';
+let companySyncTimer: NodeJS.Timeout | null = null;
+
+async function syncToCompany(manual: boolean): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration('nffBrain');
+  const token = await extSecrets.get(SECRET_COMPANY_SYNC_TOKEN);
+  if (!token) {
+    if (manual) {
+      void vscode.window.showErrorMessage(
+        'nff-brain: no company sync token — run "nff-brain: Set Company Sync Token…" first (an admin mints it in nff-admin\'s Users tab).',
+      );
+    }
+    return;
+  }
+  if (!manual && !cfg.get<boolean>('companySync.enabled', false)) return;
+
+  const url = cfg.get<string>('companySync.url', 'https://admin.nanoforgeflow.com/api/tables/brain/ingest');
+  const merged = loadMerged();
+  const payload = buildCompanySyncPayload(merged);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-brain-sync-token': token },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const out = (await res.json()) as { synced?: number };
+    companySyncLastAt = new Date().toISOString();
+    launcher?.refresh();
+    const kept = merged.nodes.length - payload.nodes.length;
+    const summary = `synced ${out.synced ?? payload.nodes.length} node(s)${kept > 0 ? ` (${kept} private stayed home)` : ''}`;
+    logLine(`company sync: ${summary}`);
+    if (manual) void vscode.window.showInformationMessage(`nff-brain: ${summary}.`);
+    else vscode.window.setStatusBarMessage(`$(cloud-upload) brain ${summary}`, 5000);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logLine(`company sync FAILED: ${msg}`);
+    if (manual) void vscode.window.showErrorMessage(`nff-brain: company sync failed — ${msg}`);
+  }
+}
+
+/** Auto-sync debounce: re-armed on every brain.json change. 45s, so a burst of
+ *  edits (or a whole Claude session distilling) lands as one push. */
+function scheduleCompanySync(): void {
+  if (!companySyncTokenPresent) return;
+  if (!vscode.workspace.getConfiguration('nffBrain').get<boolean>('companySync.enabled', false)) return;
+  if (companySyncTimer) clearTimeout(companySyncTimer);
+  companySyncTimer = setTimeout(() => void syncToCompany(false), 45_000);
 }
 
 // ── semantic search ─────────────────────────────────────────────────────────
@@ -388,6 +451,21 @@ async function handleMessage(msg: WebToExt, webview: vscode.Webview): Promise<vo
         return;
       }
 
+      case 'setNodeFlags': {
+        const source = graph.sourceById.get(msg.id);
+        if (!source) return;
+        mutateBrain(fileFor(source), (brain) => {
+          const node = brain.nodes.find((n) => n.id === msg.id);
+          if (!node) return;
+          // absent = default — keeps brain.json clean of `false` noise
+          if (typeof msg.private === 'boolean') node.private = msg.private || undefined;
+          if (typeof msg.shared === 'boolean') node.shared = msg.shared || undefined;
+        });
+        // The disk watcher rebroadcasts and (if enabled) schedules the company
+        // sync, so a privacy change re-syncs on its own.
+        break;
+      }
+
       case 'merge': {
         const pick = await vscode.window.showWarningMessage(
           'Consolidate the brain?\n\nThis merges the least-used learned nodes (about 25%) into their ' +
@@ -538,6 +616,11 @@ export function activate(context: vscode.ExtensionContext): void {
   out = vscode.window.createOutputChannel('nff-brain');
   context.subscriptions.push(out);
   channelViews = new Set();
+  extSecrets = context.secrets;
+  void extSecrets.get(SECRET_COMPANY_SYNC_TOKEN).then((t) => {
+    companySyncTokenPresent = !!t;
+    if (companySyncTokenPresent) launcher?.refresh(); // show the sync row
+  });
   const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
   paths = resolveBrainPaths(cwd);
   logLine(`activated — workspace=${cwd} project=${paths.project} global=${paths.global}`);
@@ -633,6 +716,31 @@ export function activate(context: vscode.ExtensionContext): void {
       broadcastGraph();
       void vscode.window.showInformationMessage(`nff-brain: re-arranged ${moved} node(s).`);
     }),
+    vscode.commands.registerCommand('nffBrain.syncToCompany', () => void syncToCompany(true)),
+    vscode.commands.registerCommand('nffBrain.setCompanySyncToken', async () => {
+      const token = await vscode.window.showInputBox({
+        prompt: 'Paste your company sync token (an admin mints it in nff-admin ▸ Users ▸ Employee brains). Empty clears it.',
+        password: true,
+        ignoreFocusOut: true,
+      });
+      if (token === undefined) return; // dismissed
+      if (!token.trim()) {
+        await extSecrets.delete(SECRET_COMPANY_SYNC_TOKEN);
+        companySyncTokenPresent = false;
+        launcher?.refresh();
+        void vscode.window.showInformationMessage('nff-brain: company sync token cleared.');
+        return;
+      }
+      await extSecrets.store(SECRET_COMPANY_SYNC_TOKEN, token.trim());
+      companySyncTokenPresent = true;
+      await vscode.workspace
+        .getConfiguration('nffBrain')
+        .update('companySync.enabled', true, vscode.ConfigurationTarget.Global);
+      launcher?.refresh();
+      void vscode.window.showInformationMessage(
+        'nff-brain: company sync token saved and sync enabled — "Sync Brain to Company" pushes now, and changes auto-sync.',
+      );
+    }),
   );
 
   // Activity-bar LAUNCHER: the nav-bar icon never renders the graph in the
@@ -642,7 +750,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // viewsWelcome hint shows instead.
   launcher = new BrainLauncherProvider(() => {
     const merged = loadMerged();
-    return { nodes: merged.nodes, edgeCount: merged.edges.length, sessionSaved };
+    return {
+      nodes: merged.nodes,
+      edgeCount: merged.edges.length,
+      sessionSaved,
+      companySyncLastAt: companySyncTokenPresent ? companySyncLastAt : null,
+    };
   });
   const launcherView = vscode.window.createTreeView('nffBrain.launcher', {
     treeDataProvider: launcher,
@@ -675,6 +788,7 @@ export function activate(context: vscode.ExtensionContext): void {
       broadcastGraph();
       launcher?.refresh(); // recallCount bumps move the savings figure
       brainFs.notifyBrainChanged(); // open node docs reload from the new truth
+      scheduleCompanySync(); // auto company sync rides the same disk signal
     }, 150);
   };
   const watcher = vscode.workspace.createFileSystemWatcher('**/.nff-brain/brain.json');

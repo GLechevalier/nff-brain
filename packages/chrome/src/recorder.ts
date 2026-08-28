@@ -11,7 +11,14 @@ import { HttpError, postClip } from './client.js';
 import { currentPhase } from './connection.js';
 import { maybeSyncCrmContact } from './crmSync.js';
 import { isAllowed, shouldCapture } from './gate.js';
-import { classifyInviteRequest, dayBucket, nameFromTabTitle } from './inviteNet.js';
+import {
+  classifyInviteRequest,
+  dayBucket,
+  nameFromTabTitle,
+  pushPendingInvite,
+  takePendingInvite,
+  type PendingInvite,
+} from './inviteNet.js';
 import { scrapeProfileTopCard, type ProfileTopCard } from './profileScrapeScript.js';
 import { canonicalProfileUrl } from '../content/linkedinClassify.js';
 import { parseCardText } from '../content/linkedinAgentClassify.js';
@@ -23,10 +30,12 @@ import type { RecorderEventMsg } from './recorderTypes.js';
 import {
   getAllowlist,
   getCapture,
+  getInvitePending,
   getPairing,
   getRecorderSeen,
   getRecorders,
   setAllowlist,
+  setInvitePending,
   setRecorderSeen,
   setRecorders,
 } from './storage.js';
@@ -196,11 +205,12 @@ export async function deliverRecorderClip(url: string, msg: RecorderEventMsg): P
  * The NETWORK event sink: LinkedIn's own Voyager invite POST, observed via
  * chrome.webRequest (registered top-level in sw.ts). Locale-independent and
  * immune to stale tabs / shadow-DOM modals — the failure modes that killed the
- * click path (see inviteNet.ts). Identity comes from the TAB (url + title),
- * which the SW reads itself; only /in/ profile pages carry an honest name, so
- * invites sent from search/My-Network pages are skipped.
- * ponytail: no request body read — the invite note is lost on this path; add
- * an onBeforeRequest requestBody correlation if notes ever matter.
+ * click path (see inviteNet.ts). Identity: a recent Connect-button click on
+ * the tab (nb.invitePending — names the invitee even on browsemap/search/
+ * My-Network surfaces) wins; else the TAB's own url + title, which is only
+ * honest on /in/ profile pages.
+ * The invite note rides in on the modal-Send click's correlation record
+ * (nb.invitePending) — no request body read needed.
  */
 export async function onLinkedinInviteRequest(details: {
   method: string;
@@ -226,19 +236,55 @@ export async function onLinkedinInviteRequest(details: {
     return;
   }
   const url = tab.url ?? '';
-  const linkedin = canonicalProfileUrl(url);
-  if (!linkedin) return; // not a profile page — no honest identity, never guess
-  const name = nameFromTabTitle(tab.title ?? '');
-  if (!name) return;
 
-  // Best-effort top-card scrape of the page the user is looking at (headline,
-  // location) — see profileScrapeScript.ts for the self-containment rule.
-  // Any failure degrades to name+linkedin; enrichment is never load-bearing.
+  // A recent Connect-button click on this tab carries the INVITEE's identity
+  // (content/linkedin.ts read it off the button itself) — the honest source
+  // when the invite went to a browsemap-sidebar / search / My-Network card
+  // rather than the page's own profile. Consume it; without one, fall back to
+  // the tab's identity exactly as before (only valid on /in/ pages).
+  const nowMs = Date.now();
+  let take = takePendingInvite(await getInvitePending(), details.tabId, nowMs);
+  if (!take.entry) {
+    // The click message may still be in flight behind this webRequest event —
+    // one short retry before concluding there was no correlating click.
+    await new Promise((r) => setTimeout(r, 250));
+    take = takePendingInvite(await getInvitePending(), details.tabId, Date.now());
+  }
+  await setInvitePending(take.rest);
+
+  let name: string;
+  let linkedin: string;
+  const invitee: PendingInvite | null = take.entry;
+  if (invitee?.slug) {
+    if (!invitee.name) {
+      // Slug known but no click named the person (unparsed locale) — skip
+      // rather than misattribute to the tab. The breadcrumb names the gap.
+      console.debug('[nff-brain] invite pending has no name — skipped', invitee.slug);
+      return;
+    }
+    name = invitee.name;
+    // Slug is authoritative: a merged modal-Send entry's dialog-derived
+    // linkedin can name the PAGE's profile, never trust it over the slug.
+    linkedin = `https://www.linkedin.com/in/${invitee.slug}`;
+  } else {
+    // No invitee-identity click (or a modal-Send-only entry, which carries the
+    // note but claims no identity) — the tab is the honest source, /in/ only.
+    linkedin = canonicalProfileUrl(url);
+    if (!linkedin) return; // not a profile page — no honest identity, never guess
+    name = invitee?.name || nameFromTabTitle(tab.title ?? '');
+    if (!name) return;
+  }
+
+  // Best-effort enrichment scrape — see profileScrapeScript.ts for the
+  // self-containment rule. With a pending-click invitee, the scrape is pointed
+  // at THEIR slug (voyager-blob match only; the page's top card names someone
+  // else). Any failure degrades to name+linkedin; never load-bearing.
   let scraped: ProfileTopCard = { name: '', headline: '', location: '' };
   try {
     const [res] = await chrome.scripting.executeScript({
       target: { tabId: details.tabId },
       func: scrapeProfileTopCard,
+      args: [invitee?.slug ?? ''],
     });
     if (res?.result) scraped = res.result as ProfileTopCard;
     console.debug('[nff-brain] profile scrape', JSON.stringify(scraped).slice(0, 300));
@@ -262,6 +308,7 @@ export async function onLinkedinInviteRequest(details: {
     fields: {
       name,
       linkedin,
+      ...(invitee?.note && { note: invitee.note }),
       ...(parsed.headline && { headline: parsed.headline }),
       ...(parsed.company && { company: parsed.company }),
       ...(parsed.headline && parsed.role !== parsed.headline && { role: parsed.role }),
@@ -285,6 +332,28 @@ export async function onRecorderEvent(raw: unknown, sender: chrome.runtime.Messa
   if (!adapter || !adapter.actions.includes(msg.action)) return;
   const state = await getRecorders();
   if (state.byId[msg.adapter]?.enabled !== true) return;
+
+  // A Connect-button or modal-Send click is a CORRELATION record, not an
+  // invite: park what the click knows (invitee slug/linkedin from a Connect
+  // button; name/note from the modal) for onLinkedinInviteRequest to merge
+  // when (if) the voyager POST confirms the invite. Never delivered as a
+  // clip — no activity row, no seen-ring entry, no CRM contact for a click
+  // that sent nothing.
+  if (msg.action === 'linkedin.connect_click') {
+    const tabId = sender.tab?.id;
+    const linkedin = msg.fields.linkedin ?? '';
+    // Only Connect-button entries carry `slug` (read off the button's own
+    // preload href) — a modal-Send entry's linkedin is dialog-derived (may be
+    // the page's own profile) and must never masquerade as invitee identity.
+    const slug = msg.fields.slug ?? '';
+    const name = msg.fields.name ?? '';
+    const note = msg.fields.note ?? '';
+    if (tabId === undefined || tabId < 0 || (!slug && !name && !note)) return;
+    const nowMs = Date.now();
+    const pending = await getInvitePending();
+    await setInvitePending(pushPendingInvite(pending, { tabId, name, linkedin, slug, note, atMs: nowMs }, nowMs));
+    return;
+  }
 
   await deliverRecorderClip(url, msg);
 }

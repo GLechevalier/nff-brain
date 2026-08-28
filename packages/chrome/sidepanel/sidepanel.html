@@ -227,6 +227,34 @@
         <div id="crm-sync-error" class="small error hidden"></div>
       </div>
 
+      <!-- Company brain sync: push this brain to the company's nff-admin brain.
+           The token is per-employee (minted in nff-admin's Users tab) and
+           write-only: saved into the worker, never shown back. Nodes marked
+           private never leave this machine. -->
+      <div class="panel">
+        <div class="row">
+          <span class="label">Company brain sync</span>
+          <span id="brain-sync-status" class="muted small push"></span>
+        </div>
+        <p class="muted small">
+          Shares your brain with the company brain (admin.nanoforgeflow.com),
+          manually or automatically after changes. Nodes you mark private are
+          never sent.
+        </p>
+        <div class="row gap">
+          <input id="brain-sync-token" class="input grow" type="password" autocomplete="off" spellcheck="false"
+                 placeholder="paste your sync token" />
+          <button id="brain-sync-save" class="btn primary">Save</button>
+        </div>
+        <div class="row gap">
+          <button id="brain-sync-toggle" class="btn hidden"></button>
+          <button id="brain-sync-auto" class="btn hidden"></button>
+          <button id="brain-sync-now" class="btn hidden">Sync now</button>
+          <button id="brain-sync-clear" class="btn hidden">Forget token</button>
+        </div>
+        <div id="brain-sync-error" class="small error hidden"></div>
+      </div>
+
       <div class="panel">
         <div class="row">
           <span class="label">Record a task</span>
@@ -356,6 +384,12 @@
     -->
     <section id="graph-view" class="view hidden wide">
       <div id="graph-canvas" class="graph-canvas"></div>
+      <!-- Click a node (without dragging) → its company-sync controls. -->
+      <div id="graph-node-detail" class="row gap hidden">
+        <span id="graph-node-title" class="small grow"></span>
+        <button id="graph-node-private" class="btn"></button>
+        <button id="graph-node-shared" class="btn"></button>
+      </div>
       <div id="graph-error" class="small error hidden"></div>
       <p class="muted small">
         Positions come from <code class="inline">nff-brain layout</code> — run it for a

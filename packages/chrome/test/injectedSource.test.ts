@@ -67,7 +67,7 @@ type Builders = {
   buildAttentionInstallerSource(): string;
   // Not a source builder: executeScript({func}) serializes THIS function at
   // runtime — the program under test is its minified .toString().
-  scrapeProfileTopCard(): unknown;
+  scrapeProfileTopCard(inviteeSlug?: string): unknown;
 };
 
 // Mirrors build.mjs's `common` — same resolution conditions and syntax floor,
@@ -250,6 +250,7 @@ describe('injected CDP programs (minified, as shipped)', () => {
       // chrome.scripting.executeScript({func}) reflects the function source the
       // same way the CDP builders do — same leak class, same check.
       ['scrapeProfileTopCard (executeScript func)', `(${String(b.scrapeProfileTopCard)})()`],
+      ['scrapeProfileTopCard (invitee-slug arg)', `(${String(b.scrapeProfileTopCard)})("ada-lovelace")`],
     ];
     for (const [name, src] of programs) {
       expect(

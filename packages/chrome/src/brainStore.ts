@@ -11,7 +11,7 @@
 
 import { emptyBrain } from '@nff-brain/core/types';
 import type { BrainEdge, BrainFile, BrainNode } from '@nff-brain/core/types';
-import { getBrain, setBrain } from './storage.js';
+import { getBrain, getBrainSync, setBrain } from './storage.js';
 
 /** Hard ceiling for the local brain after a server import — keeps nb.brain
  *  ≈ well under a MB against the 10 MB storage.local quota. */
@@ -42,6 +42,13 @@ export function mutateLocalBrain<T>(fn: (brain: BrainFile) => T): Promise<T> {
     const result = fn(brain);
     brain.updatedAt = new Date().toISOString();
     await setBrain(brain);
+    // Auto company sync: every local mutation re-arms a one-shot debounce
+    // alarm (MV3 — a setTimeout dies with the worker); sw.ts's onAlarm runs
+    // the push, which re-checks the toggles itself. ponytail: paired-mode
+    // server-side brain changes don't trip this — they sync on the next
+    // manual push or local change.
+    const sync = await getBrainSync();
+    if (sync?.enabled && sync.auto && sync.token) chrome.alarms.create('brainSync', { delayInMinutes: 1 });
     return result;
   });
 }
@@ -63,7 +70,13 @@ export function mergeImportedBrain(nodes: BrainNode[], edges: BrainEdge[]): Prom
         byId.set(n.id, n);
         imported++;
       } else if ((n.lastUpdated ?? '') > (existing.lastUpdated ?? '')) {
+        // The server export knows nothing about the LOCAL company-sync flags —
+        // a newer server copy must not clobber a private/shared choice made here.
+        const keepPrivate = existing.private;
+        const keepShared = existing.shared;
         Object.assign(existing, n);
+        if (n.private === undefined) existing.private = keepPrivate;
+        if (n.shared === undefined) existing.shared = keepShared;
         imported++;
       }
     }

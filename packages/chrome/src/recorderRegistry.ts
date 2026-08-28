@@ -22,7 +22,7 @@ export const ADAPTERS: readonly RecorderAdapter[] = [
     originPatterns: ['https://www.linkedin.com/*'],
     matches: ['https://www.linkedin.com/*'],
     scriptFile: 'rec-linkedin.js',
-    actions: ['linkedin.invite_sent'],
+    actions: ['linkedin.invite_sent', 'linkedin.connect_click'],
   },
 ];
 

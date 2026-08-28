@@ -15,6 +15,7 @@ import type {
   ActivityRecord,
   ActRunState,
   BrainModePref,
+  BrainSyncSettings,
   CodeProjectMeta,
   TraceActiveState,
   TracePending,
@@ -33,6 +34,7 @@ import type {
   WorkflowStore,
 } from './schema.js';
 import type { RecorderSeenEntry, RecorderState } from './recorderTypes.js';
+import type { PendingInvite } from './inviteNet.js';
 import type { AgentActionAllowState, AgentAdapterState, AgentTabRef, NavigateHostAllowState } from './agentTypes.js';
 
 async function raw<T>(key: string, fallback: T, valid: (v: unknown) => boolean): Promise<T> {
@@ -117,6 +119,14 @@ export async function setRecorderSeen(ring: RecorderSeenEntry[]): Promise<void> 
   await chrome.storage.local.set({ [KEYS.recorderSeen]: ring });
 }
 
+export function getInvitePending(): Promise<PendingInvite[]> {
+  return raw<PendingInvite[]>(KEYS.invitePending, [], (v) => Array.isArray(v));
+}
+
+export async function setInvitePending(list: PendingInvite[]): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.invitePending]: list });
+}
+
 export function getAgentAdapters(): Promise<AgentAdapterState> {
   return raw<AgentAdapterState>(KEYS.agentAdapters, { byId: {} }, (v) => isObj(v) && isObj(v.byId));
 }
@@ -191,6 +201,20 @@ export function getCrmSync(): Promise<CrmSyncSettings | null> {
 
 export async function setCrmSync(s: CrmSyncSettings | null): Promise<void> {
   await chrome.storage.local.set({ [KEYS.crmSync]: s });
+}
+
+// ── company brain sync settings (nff-admin ingest — see src/companySync.ts) ─
+
+export function getBrainSync(): Promise<BrainSyncSettings | null> {
+  return raw<BrainSyncSettings | null>(
+    KEYS.brainSync,
+    null,
+    (v) => v === null || (isObj(v) && typeof v.enabled === 'boolean' && typeof v.token === 'string'),
+  );
+}
+
+export async function setBrainSync(s: BrainSyncSettings | null): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.brainSync]: s });
 }
 
 // ── the local brain + clip pipeline (BYOK) ──────────────────────────────────

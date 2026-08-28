@@ -34,7 +34,32 @@ export function canonicalProfileUrl(href: string): string {
 
 /** Pull the invitee's name out of a modal heading or button label. */
 export function inviteeFromText(text: string): string {
-  // "Invite Ada Lovelace to connect" · "Send invitation to Ada Lovelace"
-  const m = /(?:invite|send invitation to)\s+(.{2,80}?)(?:\s+to connect|\s*$)/i.exec(text.trim());
+  // "Invite Ada Lovelace to connect" · "Send invitation to Ada Lovelace" ·
+  // "Invite Ada Lovelace to join your network" ·
+  // fr "Inviter Ada Lovelace à rejoindre votre réseau"
+  const m =
+    /(?:inviter|invite|send invitation to)\s+(.{2,80}?)(?:\s+to connect|\s+to join your network|\s+à rejoindre votre réseau|\s*$)/i.exec(
+      text.trim(),
+    );
   return (m?.[1] ?? '').trim().slice(0, 80);
+}
+
+/**
+ * The invitee's /in/ slug from a Connect button's preload href —
+ * every LinkedIn Connect surface (main profile, browsemap sidebar, search)
+ * renders an <a href="https://www.linkedin.com/preload/custom-invite/?vanityName=<slug>">,
+ * which names the actual INVITEE locale-independently. '' when it is not such
+ * a link. Regex on purpose (no URL parsing) — same bundlePurity posture as
+ * canonicalProfileUrl above.
+ */
+export function vanityFromPreloadHref(href: string): string {
+  const m = /^https:\/\/(?:www\.)?linkedin\.com\/preload\/custom-invite\/\?(?:[^#]*&)?vanityName=([^&#]+)/i.exec(
+    href.trim(),
+  );
+  if (!m) return '';
+  try {
+    return decodeURIComponent(m[1]).slice(0, 100);
+  } catch {
+    return '';
+  }
 }

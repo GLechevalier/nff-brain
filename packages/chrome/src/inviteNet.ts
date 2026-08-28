@@ -46,3 +46,78 @@ export function nameFromTabTitle(title: string): string {
 export function dayBucket(now = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
+
+// ── pending invite correlation (nb.invitePending) ───────────────────────────
+// Clicks carry data the voyager POST above cannot see: a Connect-button click
+// names the INVITEE (content/linkedin.ts reads the button's preload href +
+// aria-label), and a modal-Send click carries the typed NOTE. Neither click is
+// an invite by itself — the POST is what confirms one went out. These pure
+// helpers hold the clicks' data until the POST consumes the per-field MERGE:
+// the fix for browsemap/search/My-Network misattribution AND for the note
+// being lost on the network path.
+
+export interface PendingInvite {
+  tabId: number;
+  /** '' when no click named the person (e.g. unparsed locale). A SLUG-bearing
+   *  entry without a name makes the consumer SKIP the invite, rather than
+   *  misattribute it to the tab. */
+  name: string;
+  linkedin: string;
+  /** The invitee's /in/ slug (Connect-button clicks only) — routes the profile
+   *  scrape's voyager-blob matcher to the invitee instead of the page's own
+   *  profile. '' for modal-Send entries: identity falls back to the tab. */
+  slug: string;
+  /** The invite note typed in the modal (modal-Send clicks only). */
+  note: string;
+  atMs: number;
+}
+
+export const PENDING_INVITE_TTL_MS = 60_000;
+export const PENDING_INVITE_MAX = 20;
+
+/** TTL-filter + append + cap. */
+export function pushPendingInvite(
+  list: readonly PendingInvite[],
+  entry: PendingInvite,
+  nowMs: number,
+): PendingInvite[] {
+  const fresh = list.filter((p) => nowMs - p.atMs < PENDING_INVITE_TTL_MS);
+  fresh.push(entry);
+  return fresh.slice(-PENDING_INVITE_MAX);
+}
+
+/**
+ * Consume for one tab: the tab's fresh entries MERGE per-field (newest
+ * non-empty wins) and the tab's whole queue is dropped from `rest`. The merge
+ * is what joins a Connect click (slug/linkedin) with the modal-Send click that
+ * follows it (name/note) into one invitee record. ponytail: newest-wins per
+ * field, not FIFO — a cancelled invite modal leaves an orphan older entry, and
+ * FIFO would hand that orphan to the next real invite (the exact
+ * misattribution this store exists to fix); two genuinely simultaneous
+ * in-flight invite POSTs from one tab would need two clicks within one network
+ * RTT, which a human cannot do. Known merge ceiling, accepted: cancel B's
+ * modal then immediately invite C from the same tab inside the TTL and B's
+ * leftover note can ride along on C's invite.
+ */
+export function takePendingInvite(
+  list: readonly PendingInvite[],
+  tabId: number,
+  nowMs: number,
+): { entry: PendingInvite | null; rest: PendingInvite[] } {
+  const fresh = list.filter((p) => nowMs - p.atMs < PENDING_INVITE_TTL_MS);
+  const mine = fresh.filter((p) => p.tabId === tabId);
+  let entry: PendingInvite | null = null;
+  for (const p of mine) {
+    entry = entry
+      ? {
+          tabId,
+          name: p.name || entry.name,
+          linkedin: p.linkedin || entry.linkedin,
+          slug: p.slug || entry.slug,
+          note: p.note || entry.note,
+          atMs: p.atMs,
+        }
+      : p;
+  }
+  return { entry, rest: fresh.filter((p) => p.tabId !== tabId) };
+}

@@ -156,6 +156,7 @@ let panStartClientX = 0;
 let panStartClientY = 0;
 let panStartBox: GraphViewBox | null = null;
 let nodeDrag: { id: string; startClientX: number; startClientY: number; x0: number; y0: number; moved: boolean } | null = null;
+let selectedGraphNodeId: string | null = null;
 
 function send(msg: PopupToSw): Promise<SwToPopup> {
   return new Promise((resolve) => {
@@ -325,6 +326,52 @@ async function saveCrmSecret(): Promise<void> {
   const ok = await dispatchSetup({ type: 'setCrmSyncSecret', secret }, 'crm-sync-error');
   if (ok) input.value = '';
   await refreshState();
+}
+
+/**
+ * Company brain sync — same gesture rule (chrome.permissions.request in the
+ * click handler) and same write-only token posture as saveCrmSecret. The host
+ * grant is shared with CRM sync (one origin covers both).
+ */
+async function saveBrainSyncToken(): Promise<void> {
+  const input = $('brain-sync-token') as HTMLInputElement;
+  const token = input.value.trim();
+  if (!token) {
+    showFieldError('brain-sync-error', 'paste your sync token first');
+    return;
+  }
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ origins: [CRM_ORIGIN_PATTERN] });
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    showFieldError('brain-sync-error', 'Chrome permission for admin.nanoforgeflow.com was not granted — company sync stays off.');
+    return;
+  }
+  const ok = await dispatchSetup({ type: 'setBrainSyncToken', token }, 'brain-sync-error');
+  if (ok) input.value = '';
+  await refreshState();
+}
+
+async function brainSyncNow(): Promise<void> {
+  const btn = $('brain-sync-now') as HTMLButtonElement;
+  btn.disabled = true;
+  btn.textContent = 'Syncing…';
+  try {
+    const reply = await send({ type: 'brainSyncNow' });
+    if (reply.type === 'brainSyncResult') {
+      showFieldError('brain-sync-error', reply.ok ? null : reply.message);
+      $('brain-sync-status').textContent = reply.ok ? `Synced just now — ${reply.message}` : 'Sync failed';
+    } else if (reply.type === 'error') {
+      showFieldError('brain-sync-error', reply.message);
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sync now';
+    await refreshState();
+  }
 }
 
 function paintTrace(recording: boolean, eventCount: number, pending: { events: number; startUrl: string } | null): void {
@@ -937,6 +984,7 @@ async function loadGraph(resetView: boolean): Promise<void> {
   } else {
     setGraphViewBox(graphViewBox);
   }
+  paintGraphNodeDetail(); // re-point the detail strip at the fresh node objects
 }
 
 function zoomGraph(canvas: HTMLElement, clientX: number, clientY: number, factor: number): void {
@@ -985,8 +1033,54 @@ const graphHandlers: GraphHandlers = {
   },
 };
 
+/** The selected node's company-sync controls under the canvas. */
+function paintGraphNodeDetail(): void {
+  const detail = $('graph-node-detail');
+  const node = selectedGraphNodeId ? latestGraphNodes.find((n) => n.id === selectedGraphNodeId) : null;
+  if (!node) {
+    selectedGraphNodeId = null;
+    detail.classList.add('hidden');
+    return;
+  }
+  detail.classList.remove('hidden');
+  $('graph-node-title').textContent = node.title;
+  const priv = $('graph-node-private') as HTMLButtonElement;
+  const shared = $('graph-node-shared') as HTMLButtonElement;
+  priv.textContent = node.private ? '🔒 Private' : 'Make private';
+  priv.title = node.private
+    ? 'Private: never synced to the company brain — click to allow syncing again'
+    : 'Keep this node on your machine — it will never be synced to the company brain';
+  shared.textContent = node.shared ? '★ Shared' : 'Share with company';
+  shared.title = node.shared
+    ? 'Shown inside the company brain view — click to stop sharing'
+    : 'Also show this node inside the company brain view (not just your own)';
+  shared.classList.toggle('hidden', node.private === true); // a private node can't be shared
+}
+
+async function toggleGraphNodeFlag(flag: 'private' | 'shared'): Promise<void> {
+  const node = selectedGraphNodeId ? latestGraphNodes.find((n) => n.id === selectedGraphNodeId) : null;
+  if (!node) return;
+  const next = !(node[flag] ?? false);
+  const msg: PopupToSw =
+    flag === 'private'
+      ? { type: 'setNodeFlags', id: node.id, private: next, ...(next ? { shared: false } : {}) }
+      : { type: 'setNodeFlags', id: node.id, shared: next };
+  const reply = await send(msg);
+  if (reply.type === 'error') {
+    showFieldError('graph-error', reply.message);
+    return;
+  }
+  showFieldError('graph-error', null);
+  // Update the local copy now; the next poll's rebuild confirms it.
+  node[flag] = next;
+  if (flag === 'private' && next) node.shared = false;
+  paintGraphNodeDetail();
+}
+
 function wireGraphCanvas(): void {
   const canvas = $('graph-canvas');
+  $('graph-node-private').addEventListener('click', () => void toggleGraphNodeFlag('private'));
+  $('graph-node-shared').addEventListener('click', () => void toggleGraphNodeFlag('shared'));
 
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -1027,6 +1121,11 @@ function wireGraphCanvas(): void {
           node.y = pos.y;
         }
         void send({ type: 'moveGraphNode', id: drag.id, x: pos.x, y: pos.y });
+      } else {
+        // A press-and-release without movement is a SELECT — show the node's
+        // company-sync controls (private / shared) under the canvas.
+        selectedGraphNodeId = selectedGraphNodeId === drag.id ? null : drag.id;
+        paintGraphNodeDetail();
       }
       return;
     }
@@ -1150,6 +1249,24 @@ function wire(): void {
   });
   $('crm-sync-clear').addEventListener('click', () => {
     void dispatchSetup({ type: 'clearCrmSync' }, 'crm-sync-error').then(() => refreshState());
+  });
+
+  // Settings tab — company brain sync (local brain → nff-admin).
+  $('brain-sync-save').addEventListener('click', () => void saveBrainSyncToken());
+  $('brain-sync-token').addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') void saveBrainSyncToken();
+  });
+  $('brain-sync-toggle').addEventListener('click', () => {
+    void dispatchSetup({ type: 'setBrainSyncEnabled', enabled: !(latestState?.brainSyncEnabled ?? false) }, 'brain-sync-error')
+      .then(() => refreshState());
+  });
+  $('brain-sync-auto').addEventListener('click', () => {
+    void dispatchSetup({ type: 'setBrainSyncAuto', auto: !(latestState?.brainSyncAuto ?? false) }, 'brain-sync-error')
+      .then(() => refreshState());
+  });
+  $('brain-sync-now').addEventListener('click', () => void brainSyncNow());
+  $('brain-sync-clear').addEventListener('click', () => {
+    void dispatchSetup({ type: 'clearBrainSync' }, 'brain-sync-error').then(() => refreshState());
   });
 
   // Brain tab — Claude-Code-style modes. The act Stop/Clear/grant controls drive

@@ -31,6 +31,7 @@ export const KEYS = {
   recent: 'nb.recent',
   recorders: 'nb.recorders',
   recorderSeen: 'nb.recorderSeen',
+  invitePending: 'nb.invitePending',
   agentAdapters: 'nb.agentAdapters',
   agentActionAllow: 'nb.agentActionAllow',
   navigateHostAllow: 'nb.navigateHostAllow',
@@ -66,6 +67,8 @@ export const KEYS = {
   codeProject: 'nb.codeProject',
   // CRM sync: LinkedIn invite → nff-admin contact ingest (src/crmSync.ts).
   crmSync: 'nb.crmSync',
+  // Company brain sync: push the local brain to nff-admin (src/companySync.ts).
+  brainSync: 'nb.brainSync',
 } as const;
 
 // ── pairing ──────────────────────────────────────────────────────────────────
@@ -240,6 +243,22 @@ export interface CrmSyncSettings {
    */
   secret: string;
   addedAt: string;
+}
+
+// ── company brain sync (nff-admin employee ingest) ──────────────────────────
+
+export interface BrainSyncSettings {
+  enabled: boolean;
+  /** Re-sync automatically ~1 min after a brain change (chrome.alarms). */
+  auto: boolean;
+  /**
+   * The per-employee sync token minted in nff-admin's Users tab. Same posture
+   * as CrmSyncSettings.secret: NEVER crosses the panel channel outward —
+   * inbound once via setBrainSyncToken; PublicState carries booleans only.
+   */
+  token: string;
+  addedAt: string;
+  lastSyncedAt: string | null;
 }
 
 // ── the local brain (BYOK retrieval fuel) ───────────────────────────────────

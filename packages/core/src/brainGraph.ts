@@ -65,3 +65,20 @@ export function mergeBrains(project: BrainFile | null, global: BrainFile | null)
   }
   return { nodes, edges, sourceById };
 }
+
+/**
+ * What an employee's brain looks like to the COMPANY: every node except the
+ * ones marked `private`, edges only between survivors (so a dropped edge can
+ * never leak a private node's id). The single privacy filter — both the
+ * Chrome and VS Code extensions build their /api/tables/brain/ingest POST
+ * body through this, so the rule can't drift between them.
+ */
+export function buildCompanySyncPayload(brain: {
+  nodes: BrainNode[];
+  edges: BrainEdge[];
+}): { nodes: BrainNode[]; edges: BrainEdge[] } {
+  const nodes = brain.nodes.filter((n) => !n.private);
+  const ids = new Set(nodes.map((n) => n.id));
+  const edges = brain.edges.filter((e) => ids.has(e.from) && ids.has(e.to));
+  return { nodes, edges };
+}

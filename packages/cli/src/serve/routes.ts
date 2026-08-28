@@ -308,6 +308,9 @@ const graph: Handler = (_req, res, ctx) => {
         y: n.y,
         size: n.size,
         color: n.color,
+        // Company-sync controls — the panel's Brain tab renders + toggles them.
+        private: n.private === true,
+        shared: n.shared === true,
       })),
       edges: merged.edges.map((e) => ({ from: e.from, to: e.to, strength: e.strength })),
     },
@@ -373,6 +376,38 @@ const layout: Handler = async (req, res, ctx) => {
     node.laidOut = true;
   });
   sendJson(res, 200, { ok: true, moved: true }, ctx.cors);
+};
+
+/**
+ * POST /v1/flags — the employee's company-sync controls on one node:
+ * `private` (never leaves this machine — buildCompanySyncPayload filters it
+ * out of every push to nff-admin) and `shared` (also shown inside the COMPANY
+ * brain view over there). Same file-routing discipline as layout above.
+ */
+const nodeFlags: Handler = async (req, res, ctx) => {
+  const body = (await readJsonBody(req, CLIP_BODY_MAX)) as { id?: unknown; private?: unknown; shared?: unknown };
+  const id = typeof body?.id === 'string' ? body.id.slice(0, LAYOUT_ID_MAX) : '';
+  const priv = typeof body?.private === 'boolean' ? body.private : undefined;
+  const shared = typeof body?.shared === 'boolean' ? body.shared : undefined;
+  if (!id || (priv === undefined && shared === undefined)) {
+    sendError(res, 400, 'bad_request', 'flags needs a node id and private and/or shared booleans', ctx.cors);
+    return;
+  }
+
+  const source = ctx.state.mergedBrain().sourceById.get(id);
+  if (!source) {
+    sendJson(res, 200, { ok: true, updated: false }, ctx.cors);
+    return;
+  }
+  const brainPath =
+    source === 'project' ? ctx.state.opts.projectBrainPath : ctx.state.opts.globalBrainPath;
+  mutateBrain(brainPath, (brain) => {
+    const node = brain.nodes.find((n) => n.id === id);
+    if (!node) return;
+    if (priv !== undefined) node.private = priv || undefined; // absent = default, keeps files clean
+    if (shared !== undefined) node.shared = shared || undefined;
+  });
+  sendJson(res, 200, { ok: true, updated: true }, ctx.cors);
 };
 
 /**
@@ -532,6 +567,7 @@ export const ROUTES: Record<string, Route> = {
   '/v1/graph': { method: 'GET', auth: 'client', origin: 'paired', handler: graph },
   '/v1/export': { method: 'GET', auth: 'client', origin: 'paired', handler: exportBrain },
   '/v1/layout': { method: 'POST', auth: 'client', origin: 'paired', handler: layout },
+  '/v1/flags': { method: 'POST', auth: 'client', origin: 'paired', handler: nodeFlags },
   '/v1/search': { method: 'GET', auth: 'client', origin: 'paired', handler: search },
   '/v1/admin/pair-window': { method: 'POST', auth: 'admin', origin: 'absent', handler: adminPairWindow },
   '/v1/admin/clients': { method: 'GET', auth: 'admin', origin: 'absent', handler: adminClients },

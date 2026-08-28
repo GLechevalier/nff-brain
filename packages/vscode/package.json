@@ -47,6 +47,14 @@
       {
         "command": "nffBrain.layout",
         "title": "nff-brain: Re-arrange Graph"
+      },
+      {
+        "command": "nffBrain.syncToCompany",
+        "title": "nff-brain: Sync Brain to Company"
+      },
+      {
+        "command": "nffBrain.setCompanySyncToken",
+        "title": "nff-brain: Set Company Sync Token…"
       }
     ],
     "viewsContainers": {
@@ -85,6 +93,16 @@
           "type": "boolean",
           "default": true,
           "description": "Show a status-bar message whenever nff-brain switches the session model."
+        },
+        "nffBrain.companySync.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Sync this brain to the company's nff-admin brain automatically (~45s after a change) and via `nff-brain: Sync Brain to Company`. Requires a sync token — run `nff-brain: Set Company Sync Token…` (an admin mints it in nff-admin's Users tab). Nodes marked private are never sent."
+        },
+        "nffBrain.companySync.url": {
+          "type": "string",
+          "default": "https://admin.nanoforgeflow.com/api/tables/brain/ingest",
+          "description": "The nff-admin brain ingest endpoint the sync posts to."
         },
         "nffBrain.semanticSearch": {
           "type": "string",

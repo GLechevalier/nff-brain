@@ -151,6 +151,13 @@ export interface BrainNode {
   // surfaces in several sessions). Absent on nodes written before/outside import.
   confidence?: number; // 0..1
   importedFrom?: string[]; // sessionIds this node was distilled from (≤5)
+  // Company-sync flags (the employee's controls, set in the extensions).
+  // `private` = never leaves this machine: buildCompanySyncPayload drops the
+  // node (and its edges) before any push to nff-admin. `shared` = additionally
+  // shown inside the COMPANY brain view over there, not just this employee's.
+  // Absent = synced but not shared, the default.
+  private?: boolean;
+  shared?: boolean;
 }
 
 export interface BrainEdge {

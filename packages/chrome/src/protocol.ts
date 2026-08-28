@@ -206,6 +206,9 @@ export interface GraphNode {
   y: number;
   size: number;
   color: string;
+  /** Company-sync controls (see companySync.ts) — absent on older servers. */
+  private?: boolean;
+  shared?: boolean;
 }
 
 export interface GraphEdge {
@@ -262,6 +265,17 @@ export interface LayoutResponse {
 
 export function isLayoutResponse(v: unknown): v is LayoutResponse {
   return isObj(v) && v.ok === true && typeof v.moved === 'boolean';
+}
+
+/** POST /v1/flags — per-node company-sync controls (private / shared). */
+export interface FlagsResponse {
+  ok: true;
+  /** false only when the id no longer exists on the server. */
+  updated: boolean;
+}
+
+export function isFlagsResponse(v: unknown): v is FlagsResponse {
+  return isObj(v) && v.ok === true && typeof v.updated === 'boolean';
 }
 
 export function isClipsMapResponse(v: unknown): v is ClipsMapResponse {
@@ -676,6 +690,16 @@ export type PopupToSw =
   | { type: 'setCrmSyncSecret'; secret: string }
   | { type: 'setCrmSyncEnabled'; enabled: boolean }
   | { type: 'clearCrmSync' }
+  // Company brain sync (Settings). setBrainSyncToken is the ONE message that
+  // carries the per-employee token inbound; nothing ever carries it back out.
+  | { type: 'setBrainSyncToken'; token: string }
+  | { type: 'setBrainSyncEnabled'; enabled: boolean }
+  | { type: 'setBrainSyncAuto'; auto: boolean }
+  | { type: 'clearBrainSync' }
+  | { type: 'brainSyncNow' }
+  // Per-node company-sync controls (Graph tab detail strip). Routed to the
+  // paired server's brain when paired, else the local BYOK brain.
+  | { type: 'setNodeFlags'; id: string; private?: boolean; shared?: boolean }
   // Explicit brain-mode preference (Settings segmented control) — which
   // backend drives LLM work when both are configured. See mode.ts.
   | { type: 'setBrainMode'; mode: BrainModePref }
@@ -759,6 +783,11 @@ export interface PublicState {
   // CRM sync — booleans only, same total-omission posture as the secrets above.
   crmSyncConfigured: boolean;
   crmSyncEnabled: boolean;
+  // Company brain sync — booleans + a timestamp; the token never crosses back.
+  brainSyncConfigured: boolean;
+  brainSyncEnabled: boolean;
+  brainSyncAuto: boolean;
+  brainSyncLastAt: string | null;
   providerModels: ModelSlots | null;
   providerLastTest: ProviderTestResult | null;
   /** RESOLVED brain mode — which backend drives LLM work right now (mode.ts).
@@ -790,6 +819,7 @@ export type SwToPopup =
   | { type: 'codeStatus'; project: CodeProjectMeta | null; permission: 'granted' | 'prompt' | 'denied' | 'missing' }
   | { type: 'traceStatus'; recording: boolean; eventCount: number; pending: { id: string; events: number; startUrl: string; title?: string } | null }
   | { type: 'workflows'; items: WorkflowSummary[] }
-  | { type: 'brainImported'; imported: number; total: number };
+  | { type: 'brainImported'; imported: number; total: number }
+  | { type: 'brainSyncResult'; ok: boolean; message: string };
 
 export type SwToPanel = SwToPopup;

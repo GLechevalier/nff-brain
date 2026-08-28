@@ -750,6 +750,34 @@ export function paintSettings(state: PublicState): void {
   }
 
   paintCrmSync(state);
+  paintBrainSync(state);
+}
+
+/** Company brain sync block — booleans only; the token input is NEVER painted. */
+function paintBrainSync(state: PublicState): void {
+  const status = $('brain-sync-status');
+  const toggle = $('brain-sync-toggle') as HTMLButtonElement;
+  const auto = $('brain-sync-auto') as HTMLButtonElement;
+  const now = $('brain-sync-now') as HTMLButtonElement;
+  const clear = $('brain-sync-clear') as HTMLButtonElement;
+  if (state.brainSyncConfigured) {
+    const last = state.brainSyncLastAt ? ` · last synced ${new Date(state.brainSyncLastAt).toLocaleString()}` : ' · never synced';
+    status.textContent = state.brainSyncEnabled
+      ? `On${state.brainSyncAuto ? ' (auto)' : ''}${last}`
+      : 'Off';
+    toggle.textContent = state.brainSyncEnabled ? 'Disable' : 'Enable';
+    auto.textContent = state.brainSyncAuto ? 'Auto: on' : 'Auto: off';
+    toggle.classList.remove('hidden');
+    auto.classList.remove('hidden');
+    now.classList.toggle('hidden', !state.brainSyncEnabled);
+    clear.classList.remove('hidden');
+  } else {
+    status.textContent = 'Not configured';
+    toggle.classList.add('hidden');
+    auto.classList.add('hidden');
+    now.classList.add('hidden');
+    clear.classList.add('hidden');
+  }
 }
 
 /** CRM sync block — booleans only; the secret input is NEVER painted. */

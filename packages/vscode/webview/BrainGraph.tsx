@@ -550,6 +550,21 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
               >
                 {CATEGORY_ICON[node.category] ?? '·'}
               </text>
+              {/* Company-sync badge: 🔒 private (never synced) / ★ shared
+                  (shown in the company brain too). Corner glyph, no layout cost. */}
+              {(node.private || node.shared) && (
+                <text
+                  x={p.x + node.size}
+                  y={p.y - node.size + 3}
+                  textAnchor="middle"
+                  fontSize={9}
+                  fill={INK}
+                  fontFamily="var(--nb-mono)"
+                  style={{ pointerEvents: 'none', userSelect: 'none' }}
+                >
+                  {node.private ? '🔒' : '★'}
+                </text>
+              )}
               <text
                 x={p.x}
                 y={p.y + node.size + 13}

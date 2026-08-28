@@ -32,10 +32,12 @@ export async function maybeSyncCrmContact(msg: RecorderEventMsg): Promise<void> 
 
   // Profile enrichment (net path scrapes the visible top card — recorder.ts):
   // role/company for the contact columns; headline+location live in the first
-  // interaction note, since crm_contacts has no location column. The invite
-  // note (click path) wins the note slot when present.
+  // interaction note, since crm_contacts has no location column. An invite
+  // note leads the note slot, with the profile snapshot kept beneath it — the
+  // subtitle is recorded either way.
   const f = msg.fields;
   const snapshot = [f.headline, f.location].filter(Boolean).join(' · ');
+  const noteBody = [f.note, snapshot].filter(Boolean).join('\n');
   const id = crypto.randomUUID();
   try {
     const res = await fetch(CRM_INGEST_URL, {
@@ -47,7 +49,7 @@ export async function maybeSyncCrmContact(msg: RecorderEventMsg): Promise<void> 
         role: f.role || f.headline || undefined,
         company_name: f.company || undefined,
         how_we_met: 'LinkedIn connection request',
-        note_body: f.note || snapshot || undefined,
+        note_body: noteBody || undefined,
         note_type: 'note',
         note_date: msg.at,
       }),

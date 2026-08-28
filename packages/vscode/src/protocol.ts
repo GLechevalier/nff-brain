@@ -21,6 +21,10 @@ export interface ViewNode {
   recallCount: number;
   lastRecalledAt?: string; // ISO — seeds the glow when a panel opens late
   confidence?: number; // 0..1, present on imported nodes
+  /** Company-sync controls — private never leaves this machine, shared is
+   *  additionally shown inside the COMPANY brain view. Absent = default. */
+  private?: boolean;
+  shared?: boolean;
   source: NodeSource;
   relatedIds: string[];
 }
@@ -84,4 +88,6 @@ export type WebToExt =
   // A node the reader dragged and dropped. Unlike `layout`, always overwrites —
   // even a node that already has a laidOut position — since this is explicit
   // user intent, not an auto-settle for a node that had none.
-  | { type: 'move'; positions: Array<{ id: string; x: number; y: number }> };
+  | { type: 'move'; positions: Array<{ id: string; x: number; y: number }> }
+  // Company-sync controls on one node (the detail card's Private/Shared toggles).
+  | { type: 'setNodeFlags'; id: string; private?: boolean; shared?: boolean };

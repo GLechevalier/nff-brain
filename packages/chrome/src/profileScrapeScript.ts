@@ -19,7 +19,14 @@ export interface ProfileTopCard {
   location: string;
 }
 
-export function scrapeProfileTopCard(): ProfileTopCard {
+/**
+ * `inviteeSlug` (optional): when the invite went to someone OTHER than the
+ * page's own profile (browsemap sidebar / search / My Network — identity came
+ * from the Connect button's preload href), the page's top card names the wrong
+ * person. Given a slug, Path 1 and the name read are skipped entirely and only
+ * the voyager-blob matcher runs, keyed to the INVITEE's publicIdentifier.
+ */
+export function scrapeProfileTopCard(inviteeSlug?: string): ProfileTopCard {
   // Shadow-DOM-aware query: LinkedIn's shell renders inside open shadow roots
   // (possibly nested), where document.querySelector can't reach. The walk
   // descends into every open root it finds.
@@ -45,12 +52,18 @@ export function scrapeProfileTopCard(): ProfileTopCard {
   };
 
   // Path 1 — top-card DOM shapes, most-specific first. Class names rot
-  // without notice; honest empties are the contract.
-  var name = text('main h1') || text('h1');
-  var headline = text('main .text-body-medium.break-words') || text('main [data-generated-suggestion-target]');
-  var location =
-    text('main .text-body-small.inline.t-black--light.break-words') ||
-    text('main .pv-text-details__left-panel--full-width .text-body-small');
+  // without notice; honest empties are the contract. Skipped entirely in
+  // invitee-slug mode: the top card is the page's person, not the invitee.
+  var name = '';
+  var headline = '';
+  var location = '';
+  if (!inviteeSlug) {
+    name = text('main h1') || text('h1');
+    headline = text('main .text-body-medium.break-words') || text('main [data-generated-suggestion-target]');
+    location =
+      text('main .text-body-small.inline.t-black--light.break-words') ||
+      text('main .pv-text-details__left-panel--full-width .text-body-small');
+  }
 
   // Path 2 — LinkedIn's own embedded data: the initial HTML carries voyager
   // JSON in <code> blobs (light DOM, locale-independent, survives shell
@@ -58,8 +71,11 @@ export function scrapeProfileTopCard(): ProfileTopCard {
   // /in/<slug> and read its headline / geoLocationName. Never guesses: slug
   // mismatch = no result.
   if (!headline || !location) {
-    var slugMatch = /\/in\/([^/?#]+)/.exec(location_pathname());
-    var slug = slugMatch ? decodeURIComponent(slugMatch[1]) : '';
+    var slug = inviteeSlug || '';
+    if (!slug) {
+      var slugMatch = /\/in\/([^/?#]+)/.exec(location_pathname());
+      slug = slugMatch ? decodeURIComponent(slugMatch[1]) : '';
+    }
     if (slug) {
       var blobs = document.querySelectorAll('code');
       for (var b = 0; b < blobs.length && (!headline || !location); b++) {

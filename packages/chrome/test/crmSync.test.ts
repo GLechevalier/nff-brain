@@ -110,14 +110,14 @@ describe('maybeSyncCrmContact', () => {
     });
   });
 
-  it('an explicit invite note wins the note slot over the profile snapshot', async () => {
+  it('an explicit invite note leads the note slot, with the profile snapshot kept beneath', async () => {
     const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({ id: 'c1', created: true }) }));
     vi.stubGlobal('fetch', fetchSpy);
     getCrmSync.mockResolvedValue(cfg);
     await maybeSyncCrmContact(invite({ name: 'Ada', note: 'hello!', headline: 'Engineer', location: 'Paris' }));
     const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
-    expect(body.note_body).toBe('hello!');
+    expect(body.note_body).toBe('hello!\nEngineer · Paris'); // subtitle recorded even alongside a note
     expect(body.role).toBe('Engineer'); // headline fallback when no role field
   });
 

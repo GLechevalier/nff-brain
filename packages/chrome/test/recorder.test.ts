@@ -1,13 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { classifyGithubAction } from '../content/githubClassify.js';
-import { canonicalProfileUrl, inviteeFromText, isSendInviteLabel } from '../content/linkedinClassify.js';
+import {
+  canonicalProfileUrl,
+  inviteeFromText,
+  isSendInviteLabel,
+  vanityFromPreloadHref,
+} from '../content/linkedinClassify.js';
 import {
   formatRecorderClip,
   pushRecorderSeen,
   recorderSeenRecently,
   validateRecorderEvent,
 } from '../src/recorderFormat.js';
-import { classifyInviteRequest, dayBucket, nameFromTabTitle } from '../src/inviteNet.js';
+import {
+  classifyInviteRequest,
+  dayBucket,
+  nameFromTabTitle,
+  PENDING_INVITE_MAX,
+  PENDING_INVITE_TTL_MS,
+  pushPendingInvite,
+  takePendingInvite,
+  type PendingInvite,
+} from '../src/inviteNet.js';
 import { ADAPTERS, adapterById } from '../src/recorderRegistry.js';
 import { RECORDER_SEEN_MAX, RECORDER_SEEN_TTL_MS } from '../src/recorderTypes.js';
 import type { RecorderSeenEntry } from '../src/recorderTypes.js';
@@ -123,6 +137,22 @@ describe('linkedin classifier (pure)', () => {
     expect(inviteeFromText('Manage your network')).toBe('');
   });
 
+  it('extracts the invitee from Connect-button aria-labels (en + fr)', () => {
+    expect(inviteeFromText('Invite Myron Sydorov to join your network')).toBe('Myron Sydorov');
+    expect(inviteeFromText('Inviter Alexander Fritsch à rejoindre votre réseau')).toBe('Alexander Fritsch');
+  });
+
+  it('pulls the invitee slug from a Connect button preload href and nothing else', () => {
+    expect(vanityFromPreloadHref('https://www.linkedin.com/preload/custom-invite/?vanityName=myron-sydorov-271a693a8')).toBe(
+      'myron-sydorov-271a693a8',
+    );
+    expect(vanityFromPreloadHref('https://www.linkedin.com/preload/custom-invite/?trk=x&vanityName=ada%2Dl')).toBe('ada-l');
+    expect(vanityFromPreloadHref('https://www.linkedin.com/preload/custom-invite/?other=1')).toBe('');
+    expect(vanityFromPreloadHref('https://evil.example/preload/custom-invite/?vanityName=ada')).toBe('');
+    expect(vanityFromPreloadHref('https://www.linkedin.com/in/ada')).toBe('');
+    expect(vanityFromPreloadHref('not a url')).toBe('');
+  });
+
   it('canonicalizes profile URLs and refuses everything else', () => {
     expect(canonicalProfileUrl('https://www.linkedin.com/in/ada-lovelace/')).toBe(
       'https://www.linkedin.com/in/ada-lovelace',
@@ -177,6 +207,63 @@ describe('invite network classifier (pure — locale-independent detection)', ()
 
   it('buckets by day exactly like the content-script emitter (shared dedupe key)', () => {
     expect(dayBucket(new Date('2026-08-27T23:59:00Z'))).toBe('2026-08-27');
+  });
+});
+
+describe('pending invite correlation (pure — click identity → net confirmation)', () => {
+  const t0 = 1_000_000;
+  const mk = (tabId: number, slug: string, atMs: number, extra: Partial<PendingInvite> = {}): PendingInvite => ({
+    tabId,
+    name: `Name ${slug}`,
+    linkedin: `https://www.linkedin.com/in/${slug}`,
+    slug,
+    note: '',
+    atMs,
+    ...extra,
+  });
+
+  it('push TTL-filters and caps', () => {
+    let list = pushPendingInvite([], mk(1, 'stale', t0), t0);
+    list = pushPendingInvite(list, mk(1, 'fresh', t0 + PENDING_INVITE_TTL_MS + 1), t0 + PENDING_INVITE_TTL_MS + 1);
+    expect(list.map((p) => p.slug)).toEqual(['fresh']);
+    for (let i = 0; i < PENDING_INVITE_MAX + 10; i++) list = pushPendingInvite(list, mk(1, `s${i}`, t0), t0);
+    expect(list.length).toBeLessThanOrEqual(PENDING_INVITE_MAX);
+  });
+
+  it('take = newest fresh entry for the tab, clearing the whole tab queue', () => {
+    // Cancelled-modal scenario: an orphan older click (A) must NOT be handed
+    // to the invite that a later click (B) actually caused.
+    const list = [mk(1, 'a-orphan', t0), mk(1, 'b-real', t0 + 500), mk(2, 'other-tab', t0 + 600)];
+    const { entry, rest } = takePendingInvite(list, 1, t0 + 1000);
+    expect(entry?.slug).toBe('b-real');
+    expect(rest.map((p) => p.slug)).toEqual(['other-tab']); // tab 1 fully cleared, tab 2 untouched
+  });
+
+  it('take skips stale entries and misses cleanly', () => {
+    const list = [mk(1, 'old', t0)];
+    expect(takePendingInvite(list, 1, t0 + PENDING_INVITE_TTL_MS + 1).entry).toBeNull();
+    expect(takePendingInvite(list, 99, t0 + 1).entry).toBeNull();
+  });
+
+  it('take MERGES a Connect click with the modal-Send click that follows it', () => {
+    // Connect-anchor click knows the invitee (slug/linkedin/name); the later
+    // modal-Send click knows the typed note (and only a dialog-derived
+    // linkedin, which must not displace the slug-derived one).
+    const list = [
+      mk(1, 'ada-l', t0),
+      mk(1, '', t0 + 500, { name: 'Ada Lovelace', linkedin: 'https://www.linkedin.com/in/page-owner', note: 'hi Ada!' }),
+    ];
+    const { entry } = takePendingInvite(list, 1, t0 + 1000);
+    expect(entry?.slug).toBe('ada-l'); // slug survives the newer slugless entry
+    expect(entry?.name).toBe('Ada Lovelace'); // newest non-empty name wins
+    expect(entry?.note).toBe('hi Ada!');
+  });
+
+  it('a modal-Send-only entry (no slug) merges to a note-carrying, identity-free record', () => {
+    const list = [mk(2, '', t0, { name: 'Grace', linkedin: '', note: 'bonjour' })];
+    const { entry } = takePendingInvite(list, 2, t0 + 1);
+    expect(entry?.slug).toBe('');
+    expect(entry?.note).toBe('bonjour');
   });
 });
 

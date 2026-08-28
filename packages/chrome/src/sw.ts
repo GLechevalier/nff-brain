@@ -68,6 +68,7 @@ import {
   getBrain,
   getBrainModePref,
   getCapture,
+  getBrainSync,
   getCrmSync,
   getHealth,
   getPairing,
@@ -76,6 +77,7 @@ import {
   setAllowlist,
   setBrainModePref,
   setCapture,
+  setBrainSync,
   setCrmSync,
   setProviderSettings,
 } from './storage.js';
@@ -85,7 +87,8 @@ import { byokChatAsk } from './byokChat.js';
 import { listLocalWorkflows, syncWorkflowsFromServer } from './workflowStore.js';
 import { distillPendingTrace } from './standaloneTraceDistill.js';
 import { DRAIN_ALARM, drainStandaloneClips, ensureDrainAlarm } from './standaloneDrain.js';
-import { mergeImportedBrain } from './brainStore.js';
+import { mergeImportedBrain, mutateLocalBrain, readLocalBrain } from './brainStore.js';
+import { setNodeFlags as setNodeFlagsOnServer } from './client.js';
 import { testProviderKey } from './providerClient.js';
 import { answerPendingGrant, endActionRun, setCodeAutoApprove, startActionRun, stopActionRun } from './actRun.js';
 import { clearProjectHandle, queryProjectPermission } from './fsHandles.js';
@@ -93,13 +96,14 @@ import { getCodeProject, setCodeProject } from './storage.js';
 import { attentionHide, cursorHide } from './actEngine.js';
 import { cancelTraceRecording, onTraceEvent, startTraceRecording, stopTraceRecording } from './traceCapture.js';
 import { distillPairedTrace } from './pairedTraceDistill.js';
+import { syncBrainToCompany } from './companySync.js';
 import { getActHostAllow, getActRun, getTraceActive, getTracePending, setActHostAllow } from './storage.js';
 import { mutateActRun } from './actStore.js';
 import { PROVIDERS } from '@nff-brain/core/provider';
 import type { PopupToSw, PublicState, SwToPopup } from './protocol.js';
 
 async function publicState(): Promise<PublicState> {
-  const [pairing, health, capture, allowlist, activity, provider, legacyBrain, brainModePref, crmSync] = await Promise.all([
+  const [pairing, health, capture, allowlist, activity, provider, legacyBrain, brainModePref, crmSync, brainSync] = await Promise.all([
     getPairing(),
     getHealth(),
     getCapture(),
@@ -112,6 +116,7 @@ async function publicState(): Promise<PublicState> {
     getBrain(),
     getBrainModePref(),
     getCrmSync(),
+    getBrainSync(),
   ]);
   const { nextProbeAtMs, ...rest } = health;
   void nextProbeAtMs; // internal scheduling; the UI has no use for it
@@ -131,6 +136,10 @@ async function publicState(): Promise<PublicState> {
     provider: provider?.provider ?? null,
     crmSyncConfigured: crmSync !== null,
     crmSyncEnabled: crmSync?.enabled === true,
+    brainSyncConfigured: brainSync !== null,
+    brainSyncEnabled: brainSync?.enabled === true,
+    brainSyncAuto: brainSync?.auto === true,
+    brainSyncLastAt: brainSync?.lastSyncedAt ?? null,
     providerModels: provider?.models ?? null,
     providerLastTest: provider?.lastTest ?? null,
     brainMode: deriveBrainMode(brainModePref, pairing !== null, provider !== null),
@@ -202,15 +211,46 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'getGraph': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
-      const { nodes: graphNodes, edges } = await getGraph(pairing.port, pairing.token);
-      return { type: 'graph', nodes: graphNodes, edges };
+      if (pairing) {
+        const { nodes: graphNodes, edges } = await getGraph(pairing.port, pairing.token);
+        return { type: 'graph', nodes: graphNodes, edges };
+      }
+      // Unpaired: the local BYOK brain — so its nodes stay browsable and the
+      // company-sync flags stay toggleable without a server.
+      const local = await readLocalBrain();
+      if (local.nodes.length === 0) return { type: 'error', message: 'not paired and no local brain yet' };
+      return {
+        type: 'graph',
+        nodes: local.nodes.map((n) => ({
+          id: n.id,
+          title: n.title,
+          category: n.category,
+          origin: n.origin,
+          x: n.x,
+          y: n.y,
+          size: n.size,
+          color: n.color,
+          private: n.private === true,
+          shared: n.shared === true,
+        })),
+        edges: local.edges.map((e) => ({ from: e.from, to: e.to, strength: e.strength })),
+      };
     }
 
     case 'moveGraphNode': {
       const pairing = await getPairing();
-      if (!pairing) return { type: 'error', message: 'not paired — pair from the Settings tab' };
-      const { moved } = await moveGraphNode(pairing.port, pairing.token, msg.id, msg.x, msg.y);
+      if (pairing) {
+        const { moved } = await moveGraphNode(pairing.port, pairing.token, msg.id, msg.x, msg.y);
+        return { type: 'layout', moved };
+      }
+      const moved = await mutateLocalBrain((brain) => {
+        const node = brain.nodes.find((n) => n.id === msg.id);
+        if (!node) return false;
+        node.x = msg.x;
+        node.y = msg.y;
+        node.laidOut = true;
+        return true;
+      });
       return { type: 'layout', moved };
     }
 
@@ -438,6 +478,75 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
         // ignore
       }
       break;
+
+    // Company brain sync (Settings). setBrainSyncToken is the ONE inbound path
+    // for the per-employee token; no reply ever carries it back out.
+    case 'setBrainSyncToken': {
+      const token = msg.token.trim();
+      if (!token) return { type: 'error', message: 'a sync token is required' };
+      const existing = await getBrainSync();
+      await setBrainSync({
+        enabled: true,
+        auto: existing?.auto ?? true,
+        token,
+        addedAt: new Date().toISOString(),
+        lastSyncedAt: existing?.lastSyncedAt ?? null,
+      });
+      break;
+    }
+
+    case 'setBrainSyncEnabled': {
+      const existing = await getBrainSync();
+      if (!existing) return { type: 'error', message: 'save the sync token first' };
+      await setBrainSync({ ...existing, enabled: msg.enabled });
+      break;
+    }
+
+    case 'setBrainSyncAuto': {
+      const existing = await getBrainSync();
+      if (!existing) return { type: 'error', message: 'save the sync token first' };
+      await setBrainSync({ ...existing, auto: msg.auto });
+      break;
+    }
+
+    case 'clearBrainSync':
+      await setBrainSync(null);
+      // The admin.nanoforgeflow.com origin grant is deliberately NOT removed:
+      // it is shared with the CRM sync, which may still be configured.
+      break;
+
+    case 'brainSyncNow': {
+      const result = await syncBrainToCompany();
+      return { type: 'brainSyncResult', ok: result.ok, message: result.message };
+    }
+
+    // Per-node company-sync flags. Written where the synced brain lives —
+    // the paired server's files when paired (companySync pushes its export),
+    // else the local BYOK brain.
+    case 'setNodeFlags': {
+      const flags: { private?: boolean; shared?: boolean } = {};
+      if (typeof msg.private === 'boolean') flags.private = msg.private;
+      if (typeof msg.shared === 'boolean') flags.shared = msg.shared;
+      if (flags.private === undefined && flags.shared === undefined) {
+        return { type: 'error', message: 'nothing to change' };
+      }
+      const pairing = await getPairing();
+      if (pairing) {
+        try {
+          await setNodeFlagsOnServer(pairing.port, pairing.token, msg.id, flags);
+        } catch (err) {
+          return { type: 'error', message: err instanceof Error ? err.message : 'could not reach the brain' };
+        }
+      } else {
+        await mutateLocalBrain((brain) => {
+          const node = brain.nodes.find((n) => n.id === msg.id);
+          if (!node) return;
+          if (flags.private !== undefined) node.private = flags.private || undefined;
+          if (flags.shared !== undefined) node.shared = flags.shared || undefined;
+        });
+      }
+      break;
+    }
 
     case 'setBrainMode':
       if (msg.mode !== 'paired' && msg.mode !== 'byok') return { type: 'error', message: 'unknown brain mode' };
@@ -667,6 +776,12 @@ async function onAlarm(alarm: chrome.alarms.Alarm): Promise<void> {
   }
   if (alarm.name === DRAIN_ALARM) {
     await drainStandaloneClips();
+    return;
+  }
+  // Auto company sync — the one-shot debounce armed by brainStore.ts after a
+  // local brain mutation. syncBrainToCompany() re-checks the toggles itself.
+  if (alarm.name === 'brainSync') {
+    await syncBrainToCompany();
   }
 }
 

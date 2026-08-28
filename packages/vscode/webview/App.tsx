@@ -145,6 +145,8 @@ export function App() {
     vscode.postMessage({ type: 'openNode', id }); // → native .md tab beside the graph
   }
 
+  const selectedNode = selectedId ? (nodes.find((n) => n.id === selectedId) ?? null) : null;
+
   function onSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Escape') {
       setQuery('');
@@ -253,7 +255,7 @@ export function App() {
         </div>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
         <BrainGraph
           ref={graphRef}
           nodes={nodes}
@@ -275,6 +277,73 @@ export function App() {
             </div>
           }
         />
+        {selectedNode && (
+          // Company-sync controls for the selected node. `private` keeps it on
+          // this machine (excluded from every company sync — retroactively too,
+          // since sync is a full replace); `shared` additionally shows it inside
+          // the COMPANY brain view. Mutations round-trip through the host and
+          // the disk watcher, which also schedules the auto sync.
+          <div
+            style={{
+              position: 'absolute',
+              left: 8,
+              bottom: 8,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              background: 'var(--nb-paper)',
+              border: '1px solid var(--nb-ink)',
+              padding: '4px 8px',
+              fontFamily: 'var(--nb-mono)',
+            }}
+          >
+            <span
+              style={{
+                fontSize: 10,
+                color: 'var(--nb-muted)',
+                maxWidth: 180,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {selectedNode.title}
+            </span>
+            <button
+              className="nb-btn"
+              onClick={() =>
+                vscode.postMessage({
+                  type: 'setNodeFlags',
+                  id: selectedNode.id,
+                  private: !selectedNode.private,
+                  ...(selectedNode.private ? {} : { shared: false }), // a private node can't be shared
+                })
+              }
+              title={
+                selectedNode.private
+                  ? 'Private: never synced to the company brain — click to allow syncing again'
+                  : 'Keep this node on your machine — it will never be synced to the company brain'
+              }
+            >
+              {selectedNode.private ? '🔒 Private' : 'Make private'}
+            </button>
+            {!selectedNode.private && (
+              <button
+                className="nb-btn"
+                onClick={() =>
+                  vscode.postMessage({ type: 'setNodeFlags', id: selectedNode.id, shared: !selectedNode.shared })
+                }
+                title={
+                  selectedNode.shared
+                    ? 'Shown inside the company brain view — click to stop sharing'
+                    : 'Also show this node inside the company brain view (not just your own)'
+                }
+              >
+                {selectedNode.shared ? '★ Shared' : 'Share with company'}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

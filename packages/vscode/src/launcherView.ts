@@ -16,6 +16,8 @@ export interface LauncherStats {
   edgeCount: number;
   /** Tokens saved since this window opened — already part of the lifetime total. */
   sessionSaved: number;
+  /** Company sync: null = no token saved (row hidden), else last-synced ISO or '' (never). */
+  companySyncLastAt: string | null;
 }
 
 const TOOLTIP_ASSUMPTION =
@@ -42,7 +44,7 @@ export class BrainLauncherProvider implements vscode.TreeDataProvider<vscode.Tre
 
   getChildren(element?: vscode.TreeItem): vscode.TreeItem[] {
     if (element) return [];
-    const { nodes, edgeCount, sessionSaved } = this.stats();
+    const { nodes, edgeCount, sessionSaved, companySyncLastAt } = this.stats();
     if (nodes.length === 0) return []; // → viewsWelcome ("Open Brain" / init hint)
 
     const saved = brainSavings(nodes);
@@ -69,6 +71,15 @@ export class BrainLauncherProvider implements vscode.TreeDataProvider<vscode.Tre
         command: 'nffBrain.open',
       }),
     );
+    if (companySyncLastAt !== null) {
+      items.push(
+        item('Sync to company', 'cloud-upload', {
+          description: companySyncLastAt ? `last synced ${new Date(companySyncLastAt).toLocaleTimeString()}` : 'never synced',
+          tooltip: 'Push this brain to the company brain now (nodes marked private are never sent)',
+          command: 'nffBrain.syncToCompany',
+        }),
+      );
+    }
     return items;
   }
 }
