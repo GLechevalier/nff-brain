@@ -52,6 +52,18 @@ export function inviteeFromText(text: string): string {
  * a link. Regex on purpose (no URL parsing) — same bundlePurity posture as
  * canonicalProfileUrl above.
  */
+/**
+ * Is this element's componentkey LinkedIn's Connect button in its CONNECT
+ * state? Search-result cards render Connect as an <a> WITHOUT the preload
+ * href (its href is just the current page), but the componentkey
+ * "ConnectButtonstate:invitation:urn:li:member:<id>_connect" still marks it,
+ * locale-independently. The `_pending` state (click = withdraw) deliberately
+ * does NOT match — a withdraw click must never park invitee identity.
+ */
+export function isConnectComponentKey(key: string): boolean {
+  return /^ConnectButtonstate:invitation:.*_connect$/.test(key);
+}
+
 export function vanityFromPreloadHref(href: string): string {
   const m = /^https:\/\/(?:www\.)?linkedin\.com\/preload\/custom-invite\/\?(?:[^#]*&)?vanityName=([^&#]+)/i.exec(
     href.trim(),

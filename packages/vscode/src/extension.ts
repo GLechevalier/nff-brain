@@ -139,6 +139,13 @@ async function syncToCompany(manual: boolean): Promise<void> {
   const url = cfg.get<string>('companySync.url', 'https://admin.nanoforgeflow.com/api/tables/brain/ingest');
   const merged = loadMerged();
   const payload = buildCompanySyncPayload(merged);
+  // Empty push = full-replace wipe of the server copy. Never what was meant.
+  if (payload.nodes.length === 0) {
+    const why = merged.nodes.length === 0 ? 'this brain is empty' : 'every node is marked private';
+    logLine(`company sync skipped: ${why}`);
+    if (manual) void vscode.window.showWarningMessage(`nff-brain: nothing to sync — ${why}.`);
+    return;
+  }
   try {
     const res = await fetch(url, {
       method: 'POST',

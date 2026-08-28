@@ -49,6 +49,18 @@ export async function syncBrainToCompany(): Promise<{ ok: boolean; message: stri
   }
 
   const payload = buildCompanySyncPayload({ nodes, edges });
+  // An empty push is never what the user meant — and since ingest is a FULL
+  // REPLACE it would wipe a previously synced brain. Refuse instead of
+  // "succeeding" with 0 nodes and stamping a misleading last-synced time.
+  if (payload.nodes.length === 0) {
+    return {
+      ok: false,
+      message:
+        nodes.length === 0
+          ? 'nothing to sync — this brain is empty (pair with `nff-brain serve`, or capture some clips first)'
+          : 'nothing to sync — every node here is marked private',
+    };
+  }
   const id = crypto.randomUUID();
   try {
     const res = await fetch(BRAIN_INGEST_URL, {

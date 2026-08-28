@@ -3,6 +3,7 @@ import { classifyGithubAction } from '../content/githubClassify.js';
 import {
   canonicalProfileUrl,
   inviteeFromText,
+  isConnectComponentKey,
   isSendInviteLabel,
   vanityFromPreloadHref,
 } from '../content/linkedinClassify.js';
@@ -140,6 +141,14 @@ describe('linkedin classifier (pure)', () => {
   it('extracts the invitee from Connect-button aria-labels (en + fr)', () => {
     expect(inviteeFromText('Invite Myron Sydorov to join your network')).toBe('Myron Sydorov');
     expect(inviteeFromText('Inviter Alexander Fritsch à rejoindre votre réseau')).toBe('Alexander Fritsch');
+  });
+
+  it('recognizes the Connect componentkey state, never the pending/withdraw state', () => {
+    expect(isConnectComponentKey('ConnectButtonstate:invitation:urn:li:member:935794982_connect')).toBe(true);
+    // "En attente" — clicking WITHDRAWS the invite; must never park identity.
+    expect(isConnectComponentKey('ConnectButtonstate:invitation:urn:li:member:857110426_pending')).toBe(false);
+    expect(isConnectComponentKey('SearchResultsACoAADMWd5oB')).toBe(false);
+    expect(isConnectComponentKey('')).toBe(false);
   });
 
   it('pulls the invitee slug from a Connect button preload href and nothing else', () => {
