@@ -47,7 +47,7 @@ describe('rankNodes', () => {
 //     model ladder at DEFAULT_THRESHOLDS [0.35, 0.7]. Note below that a strong
 //     match lands at 0.70–0.78, so 0.35 is genuinely mid-scale. Rescale
 //     scoreNode and the ladder silently pins to one model.
-//   • mergePass.ts gates merge candidates on trigramSim >= 0.55 and > 0.1.
+//   • mergePass.ts gates merge candidates on trigramSim >= 0.36 and > 0.1.
 // Semantic similarity must never be blended in here — it lives in rank.ts on
 // its own scale. If you are changing these values, you are also changing
 // novelty thresholds and the merge gate. Do both deliberately.

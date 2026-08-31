@@ -129,7 +129,7 @@ export async function runMergePass(
   oneShot: OneShot,
   options: MergePassOptions = {},
 ): Promise<number> {
-  const threshold = options.threshold ?? 0.55;
+  const threshold = options.threshold ?? 0.36;
   const maxMerges = options.maxMerges ?? 2;
   const candidateLimit = options.candidateLimit ?? 8;
   if (maxMerges <= 0 || brain.nodes.length < 2) return 0;

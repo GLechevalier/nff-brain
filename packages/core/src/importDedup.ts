@@ -19,7 +19,7 @@ import { slug, type BrainFile, type BrainNode, type Category } from './types.js'
 import type { ImportKind, Proposal, SessionRef } from './importExtract.js';
 
 /** Same gate as runMergePass — two texts this close say the same thing. */
-export const CLUSTER_THRESHOLD = 0.55;
+export const CLUSTER_THRESHOLD = 0.36;
 /** Above this against an existing node, it is not new knowledge at all. */
 export const DUPLICATE_THRESHOLD = 0.72;
 

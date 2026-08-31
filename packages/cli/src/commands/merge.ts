@@ -31,7 +31,7 @@ export async function cmdMerge(argv: string[]): Promise<void> {
     if (snapshot.nodes.length >= 2) {
       console.log('checking for near-duplicates via claude -p…');
       deduped = await runMergePass(snapshot, makeOneShot({ model: flagStr(args, 'model') }), {
-        threshold: 0.55,
+        threshold: 0.36,
         maxMerges: 4,
         candidateLimit: 8,
       });
