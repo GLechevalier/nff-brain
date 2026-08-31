@@ -176,13 +176,20 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
     if (spineSel && !spine.nodes.some((n) => n.id === spineSel)) setSpineSel(null);
   }, [spine, spineSel]);
 
-  // Density clustering — once the brain has enough nodes to read as a
-  // hairball, same-category directly-connected groups collapse into one
-  // super-node. Derived here, never persisted, same as the spine above; the
-  // only difference is this one HIDES its members instead of drawing a
-  // boundary around them. buildDensityClusters is itself a no-op below its
-  // node-count threshold, so this is always safe to compute.
-  const densityClusters = useMemo(() => buildDensityClusters(nodes, edges), [nodes, edges]);
+  // Density clustering — where the graph is actually crowded on screen,
+  // same-category connected groups collapse into one super-node. Derived
+  // here, never persisted, same as the spine above; the difference is this
+  // one HIDES its members instead of drawing a boundary around them. Fed the
+  // SETTLED (laid-out) positions, not the raw disk x/y — a freshly-added
+  // node's on-disk position hasn't been placed by the layout yet, and
+  // "crowded" has to mean crowded where it actually renders.
+  const densityClusters = useMemo(() => {
+    const positioned = nodes.map((n) => {
+      const p = laidOut[n.id];
+      return p ? { ...n, x: p.x, y: p.y } : n;
+    });
+    return buildDensityClusters(positioned, edges);
+  }, [nodes, edges, laidOut]);
   const clusteredIds = useMemo(
     () => new Set(densityClusters.flatMap((c) => c.memberIds)),
     [densityClusters],

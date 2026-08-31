@@ -602,9 +602,12 @@ export function renderGraph(nodes: readonly GraphNode[], edges: readonly GraphEd
   const pad = 40;
   const box: GraphViewBox = { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
 
-  // Density clustering — once the brain has enough nodes to read as a
-  // hairball, same-category directly-connected groups collapse into one
-  // super-node. Derived here, never persisted; a no-op below the threshold.
+  // Density clustering — where the graph is actually crowded on screen,
+  // same-category connected groups collapse into one super-node. Derived
+  // here, never persisted. GraphNode's x/y are already the settled on-disk
+  // positions (this renderer never runs its own layout pass), so no extra
+  // position resolution is needed before calling in, unlike the vscode
+  // webview's own live layoutBrain() pass.
   const densityClusters = buildDensityClusters(nodes, edges);
   const clusteredIds = new Set(densityClusters.flatMap((c) => c.memberIds));
   const memberToCluster = new Map<string, string>();
