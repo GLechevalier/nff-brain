@@ -358,3 +358,37 @@ label.small { min-width: 84px; }
   font-size: 13px;
   font-family: inherit;
 }
+.graph-canvas .graph-node-cluster {
+  fill: #2a2a2a;
+  stroke: #eee;
+  stroke-width: 2;
+  cursor: pointer;
+}
+.graph-canvas .graph-cluster-label {
+  fill: #eee;
+  font-size: 7px;
+  font-weight: bold;
+}
+.graph-cluster-popover {
+  background: #181818;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  color: #eee;
+  font-size: 10px;
+  font-family: inherit;
+  padding: 6px;
+  max-height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+.graph-cluster-popover-summary {
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+.graph-cluster-popover-row {
+  cursor: pointer;
+  padding: 2px 0;
+}
+.graph-cluster-popover-row:hover {
+  color: #7ecbff;
+}

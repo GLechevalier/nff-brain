@@ -20,6 +20,7 @@ const ALLOWED = new Set([
   '@nff-brain/core/activity',
   '@nff-brain/core/layout',
   '@nff-brain/core/spine',
+  '@nff-brain/core/density',
 ]);
 
 function sources(dir: string): string[] {
@@ -66,6 +67,7 @@ describe('browser-safe core modules', () => {
     'rank.ts',
     'layout.ts',
     'spine.ts',
+    'density.ts',
     // Standalone-brain subpaths (Chrome extension): these plus their pure deps
     // must stay node-free or the extension bundle breaks at runtime.
     'types.ts',

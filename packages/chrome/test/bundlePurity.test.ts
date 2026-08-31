@@ -142,6 +142,9 @@ describe('source purity', () => {
       'workflow',
       'workflowDistill',
       'workflowApply',
+      // Density clustering — collapses same-category connected node groups
+      // once a brain crosses the density threshold (sidepanel Graph tab).
+      'density',
     ]);
     for (const { rel, text } of FILES) {
       for (const m of text.matchAll(/from ['"]@nff-brain\/core(?:\/([a-zA-Z]+))?['"]/g)) {

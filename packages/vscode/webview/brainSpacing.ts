@@ -16,3 +16,5 @@ export type {
 } from '@nff-brain/core/layout';
 export { buildSpine, resolveRoot, isSpineId } from '@nff-brain/core/spine';
 export type { SpineNode, SpineResult } from '@nff-brain/core/spine';
+export { buildDensityClusters, isDensityClusterId } from '@nff-brain/core/density';
+export type { DensityCluster } from '@nff-brain/core/density';

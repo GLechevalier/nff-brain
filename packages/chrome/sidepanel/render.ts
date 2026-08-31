@@ -8,6 +8,8 @@
 
 import { PROVIDERS, PROVIDER_CHOICES } from '@nff-brain/core/provider';
 import type { ProviderId } from '@nff-brain/core/provider';
+import { buildDensityClusters } from '@nff-brain/core/density';
+import type { DensityCluster } from '@nff-brain/core/density';
 import { relativeAge } from '../src/health.js';
 import { ruleLabel } from '../src/gate.js';
 import type {
@@ -536,6 +538,8 @@ export interface GraphViewBox { x: number; y: number; w: number; h: number; }
 export interface GraphHandlers {
   /** A node's circle was pressed — the caller decides whether that starts a drag. */
   onNodeMouseDown: (id: string, e: MouseEvent) => void;
+  /** A member row inside a density-cluster popover was clicked — select it, same as a normal node click. */
+  onSelectNode?: (id: string) => void;
 }
 
 function svgEl<K extends keyof SVGElementTagNameMap>(tag: K): SVGElementTagNameMap[K] {
@@ -555,6 +559,11 @@ interface GraphNodeEls {
   edgeEnds: Array<{ line: SVGLineElement; end: 'x1y1' | 'x2y2' }>;
 }
 const graphNodeEls = new Map<string, GraphNodeEls>();
+
+// Which density cluster's member popover is open, if any. Survives across a
+// poll-triggered renderGraph rebuild (module-level, not local to one call) so
+// the popover doesn't vanish out from under the reader every few seconds.
+let expandedClusterId: string | null = null;
 
 /**
  * Rebuilds the graph SVG from scratch and returns a fitted view box (node
@@ -593,13 +602,56 @@ export function renderGraph(nodes: readonly GraphNode[], edges: readonly GraphEd
   const pad = 40;
   const box: GraphViewBox = { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
 
+  // Density clustering — once the brain has enough nodes to read as a
+  // hairball, same-category directly-connected groups collapse into one
+  // super-node. Derived here, never persisted; a no-op below the threshold.
+  const densityClusters = buildDensityClusters(nodes, edges);
+  const clusteredIds = new Set(densityClusters.flatMap((c) => c.memberIds));
+  const memberToCluster = new Map<string, string>();
+  for (const c of densityClusters) for (const id of c.memberIds) memberToCluster.set(id, c.id);
+  // Cluster position = centroid of its members' existing coordinates.
+  const clusterPos = new Map<string, { x: number; y: number }>();
+  for (const c of densityClusters) {
+    let sx = 0, sy = 0, n = 0;
+    for (const id of c.memberIds) {
+      const p = byId.get(id);
+      if (!p) continue;
+      sx += p.x;
+      sy += p.y;
+      n++;
+    }
+    if (n > 0) clusterPos.set(c.id, { x: sx / n, y: sy / n });
+  }
+  const posOf = (id: string): { x: number; y: number } | undefined => byId.get(id) ?? clusterPos.get(id);
+  if (expandedClusterId && !densityClusters.some((c) => c.id === expandedClusterId)) expandedClusterId = null;
+
+  // Redirect any edge touching a clustered member to the cluster node
+  // instead, dedupe, and drop now-internal edges (both ends in one cluster).
+  const visibleEdges: readonly GraphEdge[] =
+    densityClusters.length === 0
+      ? edges
+      : (() => {
+          const seen = new Set<string>();
+          const out: GraphEdge[] = [];
+          for (const e of edges) {
+            const from = memberToCluster.get(e.from) ?? e.from;
+            const to = memberToCluster.get(e.to) ?? e.to;
+            if (from === to) continue;
+            const key = `${from}>${to}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push({ ...e, from, to });
+          }
+          return out;
+        })();
+
   // Lines whose endpoint touches a given node id — setNodePosition re-anchors
   // these during a drag so a node's connections never visually detach from it.
   const edgeEndsByNode = new Map<string, Array<{ line: SVGLineElement; end: 'x1y1' | 'x2y2' }>>();
   const edgeGroup = svgEl('g');
-  for (const e of edges) {
-    const from = byId.get(e.from);
-    const to = byId.get(e.to);
+  for (const e of visibleEdges) {
+    const from = posOf(e.from);
+    const to = posOf(e.to);
     if (!from || !to) continue;
     const line = svgEl('line');
     line.setAttribute('class', 'graph-edge');
@@ -617,6 +669,7 @@ export function renderGraph(nodes: readonly GraphNode[], edges: readonly GraphEd
 
   const nodeGroup = svgEl('g');
   for (const n of nodes) {
+    if (clusteredIds.has(n.id)) continue;
     const circle = svgEl('circle');
     circle.setAttribute('class', 'graph-node');
     circle.setAttribute('cx', String(n.x));
@@ -648,6 +701,87 @@ export function renderGraph(nodes: readonly GraphNode[], edges: readonly GraphEd
     });
   }
   svg.append(nodeGroup);
+
+  // Density clusters — drawn LAST so a super-node sits on top of the real
+  // graph. A square (real nodes are circles) marks it as something standing
+  // in for hidden nodes. The popover toggle is a cheap DOM mutation on this
+  // already-mounted group — same "never rebuild the whole SVG for a small
+  // change" discipline as setNodePosition/setGraphViewBox.
+  const clusterGroup = svgEl('g');
+  let popoverEl: SVGForeignObjectElement | null = null;
+
+  const closePopover = (): void => {
+    popoverEl?.remove();
+    popoverEl = null;
+    expandedClusterId = null;
+  };
+  const openPopover = (c: DensityCluster, cx: number, cy: number): void => {
+    closePopover();
+    expandedClusterId = c.id;
+    const fo = svgEl('foreignObject');
+    fo.setAttribute('x', String(cx + c.size + 8));
+    fo.setAttribute('y', String(cy - c.size));
+    fo.setAttribute('width', '220');
+    fo.setAttribute('height', String(Math.min(300, c.memberIds.length * 20 + 36)));
+    const div = document.createElement('div');
+    div.className = 'graph-cluster-popover';
+    const summary = document.createElement('div');
+    summary.className = 'graph-cluster-popover-summary';
+    summary.textContent = c.summary;
+    div.append(summary);
+    for (const id of c.memberIds) {
+      const row = document.createElement('div');
+      row.className = 'graph-cluster-popover-row';
+      row.textContent = byId.get(id)?.title ?? id;
+      row.addEventListener('click', () => {
+        closePopover();
+        handlers.onSelectNode?.(id);
+      });
+      div.append(row);
+    }
+    fo.append(div);
+    clusterGroup.append(fo);
+    popoverEl = fo;
+  };
+
+  for (const c of densityClusters) {
+    const p = clusterPos.get(c.id);
+    if (!p) continue;
+    const rect = svgEl('rect');
+    rect.setAttribute('class', 'graph-node-cluster');
+    rect.setAttribute('x', String(p.x - c.size));
+    rect.setAttribute('y', String(p.y - c.size));
+    rect.setAttribute('width', String(c.size * 2));
+    rect.setAttribute('height', String(c.size * 2));
+    rect.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      if (expandedClusterId === c.id) closePopover();
+      else openPopover(c, p.x, p.y);
+    });
+    const title = svgEl('title');
+    title.textContent = `${c.summary}\n\n(density cluster — double-click for details)`;
+    rect.append(title);
+    clusterGroup.append(rect);
+
+    const label = svgEl('text');
+    label.setAttribute('class', 'graph-label graph-cluster-label');
+    label.setAttribute('x', String(p.x));
+    label.setAttribute('y', String(p.y + 2));
+    label.setAttribute('text-anchor', 'middle');
+    label.textContent = `×${c.memberIds.length}`;
+    clusterGroup.append(label);
+
+    const caption = svgEl('text');
+    caption.setAttribute('class', 'graph-label');
+    caption.setAttribute('x', String(p.x));
+    caption.setAttribute('y', String(p.y + c.size + 7));
+    caption.setAttribute('text-anchor', 'middle');
+    caption.textContent = c.category;
+    clusterGroup.append(caption);
+
+    if (expandedClusterId === c.id) openPopover(c, p.x, p.y);
+  }
+  svg.append(clusterGroup);
 
   svg.setAttribute('viewBox', `${box.x} ${box.y} ${box.w} ${box.h}`);
   host.replaceChildren(svg);

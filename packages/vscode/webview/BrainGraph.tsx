@@ -1,7 +1,16 @@
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { ViewEdge, ViewNode } from '../src/protocol';
-import { buildSpine, hash, layoutBrain, resolveRoot, type SpineNode } from './brainSpacing';
+import {
+  buildDensityClusters,
+  buildSpine,
+  hash,
+  isDensityClusterId,
+  layoutBrain,
+  resolveRoot,
+  type DensityCluster,
+  type SpineNode,
+} from './brainSpacing';
 import { usePanZoom, type FitBox } from './usePanZoom';
 import type { GlowInfo } from './useActivityGlow';
 
@@ -167,6 +176,76 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
     if (spineSel && !spine.nodes.some((n) => n.id === spineSel)) setSpineSel(null);
   }, [spine, spineSel]);
 
+  // Density clustering — once the brain has enough nodes to read as a
+  // hairball, same-category directly-connected groups collapse into one
+  // super-node. Derived here, never persisted, same as the spine above; the
+  // only difference is this one HIDES its members instead of drawing a
+  // boundary around them. buildDensityClusters is itself a no-op below its
+  // node-count threshold, so this is always safe to compute.
+  const densityClusters = useMemo(() => buildDensityClusters(nodes, edges), [nodes, edges]);
+  const clusteredIds = useMemo(
+    () => new Set(densityClusters.flatMap((c) => c.memberIds)),
+    [densityClusters],
+  );
+  const memberToCluster = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of densityClusters) for (const id of c.memberIds) m.set(id, c.id);
+    return m;
+  }, [densityClusters]);
+  const visibleNodes = useMemo(
+    () => nodes.filter((n) => !clusteredIds.has(n.id)),
+    [nodes, clusteredIds],
+  );
+  // Redirect any edge touching a clustered member to the cluster node instead,
+  // dedupe, and drop edges that end up with both ends in the same cluster
+  // (now-internal). Non-clustered edges pass through unchanged.
+  const visibleEdges = useMemo(() => {
+    if (densityClusters.length === 0) return edges;
+    const seen = new Set<string>();
+    const out: ViewEdge[] = [];
+    for (const e of edges) {
+      const from = memberToCluster.get(e.from) ?? e.from;
+      const to = memberToCluster.get(e.to) ?? e.to;
+      if (from === to) continue;
+      const key = `${from}>${to}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...e, from, to });
+    }
+    return out;
+  }, [edges, densityClusters, memberToCluster]);
+  // Cluster node position = centroid of its members' laid-out coordinates —
+  // works whether that position came from this render's layout pass or was
+  // already on disk, no extra layout step needed.
+  const clusterLaidOut = useMemo(() => {
+    const out: Array<{ c: DensityCluster; p: { x: number; y: number } }> = [];
+    for (const c of densityClusters) {
+      let sx = 0,
+        sy = 0,
+        n = 0;
+      for (const id of c.memberIds) {
+        const p = laidOut[id];
+        if (!p) continue;
+        sx += p.x;
+        sy += p.y;
+        n++;
+      }
+      if (n > 0) out.push({ c, p: { x: sx / n, y: sy / n } });
+    }
+    return out;
+  }, [densityClusters, laidOut]);
+  const clusterPosMap = useMemo(
+    () => Object.fromEntries(clusterLaidOut.map(({ c, p }) => [c.id, p])),
+    [clusterLaidOut],
+  );
+  // Which cluster's member list is open, if any. Local UI state, not knowledge.
+  const [expandedClusterId, setExpandedClusterId] = useState<string | null>(null);
+  useEffect(() => {
+    if (expandedClusterId && !densityClusters.some((c) => c.id === expandedClusterId)) {
+      setExpandedClusterId(null);
+    }
+  }, [densityClusters, expandedClusterId]);
+
   // Hand the settled coordinates up so they can be persisted. Only nodes that
   // arrived without one are reported: everything else is already on disk, and
   // re-sending it would write the file on every render.
@@ -270,8 +349,8 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
   // Edges/glow must track a node mid-drag too, or its connections visually
   // detach from it while it's being moved.
   const posFor = useCallback(
-    (id: string) => (drag?.id === id ? drag : nodeMap[id]),
-    [drag, nodeMap],
+    (id: string) => (drag?.id === id ? drag : nodeMap[id] ?? clusterPosMap[id]),
+    [drag, nodeMap, clusterPosMap],
   );
 
   const startNodeDrag = useCallback(
@@ -426,7 +505,7 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
             </g>
           );
         })}
-        {edges.map((edge, i) => {
+        {visibleEdges.map((edge, i) => {
           const from = posFor(edge.from);
           const to = posFor(edge.to);
           if (!from || !to) return null;
@@ -465,7 +544,7 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
             All motion is CSS keyframes; React only sets --nb-glow-i and the
             timing parameters, at most every 10s. */}
         {glow &&
-          nodes.map((node) => {
+          visibleNodes.map((node) => {
             const g = glow.get(node.id);
             const p = posFor(node.id);
             if (!g || !p) return null;
@@ -495,7 +574,7 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
               </g>
             );
           })}
-        {nodes.map((node) => {
+        {visibleNodes.map((node) => {
           const isDragging = drag?.id === node.id;
           const p = isDragging ? drag : nodeMap[node.id];
           if (!p) return null;
@@ -577,6 +656,94 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
               >
                 {node.title}
               </text>
+            </g>
+          );
+        })}
+        {/* Density clusters — drawn LAST so a super-node sits on top of the real
+            graph, like the spine's grouping nodes. A filled square (not a
+            dashed outline) marks it as something standing in for hidden
+            nodes, not just an overlay. */}
+        {clusterLaidOut.map(({ c, p }) => {
+          const isOpen = c.id === expandedClusterId;
+          return (
+            <g key={c.id} style={{ cursor: 'pointer' }}>
+              <g
+                onClick={() => {
+                  if (movedRef.current) return;
+                  setSpineSel(null);
+                }}
+                onDoubleClick={() => {
+                  if (movedRef.current) return;
+                  setExpandedClusterId((cur) => (cur === c.id ? null : c.id));
+                }}
+              >
+                <rect
+                  x={p.x - c.size}
+                  y={p.y - c.size}
+                  width={c.size * 2}
+                  height={c.size * 2}
+                  fill={isOpen ? INK : PAPER}
+                  stroke={INK}
+                  strokeWidth={2}
+                />
+                <text
+                  x={p.x}
+                  y={p.y + 4}
+                  textAnchor="middle"
+                  fontSize={13}
+                  fontWeight="bold"
+                  fill={isOpen ? PAPER : INK}
+                  fontFamily="var(--nb-mono)"
+                  style={{ pointerEvents: 'none', userSelect: 'none' }}
+                >
+                  {`${CATEGORY_ICON[c.category as ViewNode['category']] ?? '·'} ×${c.memberIds.length}`}
+                </text>
+                <text
+                  x={p.x}
+                  y={p.y + c.size + 13}
+                  textAnchor="middle"
+                  fontSize={10}
+                  fill={INK}
+                  fontFamily="var(--nb-mono)"
+                  style={{ pointerEvents: 'none', userSelect: 'none' }}
+                >
+                  {c.category}
+                </text>
+                <title>{`${c.summary}\n\n(density cluster — double-click for details)`}</title>
+              </g>
+              {isOpen && (
+                <foreignObject x={p.x + c.size + 8} y={p.y - c.size} width={240} height={c.memberIds.length * 20 + 40}>
+                  <div
+                    style={{
+                      background: PAPER,
+                      border: `1px solid ${INK}`,
+                      color: INK,
+                      fontFamily: 'var(--nb-mono)',
+                      fontSize: 11,
+                      padding: 8,
+                      maxHeight: c.memberIds.length * 20 + 40,
+                      overflowY: 'auto',
+                    }}
+                  >
+                    <div style={{ fontWeight: 'bold', marginBottom: 4 }}>{c.summary}</div>
+                    {c.memberIds.map((id) => {
+                      const n = nodes.find((x) => x.id === id);
+                      return (
+                        <div
+                          key={id}
+                          style={{ cursor: 'pointer', padding: '2px 0' }}
+                          onClick={() => {
+                            setExpandedClusterId(null);
+                            onSelect(id);
+                          }}
+                        >
+                          {n?.title ?? id}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </foreignObject>
+              )}
             </g>
           );
         })}

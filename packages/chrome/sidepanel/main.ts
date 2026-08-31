@@ -1031,6 +1031,10 @@ const graphHandlers: GraphHandlers = {
     nodeDrag = { id, startClientX: e.clientX, startClientY: e.clientY, x0: node.x, y0: node.y, moved: false };
     $('graph-canvas').classList.add('dragging-node');
   },
+  onSelectNode: (id) => {
+    selectedGraphNodeId = id;
+    paintGraphNodeDetail();
+  },
 };
 
 /** The selected node's company-sync controls under the canvas. */
