@@ -3,7 +3,7 @@ import type { LayoutEdge } from '../src/layout.js';
 import { buildDensityClusters, isDensityClusterId, type DensityInputNode } from '../src/density.js';
 
 function node(id: string, extra: Partial<DensityInputNode> = {}): DensityInputNode {
-  return { id, title: id, category: 'strategy', x: 0, y: 0, size: 10, ...extra };
+  return { id, title: id, category: 'strategy', x: 0, y: 0, ...extra };
 }
 
 function edge(from: string, to: string, strength = 0.6): LayoutEdge {
@@ -27,7 +27,8 @@ function scattered(prefix: string, n: number, category = 'preference'): DensityI
 
 describe('buildDensityClusters', () => {
   it('groups a same-category connected AND crowded blob', () => {
-    // size 10 each; default radiusFactor 3 → radius = 60, easily covers gap 5.
+    // default radius 90 easily covers a gap of 5 — same metric as nff-admin's
+    // density-heatmap blobs (DEFAULT_DENSITY_SCREEN_RADIUS).
     const blob = chain('blob', 20, 'strategy', 5);
     const clusters = buildDensityClusters(blob.nodes, blob.edges);
 
@@ -39,8 +40,8 @@ describe('buildDensityClusters', () => {
 
   it('does NOT cluster a same-category connected chain the layout has spread out', () => {
     // Same topology as the blob above — same edges, same category — but each
-    // node sits 1000 units from its neighbour, far past any sane radius for
-    // size-10 nodes. Graph-connected is not the same thing as dense.
+    // node sits 1000 units from its neighbour, far past the default 90-unit
+    // radius. Graph-connected is not the same thing as dense.
     const spread = chain('spread', 20, 'strategy', 1000);
     expect(buildDensityClusters(spread.nodes, spread.edges)).toEqual([]);
   });
@@ -99,10 +100,10 @@ describe('buildDensityClusters', () => {
     expect(second).toEqual(first);
   });
 
-  it('respects a custom radiusFactor', () => {
-    const blob = chain('blob', 5, 'strategy', 100); // gap 100, size 10 each
-    expect(buildDensityClusters(blob.nodes, blob.edges)).toEqual([]); // default radiusFactor 3 → radius 60 < gap 100
-    const clusters = buildDensityClusters(blob.nodes, blob.edges, { radiusFactor: 10 }); // radius 200 > gap 100
+  it('respects a custom radius — the same knob a caller resolves from its own zoom', () => {
+    const blob = chain('blob', 5, 'strategy', 100); // gap 100
+    expect(buildDensityClusters(blob.nodes, blob.edges)).toEqual([]); // default radius 90 < gap 100
+    const clusters = buildDensityClusters(blob.nodes, blob.edges, { radius: 150 });
     expect(clusters).toHaveLength(1);
     expect(clusters[0].memberIds).toHaveLength(5);
   });

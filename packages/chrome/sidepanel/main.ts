@@ -978,7 +978,7 @@ async function loadGraph(resetView: boolean): Promise<void> {
   showFieldError('graph-error', null);
   latestGraphNodes = reply.nodes;
   latestGraphEdges = reply.edges;
-  const fitted = renderGraph(latestGraphNodes, latestGraphEdges, graphHandlers);
+  const fitted = renderGraph(latestGraphNodes, latestGraphEdges, graphHandlers, graphViewBox);
   if (resetView || !graphViewBox) {
     graphViewBox = fitted;
   } else {

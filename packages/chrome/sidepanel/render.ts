@@ -8,7 +8,7 @@
 
 import { PROVIDERS, PROVIDER_CHOICES } from '@nff-brain/core/provider';
 import type { ProviderId } from '@nff-brain/core/provider';
-import { buildDensityClusters } from '@nff-brain/core/density';
+import { buildDensityClusters, DEFAULT_DENSITY_SCREEN_RADIUS } from '@nff-brain/core/density';
 import type { DensityCluster } from '@nff-brain/core/density';
 import { relativeAge } from '../src/health.js';
 import { ruleLabel } from '../src/gate.js';
@@ -572,7 +572,12 @@ let expandedClusterId: string | null = null;
  * setNodePosition — neither ever calls renderGraph again mid-gesture, only on
  * the next poll or tab entry, which always rebuilds every node/edge element.
  */
-export function renderGraph(nodes: readonly GraphNode[], edges: readonly GraphEdge[], handlers: GraphHandlers): GraphViewBox {
+export function renderGraph(
+  nodes: readonly GraphNode[],
+  edges: readonly GraphEdge[],
+  handlers: GraphHandlers,
+  currentViewBox?: GraphViewBox | null,
+): GraphViewBox {
   const host = $('graph-canvas');
   const svg = svgEl('svg');
   graphNodeEls.clear();
@@ -608,7 +613,19 @@ export function renderGraph(nodes: readonly GraphNode[], edges: readonly GraphEd
   // positions (this renderer never runs its own layout pass), so no extra
   // position resolution is needed before calling in, unlike the vscode
   // webview's own live layoutBrain() pass.
-  const densityClusters = buildDensityClusters(nodes, edges);
+  //
+  // Radius: this renderer has no `view.scale` the way the two React
+  // renderers do — pan/zoom here is just the SVG viewBox — so the effective
+  // zoom is derived from the ratio of the canvas's on-screen width to the
+  // current viewBox width. Falls back to the freshly fitted `box` (and then
+  // to scale 1) when there's no prior view yet, e.g. first load. Same
+  // DEFAULT_DENSITY_SCREEN_RADIUS as nff-admin's density-heatmap toggle and
+  // the vscode webview — one shared definition of "crowded" everywhere it's
+  // shown.
+  const screenRect = host.getBoundingClientRect();
+  const refBox = currentViewBox ?? box;
+  const scale = refBox.w > 0 && screenRect.width > 0 ? screenRect.width / refBox.w : 1;
+  const densityClusters = buildDensityClusters(nodes, edges, { radius: DEFAULT_DENSITY_SCREEN_RADIUS / scale });
   const clusteredIds = new Set(densityClusters.flatMap((c) => c.memberIds));
   const memberToCluster = new Map<string, string>();
   for (const c of densityClusters) for (const id of c.memberIds) memberToCluster.set(id, c.id);

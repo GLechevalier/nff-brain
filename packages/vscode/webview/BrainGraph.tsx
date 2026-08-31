@@ -4,6 +4,7 @@ import type { ViewEdge, ViewNode } from '../src/protocol';
 import {
   buildDensityClusters,
   buildSpine,
+  DEFAULT_DENSITY_SCREEN_RADIUS,
   hash,
   isDensityClusterId,
   layoutBrain,
@@ -176,83 +177,6 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
     if (spineSel && !spine.nodes.some((n) => n.id === spineSel)) setSpineSel(null);
   }, [spine, spineSel]);
 
-  // Density clustering — where the graph is actually crowded on screen,
-  // same-category connected groups collapse into one super-node. Derived
-  // here, never persisted, same as the spine above; the difference is this
-  // one HIDES its members instead of drawing a boundary around them. Fed the
-  // SETTLED (laid-out) positions, not the raw disk x/y — a freshly-added
-  // node's on-disk position hasn't been placed by the layout yet, and
-  // "crowded" has to mean crowded where it actually renders.
-  const densityClusters = useMemo(() => {
-    const positioned = nodes.map((n) => {
-      const p = laidOut[n.id];
-      return p ? { ...n, x: p.x, y: p.y } : n;
-    });
-    return buildDensityClusters(positioned, edges);
-  }, [nodes, edges, laidOut]);
-  const clusteredIds = useMemo(
-    () => new Set(densityClusters.flatMap((c) => c.memberIds)),
-    [densityClusters],
-  );
-  const memberToCluster = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of densityClusters) for (const id of c.memberIds) m.set(id, c.id);
-    return m;
-  }, [densityClusters]);
-  const visibleNodes = useMemo(
-    () => nodes.filter((n) => !clusteredIds.has(n.id)),
-    [nodes, clusteredIds],
-  );
-  // Redirect any edge touching a clustered member to the cluster node instead,
-  // dedupe, and drop edges that end up with both ends in the same cluster
-  // (now-internal). Non-clustered edges pass through unchanged.
-  const visibleEdges = useMemo(() => {
-    if (densityClusters.length === 0) return edges;
-    const seen = new Set<string>();
-    const out: ViewEdge[] = [];
-    for (const e of edges) {
-      const from = memberToCluster.get(e.from) ?? e.from;
-      const to = memberToCluster.get(e.to) ?? e.to;
-      if (from === to) continue;
-      const key = `${from}>${to}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ ...e, from, to });
-    }
-    return out;
-  }, [edges, densityClusters, memberToCluster]);
-  // Cluster node position = centroid of its members' laid-out coordinates —
-  // works whether that position came from this render's layout pass or was
-  // already on disk, no extra layout step needed.
-  const clusterLaidOut = useMemo(() => {
-    const out: Array<{ c: DensityCluster; p: { x: number; y: number } }> = [];
-    for (const c of densityClusters) {
-      let sx = 0,
-        sy = 0,
-        n = 0;
-      for (const id of c.memberIds) {
-        const p = laidOut[id];
-        if (!p) continue;
-        sx += p.x;
-        sy += p.y;
-        n++;
-      }
-      if (n > 0) out.push({ c, p: { x: sx / n, y: sy / n } });
-    }
-    return out;
-  }, [densityClusters, laidOut]);
-  const clusterPosMap = useMemo(
-    () => Object.fromEntries(clusterLaidOut.map(({ c, p }) => [c.id, p])),
-    [clusterLaidOut],
-  );
-  // Which cluster's member list is open, if any. Local UI state, not knowledge.
-  const [expandedClusterId, setExpandedClusterId] = useState<string | null>(null);
-  useEffect(() => {
-    if (expandedClusterId && !densityClusters.some((c) => c.id === expandedClusterId)) {
-      setExpandedClusterId(null);
-    }
-  }, [densityClusters, expandedClusterId]);
-
   // Hand the settled coordinates up so they can be persisted. Only nodes that
   // arrived without one are reported: everything else is already on disk, and
   // re-sending it would write the file on every render.
@@ -318,6 +242,86 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
   useEffect(() => {
     onScaleChange?.(view.scale);
   }, [view.scale, onScaleChange]);
+
+  // Density clustering — where the graph is actually crowded on screen,
+  // same-category connected groups collapse into one super-node. Derived
+  // here, never persisted, same as the spine above; the difference is this
+  // one HIDES its members instead of drawing a boundary around them. Fed the
+  // SETTLED (laid-out) positions, not the raw disk x/y — a freshly-added
+  // node's on-disk position hasn't been placed by the layout yet, and
+  // "crowded" has to mean crowded where it actually renders. The radius is
+  // DEFAULT_DENSITY_SCREEN_RADIUS / view.scale — the same screen-pixel-at-
+  // current-zoom definition nff-admin's density-heatmap toggle uses, so
+  // "density" means one thing across every surface that shows it.
+  const densityClusters = useMemo(() => {
+    const positioned = nodes.map((n) => {
+      const p = laidOut[n.id];
+      return p ? { ...n, x: p.x, y: p.y } : n;
+    });
+    return buildDensityClusters(positioned, edges, { radius: DEFAULT_DENSITY_SCREEN_RADIUS / view.scale });
+  }, [nodes, edges, laidOut, view.scale]);
+  const clusteredIds = useMemo(
+    () => new Set(densityClusters.flatMap((c) => c.memberIds)),
+    [densityClusters],
+  );
+  const memberToCluster = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of densityClusters) for (const id of c.memberIds) m.set(id, c.id);
+    return m;
+  }, [densityClusters]);
+  const visibleNodes = useMemo(
+    () => nodes.filter((n) => !clusteredIds.has(n.id)),
+    [nodes, clusteredIds],
+  );
+  // Redirect any edge touching a clustered member to the cluster node instead,
+  // dedupe, and drop edges that end up with both ends in the same cluster
+  // (now-internal). Non-clustered edges pass through unchanged.
+  const visibleEdges = useMemo(() => {
+    if (densityClusters.length === 0) return edges;
+    const seen = new Set<string>();
+    const out: ViewEdge[] = [];
+    for (const e of edges) {
+      const from = memberToCluster.get(e.from) ?? e.from;
+      const to = memberToCluster.get(e.to) ?? e.to;
+      if (from === to) continue;
+      const key = `${from}>${to}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...e, from, to });
+    }
+    return out;
+  }, [edges, densityClusters, memberToCluster]);
+  // Cluster node position = centroid of its members' laid-out coordinates —
+  // works whether that position came from this render's layout pass or was
+  // already on disk, no extra layout step needed.
+  const clusterLaidOut = useMemo(() => {
+    const out: Array<{ c: DensityCluster; p: { x: number; y: number } }> = [];
+    for (const c of densityClusters) {
+      let sx = 0,
+        sy = 0,
+        n = 0;
+      for (const id of c.memberIds) {
+        const p = laidOut[id];
+        if (!p) continue;
+        sx += p.x;
+        sy += p.y;
+        n++;
+      }
+      if (n > 0) out.push({ c, p: { x: sx / n, y: sy / n } });
+    }
+    return out;
+  }, [densityClusters, laidOut]);
+  const clusterPosMap = useMemo(
+    () => Object.fromEntries(clusterLaidOut.map(({ c, p }) => [c.id, p])),
+    [clusterLaidOut],
+  );
+  // Which cluster's member list is open, if any. Local UI state, not knowledge.
+  const [expandedClusterId, setExpandedClusterId] = useState<string | null>(null);
+  useEffect(() => {
+    if (expandedClusterId && !densityClusters.some((c) => c.id === expandedClusterId)) {
+      setExpandedClusterId(null);
+    }
+  }, [densityClusters, expandedClusterId]);
 
   useImperativeHandle(
     ref,

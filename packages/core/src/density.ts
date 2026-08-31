@@ -12,13 +12,18 @@
 // the whole board is graph-connected but not dense, and must not collapse —
 // collapsing it would hide structure the reader can already read clearly.
 //
-// The radius is expressed as a multiple of the pair's own size, not a fixed
-// board-unit or pixel number: node.x/y/size live in whatever coordinate space
-// the caller's layout uses (vscode's layoutBrain spans a few thousand units;
-// nff-admin's spaceOutNodes and the chrome sidepanel's on-disk positions use
-// a different scale again), and a constant radius tuned for one would be
-// meaningless in another. Self-scaling by size is the one thing every caller
-// already agrees on.
+// The spatial half is DELIBERATELY the same metric as nff-admin's "▦ Density"
+// heatmap toggle (count of other nodes within a radius): `radius` is passed
+// in by the caller, already resolved from DEFAULT_DENSITY_SCREEN_RADIUS
+// divided by that renderer's current zoom scale, exactly like the heatmap's
+// own blob radius. Two "density" features showing two different definitions
+// in the same app would be worse than either alone — this module owns the
+// one shared constant so the heatmap and the cluster trigger can never drift
+// apart. Board units differ across renderers (vscode's layoutBrain, nff-
+// admin's spaceOutNodes, the chrome sidepanel's on-disk positions all use
+// different scales), which is exactly why the radius arrives pre-resolved
+// rather than as a size-relative multiplier: only the caller knows its own
+// zoom.
 //
 // Browser-safe: no `node:` imports, no dependencies (see
 // packages/core/test/webviewImports.test.ts).
@@ -27,14 +32,13 @@ import { connectedComponents, type LayoutEdge } from './layout.js';
 
 /** The fields density clustering needs. BrainNode, the webview's ViewNode, and
  *  the chrome sidepanel's GraphNode all satisfy it without adaptation — every
- *  one of them already carries x/y/size for rendering. */
+ *  one of them already carries x/y for rendering. */
 export interface DensityInputNode {
   id: string;
   title: string;
   category: string;
   x: number;
   y: number;
-  size: number;
 }
 
 /** A virtual super-node standing in for a group of real nodes. Never persisted. */
@@ -49,17 +53,23 @@ export interface DensityCluster {
 
 export interface DensityOptions {
   /**
-   * Two members count as spatially "crowded" when their distance is within
-   * this many times their combined size. Starting default, not measured
-   * against a real brain yet — same honesty spine.ts's DEFAULT_MIN_SIM
-   * carries: tune via opts if it over- or under-groups on real data.
+   * Board-space radius within which two members count as "crowded" — the
+   * same number nff-admin's density-heatmap blobs use, in the SAME units:
+   * a caller with a zoomable view should pass
+   * `DEFAULT_DENSITY_SCREEN_RADIUS / currentZoomScale`, exactly like the
+   * heatmap's own `DENSITY_BLOB_SCREEN_RADIUS / view.scale`.
    */
-  radiusFactor?: number;
+  radius?: number;
   /** Minimum spatially-crowded same-category group worth collapsing into one node. */
   minClusterSize?: number;
 }
 
-export const DEFAULT_RADIUS_FACTOR = 3;
+/**
+ * Screen-pixel radius the heatmap toggle and this module both resolve
+ * against the current zoom. THE shared constant — change it here and both
+ * features move together instead of drifting apart.
+ */
+export const DEFAULT_DENSITY_SCREEN_RADIUS = 90;
 export const DEFAULT_MIN_CLUSTER_SIZE = 4;
 
 const DENSITY_PREFIX = 'density:';
@@ -79,9 +89,11 @@ function summarise(memberIds: readonly string[], byId: Map<string, DensityInputN
 }
 
 /** Spatial adjacency within one semantic group: an edge between every pair
- *  crowded enough to count as touching. O(n²) on the GROUP, not the graph —
- *  groups are the narrow slice connectedComponents already produced. */
-function spatialEdgesFor(members: readonly DensityInputNode[], radiusFactor: number): LayoutEdge[] {
+ *  within `radius` of each other — the identical test the heatmap runs per
+ *  node, just also used to CHAIN nearby members into one blob. O(n²) on the
+ *  GROUP, not the graph — groups are the narrow slice connectedComponents
+ *  already produced. */
+function spatialEdgesFor(members: readonly DensityInputNode[], radius: number): LayoutEdge[] {
   const out: LayoutEdge[] = [];
   for (let i = 0; i < members.length; i++) {
     for (let j = i + 1; j < members.length; j++) {
@@ -89,8 +101,7 @@ function spatialEdgesFor(members: readonly DensityInputNode[], radiusFactor: num
       const b = members[j];
       const dx = a.x - b.x;
       const dy = a.y - b.y;
-      const r = radiusFactor * (a.size + b.size);
-      if (dx * dx + dy * dy <= r * r) out.push({ from: a.id, to: b.id, strength: 1 });
+      if (dx * dx + dy * dy <= radius * radius) out.push({ from: a.id, to: b.id, strength: 1 });
     }
   }
   return out;
@@ -106,7 +117,7 @@ export function buildDensityClusters(
   edges: readonly LayoutEdge[],
   opts: DensityOptions = {},
 ): DensityCluster[] {
-  const radiusFactor = opts.radiusFactor ?? DEFAULT_RADIUS_FACTOR;
+  const radius = opts.radius ?? DEFAULT_DENSITY_SCREEN_RADIUS;
   const minClusterSize = Math.max(2, opts.minClusterSize ?? DEFAULT_MIN_CLUSTER_SIZE);
 
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -127,7 +138,7 @@ export function buildDensityClusters(
   const found: Array<{ memberIds: string[]; category: string }> = [];
   for (const groupIds of semanticGroups) {
     const members = groupIds.map((id) => byId.get(id)!);
-    const denseSubgroups = connectedComponents(members, spatialEdgesFor(members, radiusFactor)).filter(
+    const denseSubgroups = connectedComponents(members, spatialEdgesFor(members, radius)).filter(
       (g) => g.length >= minClusterSize,
     );
     for (const sub of denseSubgroups) {
