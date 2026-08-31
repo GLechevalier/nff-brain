@@ -3,12 +3,12 @@
   <img src="public/images/tumbnail.png" alt="nff" width="640">
 </p>
 
-# nff, a Chrome extension that adds a browser agent you can train to learn complex tasks
+# nff-brain, brain infra for a knowledge graph your agents share
 
-**Record it once on your browser. Rerun it forever — and it gets better every time you do.**
+**Record it once. Rerun it forever — and it gets better every time you do.**
 
- `nff-brain` is a Chrome extension (plus a CLI and VS Code extension) that grows a local knowledge graph from what you do in your browser and
-  your coding sessions — then hands that back to you and your agents.
+ `nff-brain` is brain infra: a local knowledge graph store, shared by a CLI, a VS Code extension, and a Chrome extension, that grows from what you
+  do in your browser and your coding sessions — then hands that back to you and your agents.
 
 <p>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
@@ -16,12 +16,12 @@
   <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white">
 </p>
 
-What it does : it places a brain context in your browser grown automatically when you use it, and allows you to automate web tasks :
+What it does : it runs a shared brain graph on your machine, grown automatically from your CLI, editor, and browser sessions, and it lets you automate web tasks on top of it :
 
-- **Local only.** : The extension runs locally as a chrome process connected with a claude code or your API keys, only runs on your computer only
+- **Local only.** : the graph store runs locally, connected to claude code or your own API keys — only ever on your computer
 - **Connects to your local claude code so that you don't burn too much API tokens** : litteraly linkable to your claude code terminal if you want to run it besides it, or just use an API key
-- **General context integrated** : The more you use it, the more context you store inside it, and it self-improves your tool 
-- **Automate web tasks** : a recoder makes your brain grow smarter, and you can ask it to replay actions that you already did by the past. Think Zapier/n8n but self-configured.
+- **General context integrated** : the more you use any of the CLI, VS Code, or Chrome front ends, the more context accumulates in the shared graph, and it self-improves your tool
+- **Automate web tasks** : a recorder makes your brain grow smarter, and you can ask it to replay actions that you already did by the past. Think Zapier/n8n but self-configured.
 - **Connects with other MCP tools** : let you output things foundout during runs to mcp tools to store data or make decisions on other systems
 
 
