@@ -65,6 +65,19 @@ export interface SupabaseRef {
 }
 
 /**
+ * Bridge from a "tool" node down to the external service/integration it
+ * represents (e.g. an MCP server, a connected API) — one master node per
+ * tool, no content duplication: `label` is a short display name, never a
+ * credential or connection string. Same wholesale-replace-on-reingest
+ * contract as SupabaseRef/GraphifyRef (see ingestTool.ts).
+ */
+export interface ToolRef {
+  tool: string; // stable id, e.g. 'github', 'stripe' — never a secret/connection string
+  label?: string;
+  kind: 'connection'; // room to grow (e.g. 'action') without a breaking change later
+}
+
+/**
  * A node's place in a SKILL TREE imported from a BRAIN-NODE.json file.
  *
  * The tree lives HERE and not in edges, because edges are effectively
@@ -130,7 +143,9 @@ export interface BrainNode {
   //        retractable from the extension, same trust tier as clip)
   // supabase = mirrored from a configured Postgres table (replaced wholesale on
   //        re-ingest, never folded — see ingestSupabase.ts, same contract as graphify)
-  origin: 'seed' | 'agent' | 'graphify' | 'import' | 'clip' | 'workflow' | 'supabase';
+  // tool = a connected external tool/service (replaced wholesale on re-ingest,
+  //        never folded — see ingestTool.ts, same contract as supabase)
+  origin: 'seed' | 'agent' | 'graphify' | 'import' | 'clip' | 'workflow' | 'supabase' | 'tool';
   sourceSession?: string;
   // http(s) page the clip was captured from (origin 'clip'), or the workflow's
   // start url (origin 'workflow').
@@ -140,6 +155,7 @@ export interface BrainNode {
   lastRecalledAt?: string; // ISO
   graphifyRef?: GraphifyRef;
   supabaseRef?: SupabaseRef;
+  toolRef?: ToolRef;
   // The replayable workflow this node carries (origin 'workflow' only). Like
   // graphifyRef, a structured machine payload alongside the human-readable
   // content; edits to `content` never desync it.

@@ -6,10 +6,13 @@ import {
   asCategory,
   buildCompanySyncPayload,
   CATEGORIES,
+  checkoutBrain,
   eventSavings,
   foldLeastUsed,
   layoutBrain,
   loadBrain,
+  loadCommits,
+  loadRefs,
   mergeBrains,
   mutateBrain,
   placeNode,
@@ -30,7 +33,7 @@ import {
 } from '@nff-brain/core';
 import { BrainFs, BrainLinkProvider, nodeUri, SCHEME } from './brainFs';
 import { BrainLauncherProvider } from './launcherView';
-import type { ExtToWeb, NodeSource, ViewActivityEvent, ViewEdge, ViewNode, WebToExt } from './protocol';
+import type { ExtToWeb, NodeSource, ViewActivityEvent, ViewCommit, ViewEdge, ViewNode, ViewRefs, WebToExt } from './protocol';
 
 // The extension host is the SOLE filesystem authority: every mutation goes
 // through core's lock + atomic write, and the webview only renders what it is
@@ -108,6 +111,32 @@ function broadcastGraph(): void {
 
 function fileFor(source: NodeSource): string {
   return source === 'project' ? paths.project : paths.global;
+}
+
+// ── commit history relay: .nff-brain/{commits.jsonl,refs.json} → History tab ──
+// Same "host is the sole fs authority, webview only renders what it is posted"
+// shape as the graph above. Thin on purpose: the webview draws the tree from
+// counts, never full node payloads.
+
+function loadCommitsView(): { commits: ViewCommit[]; refs: ViewRefs } {
+  const commits = loadCommits(paths.project).map((c) => ({
+    id: c.id,
+    parents: c.parents,
+    branch: c.branch,
+    author: c.author,
+    ts: c.ts,
+    message: c.message,
+    nodesAdded: c.diff.nodesAdded.length,
+    nodesModified: c.diff.nodesModified.length,
+    nodesRemoved: c.diff.nodesRemoved.length,
+  }));
+  const refs = loadRefs(paths.project);
+  return { commits, refs: { branches: refs.branches, HEAD: refs.HEAD } };
+}
+
+function broadcastCommits(): void {
+  const { commits, refs } = loadCommitsView();
+  for (const w of channelViews) post(w, { type: 'commits', commits, refs });
 }
 
 // ── company brain sync ──────────────────────────────────────────────────────
@@ -321,6 +350,7 @@ async function handleMessage(msg: WebToExt, webview: vscode.Webview): Promise<vo
     switch (msg.type) {
       case 'ready': {
         broadcastGraph();
+        broadcastCommits();
         pushVectors(webview);
         // A panel opening late still shows what the agent recently looked at,
         // glowing at its decayed intensity (real timestamps, no arrival flash).
@@ -491,6 +521,18 @@ async function handleMessage(msg: WebToExt, webview: vscode.Webview): Promise<vo
           text: folded > 0 ? `Merged ${folded} node${folded === 1 ? '' : 's'}` : 'Nothing to merge',
         });
         break;
+      }
+
+      case 'requestCommits': {
+        broadcastCommits();
+        return; // read-only — no need to rebroadcast the node graph
+      }
+
+      case 'checkout': {
+        const { refs } = checkoutBrain(paths.project, msg.ref);
+        broadcastCommits();
+        post(webview, { type: 'notice', text: `Checked out "${refs.HEAD}"` });
+        break; // brain.json was replaced wholesale — fall through to broadcastGraph()
       }
     }
     broadcastGraph();
@@ -818,6 +860,20 @@ export function activate(context: vscode.ExtensionContext): void {
   vectorWatcher.onDidCreate(onVectorsChange);
   vectorWatcher.onDidDelete(onVectorsChange);
   context.subscriptions.push(vectorWatcher);
+
+  // Commit history → History tab. Two files (commits.jsonl append, refs.json
+  // rewrite on every commit/branch/checkout) share one debounce — either
+  // changing means the tree needs a repaint.
+  let commitsDebounce: NodeJS.Timeout | null = null;
+  const onCommitsChange = () => {
+    if (commitsDebounce) clearTimeout(commitsDebounce);
+    commitsDebounce = setTimeout(broadcastCommits, 150);
+  };
+  const commitsWatcher = vscode.workspace.createFileSystemWatcher('**/.nff-brain/{commits.jsonl,refs.json}');
+  commitsWatcher.onDidChange(onCommitsChange);
+  commitsWatcher.onDidCreate(onCommitsChange);
+  commitsWatcher.onDidDelete(onCommitsChange);
+  context.subscriptions.push(commitsWatcher);
 
   // Flipping nffBrain.semanticSearch takes effect without a reload.
   context.subscriptions.push(

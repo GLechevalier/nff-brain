@@ -24,6 +24,7 @@ export const NFF_PROMPT_MARKERS = {
   agentFilter: "You are the web agent's judgment call",
   agentListWrite: "You are the web agent's list-write field mapper",
   chat: 'You are the brain chat assistant',
+  committer: 'You are the memory committer',
 } as const;
 
 export const NFF_PROMPT_PREFIXES: readonly string[] = Object.values(NFF_PROMPT_MARKERS);

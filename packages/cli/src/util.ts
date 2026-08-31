@@ -24,6 +24,7 @@ const VALUE_FLAGS = new Set([
   'iterations', 'fanout', 'min-sim', 'floor', 'cap', 'min-gap', 'ring-gap',
   'header',
   'out',
+  'message', 'author', 'from', 'into', 'branch', 'token', 'url',
 ]);
 
 export function parseArgs(argv: string[]): Args {

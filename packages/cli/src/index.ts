@@ -13,6 +13,7 @@ import { cmdMcp } from './commands/mcp.js';
 import { cmdRestructure } from './commands/restructure.js';
 import { cmdSpine } from './commands/spine.js';
 import { cmdMerge } from './commands/merge.js';
+import { cmdBranch, cmdCheckout, cmdCommit, cmdLog, cmdMergeBranch, cmdPush } from './commands/version.js';
 import { cmdAdd, cmdEdit, cmdList, cmdRm, cmdShow } from './commands/nodes.js';
 import { cmdNovelty } from './commands/novelty.js';
 import { cmdModel } from './commands/model.js';
@@ -81,6 +82,18 @@ graph
   unlink <a> <b>                   remove a connection
   reinforce <a> <b> [--delta 0.1]  strengthen a connection
   merge [--ratio 0.25] [--llm]     fold least-used nodes into neighbours; --llm also dedups
+  commit [--message M] [--author A] [--no-llm]
+                                   snapshot changes since HEAD as a commit on the current branch;
+                                   the message is LLM-synthesized from the diff unless given or --no-llm
+  branch [name] [--from ref]      list branches (current marked *), or create one from ref (default HEAD)
+  checkout <branch-or-commit>     switch brain.json to another branch's or commit's state
+  log [--branch b]                commit history (id, branch, message, author, time)
+  merge-branch <branch> [--into target] [--llm]
+                                   three-way merge a branch into target (default HEAD); conflicting
+                                   nodes keep "ours" unless --llm resolves them via a merge call
+  push [--branch b] [--token t] [--url u]
+                                   push local commits since the last push to the company brain
+                                   (nff-admin ▸ Users mints a token; or set NFF_BRAIN_COMPANY_SYNC_TOKEN)
   layout [--full] [--iterations 300] [--no-spine] [--dry-run]
                                    settle node positions with the force-directed layout, so
                                    connected nodes sit together and each disconnected component
@@ -193,6 +206,12 @@ const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
   unlink: cmdUnlink,
   reinforce: cmdReinforce,
   merge: cmdMerge,
+  commit: cmdCommit,
+  branch: cmdBranch,
+  checkout: cmdCheckout,
+  log: cmdLog,
+  'merge-branch': cmdMergeBranch,
+  push: cmdPush,
   layout: cmdLayout,
   spine: cmdSpine,
   restructure: cmdRestructure,

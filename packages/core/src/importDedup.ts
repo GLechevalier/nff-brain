@@ -161,7 +161,7 @@ export function reconcileWithBrain(
   // clip content (retraction deletes by origin), so imports may not refine them
   // either.
   const pool: BrainNode[] = brain.nodes.filter(
-    (n) => n.origin !== 'graphify' && n.origin !== 'supabase' && n.origin !== 'clip',
+    (n) => n.origin !== 'graphify' && n.origin !== 'supabase' && n.origin !== 'tool' && n.origin !== 'clip',
   );
   const byId = new Map(pool.map((n) => [n.id, n]));
   const taken = new Set(brain.nodes.map((n) => n.id));

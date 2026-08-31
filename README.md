@@ -3,7 +3,7 @@
   <img src="public/images/tumbnail.png" alt="nff" width="640">
 </p>
 
-# nff-brain, brain infra for a knowledge graph your agents share
+# nff-brain, local infra for knowledge graphs your agents share
 
 **Record it once. Rerun it forever — and it gets better every time you do.**
 

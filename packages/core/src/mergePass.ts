@@ -47,6 +47,7 @@ export function chooseSurvivor(
   if (isSkillNode(a) || isSkillNode(b)) return null;
   if (a.origin === 'graphify' || b.origin === 'graphify') return null;
   if (a.origin === 'supabase' || b.origin === 'supabase') return null;
+  if (a.origin === 'tool' || b.origin === 'tool') return null;
   if (a.origin === 'clip' || b.origin === 'clip') return null;
   const aSeed = a.origin === 'seed';
   const bSeed = b.origin === 'seed';
@@ -198,6 +199,7 @@ export function foldLeastUsed(brain: BrainFile, fraction = 0.25, now = new Date(
       n.origin !== 'seed' &&
       n.origin !== 'graphify' &&
       n.origin !== 'supabase' &&
+      n.origin !== 'tool' &&
       n.origin !== 'clip' &&
       n.category !== 'core',
   );
@@ -230,6 +232,7 @@ export function foldLeastUsed(brain: BrainFile, fraction = 0.25, now = new Date(
         !victimIds.has(n.id) &&
         n.origin !== 'graphify' &&
         n.origin !== 'supabase' &&
+        n.origin !== 'tool' &&
         n.origin !== 'clip' &&
         !isSkillNode(n),
     );

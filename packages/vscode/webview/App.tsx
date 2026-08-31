@@ -5,8 +5,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // are the dependency-free trio — the webview may import those three and
 // nothing else from core (enforced by webviewImports.test.ts).
 import { fuseRanked } from '@nff-brain/core/rank';
-import type { ExtToWeb, ViewNode, WebToExt } from '../src/protocol';
+import type { ExtToWeb, ViewCommit, ViewNode, ViewRefs, WebToExt } from '../src/protocol';
 import { BrainGraph, type BrainGraphHandle } from './BrainGraph';
+import { CommitGraph } from './CommitGraph';
 import { useActivityGlow } from './useActivityGlow';
 import { useSemanticSearch } from './useSemanticSearch';
 
@@ -32,6 +33,9 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [narrow, setNarrow] = useState(false);
   const [scale, setScale] = useState(1);
+  const [view, setView] = useState<'graph' | 'history'>('graph');
+  const [commits, setCommits] = useState<ViewCommit[]>([]);
+  const [refsState, setRefsState] = useState<ViewRefs>({ branches: {}, HEAD: 'main' });
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<BrainGraphHandle>(null);
   const noticeTimer = useRef<number | null>(null);
@@ -66,6 +70,9 @@ export function App() {
         setBusy(msg.on);
       } else if (msg.type === 'activity') {
         onActivity(msg.events, msg.replay === true);
+      } else if (msg.type === 'commits') {
+        setCommits(msg.commits);
+        setRefsState(msg.refs);
       } else {
         semantic.onMessage(msg); // vectors / queryVector
       }
@@ -145,6 +152,11 @@ export function App() {
     vscode.postMessage({ type: 'openNode', id }); // → native .md tab beside the graph
   }
 
+  function switchView(next: 'graph' | 'history') {
+    setView(next);
+    if (next === 'history') vscode.postMessage({ type: 'requestCommits' });
+  }
+
   const selectedNode = selectedId ? (nodes.find((n) => n.id === selectedId) ?? null) : null;
 
   function onSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -184,78 +196,105 @@ export function App() {
           Brain{projectName ? ` · ${projectName}` : ''} · {nodes.length} node{nodes.length === 1 ? '' : 's'}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button
+              className={view === 'graph' ? 'nb-btn nb-btn--solid' : 'nb-btn'}
+              onClick={() => switchView('graph')}
+              title="The knowledge graph"
+            >
+              Graph
+            </button>
+            <button
+              className={view === 'history' ? 'nb-btn nb-btn--solid' : 'nb-btn'}
+              onClick={() => switchView('history')}
+              title="Commit history — click a commit or branch chip to check it out"
+            >
+              History
+            </button>
+          </div>
           {notice && <span style={{ fontSize: 11, color: 'var(--nb-muted)' }}>{notice}</span>}
-          {!narrow && (
+          {view === 'graph' && !narrow && (
             <span style={{ fontSize: 10, color: 'var(--nb-muted)' }}>
               click a node to open its .md · drag a node to move it · grab to pan · scroll to zoom · +/−/0
             </span>
           )}
-          <input
-            className="nb-input"
-            placeholder="search…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={onSearchKeyDown}
-            title="Search nodes — Enter opens (and cycles through) matches, Esc clears"
-            style={{ width: 140, fontSize: 11, padding: '3px 6px' }}
-          />
-          {query.trim() && (
-            <span style={{ fontSize: 10, color: 'var(--nb-muted)' }}>
-              {matches.length} hit{matches.length === 1 ? '' : 's'}
-            </span>
+          {view === 'graph' && (
+            <>
+              <input
+                className="nb-input"
+                placeholder="search…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={onSearchKeyDown}
+                title="Search nodes — Enter opens (and cycles through) matches, Esc clears"
+                style={{ width: 140, fontSize: 11, padding: '3px 6px' }}
+              />
+              {query.trim() && (
+                <span style={{ fontSize: 10, color: 'var(--nb-muted)' }}>
+                  {matches.length} hit{matches.length === 1 ? '' : 's'}
+                </span>
+              )}
+              {/* Zoom cluster. The readout is fixed-width so stepping through
+                  levels doesn't shuffle the buttons sideways. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span
+                  style={{
+                    fontSize: 10,
+                    color: 'var(--nb-muted)',
+                    minWidth: 34,
+                    textAlign: 'right',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                  title="Current zoom level"
+                >
+                  {Math.round(scale * 100)}%
+                </span>
+                <button
+                  className="nb-icon-btn"
+                  onClick={() => graphRef.current?.zoomBy(1 / 1.25)}
+                  title="Zoom out (−)"
+                >
+                  −
+                </button>
+                <button className="nb-icon-btn" onClick={() => graphRef.current?.zoomBy(1.25)} title="Zoom in (+)">
+                  ＋
+                </button>
+              </div>
+              <button
+                className="nb-btn"
+                onClick={() => graphRef.current?.resetView()}
+                title="Fit the whole graph to the panel (0)"
+              >
+                ⤢ Fit
+              </button>
+              <button
+                className="nb-btn"
+                onClick={() => vscode.postMessage({ type: 'createNodeRequest' })}
+                title="Add a new knowledge node (opens its .md for editing)"
+              >
+                ＋ Node
+              </button>
+              <button
+                className="nb-btn nb-btn--solid"
+                onClick={() => vscode.postMessage({ type: 'merge' })}
+                disabled={busy || nodes.length === 0}
+                title="Merge the least-used learned nodes into their nearest neighbours (nothing is deleted)"
+              >
+                {busy ? 'Merging…' : '⤵ Merge'}
+              </button>
+            </>
           )}
-          {/* Zoom cluster. The readout is fixed-width so stepping through
-              levels doesn't shuffle the buttons sideways. */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span
-              style={{
-                fontSize: 10,
-                color: 'var(--nb-muted)',
-                minWidth: 34,
-                textAlign: 'right',
-                fontVariantNumeric: 'tabular-nums',
-              }}
-              title="Current zoom level"
-            >
-              {Math.round(scale * 100)}%
-            </span>
-            <button
-              className="nb-icon-btn"
-              onClick={() => graphRef.current?.zoomBy(1 / 1.25)}
-              title="Zoom out (−)"
-            >
-              −
-            </button>
-            <button className="nb-icon-btn" onClick={() => graphRef.current?.zoomBy(1.25)} title="Zoom in (+)">
-              ＋
-            </button>
-          </div>
-          <button
-            className="nb-btn"
-            onClick={() => graphRef.current?.resetView()}
-            title="Fit the whole graph to the panel (0)"
-          >
-            ⤢ Fit
-          </button>
-          <button
-            className="nb-btn"
-            onClick={() => vscode.postMessage({ type: 'createNodeRequest' })}
-            title="Add a new knowledge node (opens its .md for editing)"
-          >
-            ＋ Node
-          </button>
-          <button
-            className="nb-btn nb-btn--solid"
-            onClick={() => vscode.postMessage({ type: 'merge' })}
-            disabled={busy || nodes.length === 0}
-            title="Merge the least-used learned nodes into their nearest neighbours (nothing is deleted)"
-          >
-            {busy ? 'Merging…' : '⤵ Merge'}
-          </button>
         </div>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+        {view === 'history' ? (
+          <CommitGraph
+            commits={commits}
+            refs={refsState}
+            onCheckout={(ref) => vscode.postMessage({ type: 'checkout', ref })}
+          />
+        ) : (
         <BrainGraph
           ref={graphRef}
           nodes={nodes}
@@ -277,7 +316,8 @@ export function App() {
             </div>
           }
         />
-        {selectedNode && (
+        )}
+        {view === 'graph' && selectedNode && (
           // Company-sync controls for the selected node. `private` keeps it on
           // this machine (excluded from every company sync — retroactively too,
           // since sync is a full replace); `shared` additionally shows it inside

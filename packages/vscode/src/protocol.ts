@@ -58,6 +58,27 @@ export interface ViewVectorEntry {
   v: string;
 }
 
+// Commit history relay. Deliberately thin — no node payloads, just what the
+// history tree needs to draw itself and let the reader pick a checkout target.
+// Kind literals are duplicated from core's versioning.ts on purpose, same
+// reasoning as ViewNode/ViewActivityEvent above.
+export interface ViewCommit {
+  id: string;
+  parents: string[];
+  branch: string;
+  author: string;
+  ts: string; // ISO
+  message: string;
+  nodesAdded: number;
+  nodesModified: number;
+  nodesRemoved: number;
+}
+
+export interface ViewRefs {
+  branches: Record<string, string>; // branch name -> head commit id
+  HEAD: string;
+}
+
 // extension → webview
 export type ExtToWeb =
   | { type: 'graph'; nodes: ViewNode[]; edges: ViewEdge[]; projectName: string }
@@ -71,7 +92,10 @@ export type ExtToWeb =
   | { type: 'queryVector'; seq: number; v: string | null }
   // replay: true = history sent on panel open — glow at decayed intensity, no
   // arrival flash. Otherwise a live event that just happened.
-  | { type: 'activity'; events: ViewActivityEvent[]; replay?: boolean };
+  | { type: 'activity'; events: ViewActivityEvent[]; replay?: boolean }
+  // Pushed on `ready`, on `requestCommits`, and whenever commits.jsonl/refs.json
+  // change on disk.
+  | { type: 'commits'; commits: ViewCommit[]; refs: ViewRefs };
 
 // webview → extension. Node reading/editing happens in a NATIVE editor tab
 // (the nffbrain: virtual filesystem) — the webview only asks to open things.
@@ -90,4 +114,8 @@ export type WebToExt =
   // user intent, not an auto-settle for a node that had none.
   | { type: 'move'; positions: Array<{ id: string; x: number; y: number }> }
   // Company-sync controls on one node (the detail card's Private/Shared toggles).
-  | { type: 'setNodeFlags'; id: string; private?: boolean; shared?: boolean };
+  | { type: 'setNodeFlags'; id: string; private?: boolean; shared?: boolean }
+  // History tab: ask the host to (re-)send commits+refs.
+  | { type: 'requestCommits' }
+  // Switch brain.json to another branch's or commit's materialized state.
+  | { type: 'checkout'; ref: string };

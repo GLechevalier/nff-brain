@@ -173,7 +173,7 @@ export function pruneBrain(brain: BrainFile, maxTotalNodes: number): number {
   // stay retractable — evicting them here would silently break the extension's
   // clip→node map.
   const countable = brain.nodes.filter(
-    (n) => n.origin !== 'graphify' && n.origin !== 'supabase' && n.origin !== 'clip',
+    (n) => n.origin !== 'graphify' && n.origin !== 'supabase' && n.origin !== 'tool' && n.origin !== 'clip',
   ).length;
   if (maxTotalNodes <= 0 || countable <= maxTotalNodes) return 0;
   const excess = countable - maxTotalNodes;
@@ -183,6 +183,7 @@ export function pruneBrain(brain: BrainFile, maxTotalNodes: number): number {
         n.origin !== 'seed' &&
         n.origin !== 'graphify' &&
         n.origin !== 'supabase' &&
+        n.origin !== 'tool' &&
         n.origin !== 'clip' &&
         n.category !== 'core',
     )

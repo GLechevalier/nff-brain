@@ -73,6 +73,21 @@ export function vectorsPath(brainPath: string): string {
   return brainLogPath(brainPath, VECTORS_FILE);
 }
 
+// ── versioning (commit history) ──────────────────────────────────────────────
+// Sidecars beside brain.json, same reasoning as vectors.json: derived/append-
+// only state a hand-edit of brain.json should never have to know about.
+
+export const COMMITS_FILE = 'commits.jsonl';
+export const REFS_FILE = 'refs.json';
+
+export function commitsPath(brainPath: string): string {
+  return brainLogPath(brainPath, COMMITS_FILE);
+}
+
+export function refsPath(brainPath: string): string {
+  return brainLogPath(brainPath, REFS_FILE);
+}
+
 // Table include/exclude list + row limit for the Supabase source. Sidecar, not
 // inside brain.json, for the same reason vectors.json is: derived config, not
 // knowledge — and it must never hold the connection string (see ingestSupabase.ts).
