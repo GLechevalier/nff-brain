@@ -424,6 +424,76 @@ async function toggleTrace(): Promise<void> {
   if (reply.type === 'traceStatus') paintTrace(reply.recording, reply.eventCount, reply.pending);
 }
 
+// ── record LinkedIn network (support capture) ────────────────────────────────
+// Session-local flag: the capture wrap lives in the page, not persisted — a good
+// enough signal to reveal the Download button. A hard page refresh clears the
+// page-side capture; the user just starts again.
+let netcapRecording = false;
+
+function paintNetcap(): void {
+  $('netcap-toggle').textContent = netcapRecording ? 'Recording — do your actions' : 'Start recording';
+  $('netcap-download').classList.toggle('hidden', !netcapRecording);
+  $('netcap-status').textContent = netcapRecording ? 'recording this tab' : '';
+}
+
+async function startNetCapture(): Promise<void> {
+  showFieldError('netcap-error', null);
+  const host = await resolveCurrentHost();
+  if (host !== 'www.linkedin.com') {
+    showFieldError('netcap-error', 'Open a linkedin.com tab first, then start recording.');
+    return;
+  }
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ origins: ['https://www.linkedin.com/*'] });
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    showFieldError('netcap-error', 'Chrome permission for www.linkedin.com was not granted.');
+    return;
+  }
+  const tabId = await activeTabId();
+  if (tabId === undefined) {
+    showFieldError('netcap-error', 'Could not find the current tab.');
+    return;
+  }
+  const reply = await send({ type: 'netCaptureStart', tabId });
+  if (reply.type === 'error') {
+    showFieldError('netcap-error', reply.message);
+    return;
+  }
+  netcapRecording = true;
+  paintNetcap();
+}
+
+async function downloadNetCapture(): Promise<void> {
+  showFieldError('netcap-error', null);
+  const tabId = await activeTabId();
+  if (tabId === undefined) {
+    showFieldError('netcap-error', 'Could not find the current tab.');
+    return;
+  }
+  const reply = await send({ type: 'netCaptureDownload', tabId });
+  if (reply.type !== 'netCapture') {
+    if (reply.type === 'error') showFieldError('netcap-error', reply.message);
+    return;
+  }
+  if (!reply.entries.length) {
+    showFieldError('netcap-error', 'Nothing captured yet — do some actions on the page first (without a full refresh).');
+    return;
+  }
+  const jsonl = reply.entries.map((e) => JSON.stringify(e)).join('\n');
+  const blob = new Blob([jsonl], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `linkedin-capture-${Date.now()}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  $('netcap-status').textContent = `${reply.entries.length} calls captured — downloaded`;
+}
+
 // ── tab selection ─────────────────────────────────────────────────────────────
 
 function selectTab(tab: SidePanelTab): void {
@@ -1327,6 +1397,10 @@ function wire(): void {
   $('crm-sync-clear').addEventListener('click', () => {
     void dispatchSetup({ type: 'clearCrmSync' }, 'crm-sync-error').then(() => refreshState());
   });
+
+  // Settings tab — record LinkedIn network (support capture).
+  $('netcap-toggle').addEventListener('click', () => void startNetCapture());
+  $('netcap-download').addEventListener('click', () => void downloadNetCapture());
 
   // Settings tab — company brain sync (local brain → nff-admin).
   $('brain-sync-save').addEventListener('click', () => void saveBrainSyncToken());

@@ -18,6 +18,7 @@ import type {
 import type { ProviderId } from '@nff-brain/core/provider';
 import type { WorkflowSpec } from '@nff-brain/core/workflow';
 import type { BrainEdge, BrainNode } from '@nff-brain/core/types';
+import type { CaptureEntry as NetCaptureEntry } from './netCaptureScript.js';
 
 /**
  * Owned by item 0 (packages/core/src/serveConfig.ts). This is the ONLY place
@@ -731,7 +732,11 @@ export type PopupToSw =
   | { type: 'traceStart'; tabId: number }
   | { type: 'traceStop' }
   | { type: 'traceCancel' }
-  | { type: 'getTraceStatus' };
+  | { type: 'getTraceStatus' }
+  // Record LinkedIn network (support capture). Injects/reads a MAIN-world tap in
+  // the given tab; the panel saves the returned entries to a file. See netCapture.ts.
+  | { type: 'netCaptureStart'; tabId: number }
+  | { type: 'netCaptureDownload'; tabId: number };
 
 /** The panel speaks the same channel as the popup — including the item-7 Agent tab. */
 export type PanelToSw = PopupToSw;
@@ -820,6 +825,9 @@ export type SwToPopup =
   | { type: 'traceStatus'; recording: boolean; eventCount: number; pending: { id: string; events: number; startUrl: string; title?: string } | null }
   | { type: 'workflows'; items: WorkflowSummary[] }
   | { type: 'brainImported'; imported: number; total: number }
-  | { type: 'brainSyncResult'; ok: boolean; message: string };
+  | { type: 'brainSyncResult'; ok: boolean; message: string }
+  // Support capture: the recorded voyager calls, handed back for the panel to
+  // save as a file. `started` distinguishes the start ack (empty) from a dump.
+  | { type: 'netCapture'; started: boolean; entries: NetCaptureEntry[] };
 
 export type SwToPanel = SwToPopup;

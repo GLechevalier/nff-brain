@@ -227,6 +227,26 @@
         <div id="crm-sync-error" class="small error hidden"></div>
       </div>
 
+      <!-- Record LinkedIn network: a support/debug capture. Records the LinkedIn
+           API calls your browser makes in the current tab to a file you can send
+           for troubleshooting. Nothing is uploaded; you download it yourself. -->
+      <div class="panel">
+        <div class="row">
+          <span class="label">Record LinkedIn network</span>
+          <span id="netcap-status" class="muted small push"></span>
+        </div>
+        <p class="muted small">
+          For support only. On a LinkedIn tab, start recording, do the actions
+          (send an invite, open "recently added" connections, send a message),
+          then download the capture and send it over. Stays on this machine.
+        </p>
+        <div class="row gap">
+          <button id="netcap-toggle" class="btn primary">Start recording</button>
+          <button id="netcap-download" class="btn hidden">Download capture</button>
+        </div>
+        <div id="netcap-error" class="small error hidden"></div>
+      </div>
+
       <!-- Company brain sync: push this brain to the company's nff-admin brain.
            The token is per-employee (minted in nff-admin's Users tab) and
            write-only: saved into the worker, never shown back. Nodes marked

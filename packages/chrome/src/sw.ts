@@ -95,6 +95,7 @@ import { clearProjectHandle, queryProjectPermission } from './fsHandles.js';
 import { getCodeProject, setCodeProject } from './storage.js';
 import { attentionHide, cursorHide } from './actEngine.js';
 import { cancelTraceRecording, onTraceEvent, startTraceRecording, stopTraceRecording } from './traceCapture.js';
+import { dumpNetCapture, startNetCapture } from './netCapture.js';
 import { distillPairedTrace } from './pairedTraceDistill.js';
 import { syncBrainToCompany } from './companySync.js';
 import { getActHostAllow, getActRun, getTraceActive, getTracePending, setActHostAllow } from './storage.js';
@@ -688,6 +689,14 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
 
     case 'getTraceStatus':
       return traceStatus();
+
+    // Record LinkedIn network (support capture).
+    case 'netCaptureStart':
+      await startNetCapture(msg.tabId);
+      return { type: 'netCapture', started: true, entries: [] };
+
+    case 'netCaptureDownload':
+      return { type: 'netCapture', started: false, entries: await dumpNetCapture(msg.tabId) };
   }
   return { type: 'state', state: await publicState() };
 }

@@ -68,6 +68,9 @@ type Builders = {
   // Not a source builder: executeScript({func}) serializes THIS function at
   // runtime — the program under test is its minified .toString().
   scrapeProfileTopCard(inviteeSlug?: string): unknown;
+  // The support-capture programs (netCaptureScript.ts), same executeScript path.
+  captureInstall(): void;
+  captureDump(): unknown;
 };
 
 // Mirrors build.mjs's `common` — same resolution conditions and syntax floor,
@@ -80,6 +83,7 @@ async function loadMinifiedBuilders(): Promise<Builders> {
         "export { buildCursorInstallerSource } from './src/cursorScript.js';",
         "export { buildAttentionInstallerSource } from './src/attentionScript.js';",
         "export { scrapeProfileTopCard } from './src/profileScrapeScript.js';",
+        "export { captureInstall, captureDump } from './src/netCaptureScript.js';",
       ].join('\n'),
       resolveDir: ROOT,
       sourcefile: 'injectedSource.entry.ts',
@@ -251,6 +255,8 @@ describe('injected CDP programs (minified, as shipped)', () => {
       // same way the CDP builders do — same leak class, same check.
       ['scrapeProfileTopCard (executeScript func)', `(${String(b.scrapeProfileTopCard)})()`],
       ['scrapeProfileTopCard (invitee-slug arg)', `(${String(b.scrapeProfileTopCard)})("ada-lovelace")`],
+      ['captureInstall (executeScript func)', `(${String(b.captureInstall)})()`],
+      ['captureDump (executeScript func)', `(${String(b.captureDump)})()`],
     ];
     for (const [name, src] of programs) {
       expect(
