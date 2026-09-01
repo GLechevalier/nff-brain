@@ -17,7 +17,8 @@ import {
   isSendInviteLabel,
   vanityFromPreloadHref,
 } from './linkedinClassify.js';
-import { dayBucket, emit } from './runtime.js';
+import { classifyMessageSend } from '../src/inviteNet.js';
+import { dayBucket, emit, emitNet } from './runtime.js';
 
 function findModalContext(button: Element): { name: string; note: string; linkedin: string } {
   // The send button lives inside the invite dialog; the dialog heading names
@@ -41,6 +42,57 @@ function findModalContext(button: Element): { name: string; note: string; linked
   const linkedin = canonicalProfileUrl(profileLink?.href ?? '') || canonicalProfileUrl(location.href);
   return { name, note, linkedin };
 }
+
+/**
+ * The active messaging thread's recipient, for a message you just sent. The
+ * MAIN-world tap sees the send on the wire but not WHO — that is only in the
+ * DOM, readable here in the isolated world. Exactly one /in/ profile in the open
+ * thread ⇒ a 1:1 recipient; zero or many (group / not found) ⇒ null, and the SW
+ * records the send to the local net-log without a contact. Selectors are
+ * best-effort across LinkedIn's messaging shells; null is the honest miss.
+ */
+function scrapeMessageRecipient(): { name: string; linkedin: string } | null {
+  const links = document.querySelectorAll<HTMLAnchorElement>(
+    '.msg-thread a[href*="/in/"], [class*="msg-conversation"] a[href*="/in/"], ' +
+      '.msg-overlay-conversation-bubble a[href*="/in/"], [class*="messaging-thread"] a[href*="/in/"]',
+  );
+  const bySlug = new Map<string, string>();
+  for (const a of links) {
+    const slug = /\/in\/([^/?#]+)/.exec(a.href)?.[1];
+    if (!slug) continue;
+    if (!bySlug.has(slug)) bySlug.set(slug, a.textContent?.trim().slice(0, 80) ?? '');
+  }
+  if (bySlug.size !== 1) return null;
+  const [slug, name] = [...bySlug][0];
+  return { name: name || slug, linkedin: `https://www.linkedin.com/in/${slug}` };
+}
+
+// The MAIN-world network tap (rec-linkedin-net.js) postMessages every voyager
+// call it sees; forward it to the SW. Same-window + sentinel is the only trust
+// check — a forged message costs at most one local net-log row / CRM interaction
+// (see netTapScript.ts's threat note), and the SW re-gates regardless.
+window.addEventListener('message', (e) => {
+  if (e.source !== window) return;
+  const d = e.data as { __nffNet?: unknown; url?: unknown; method?: unknown; status?: unknown; reqBody?: unknown; resBody?: unknown };
+  if (!d || d.__nffNet !== true || typeof d.url !== 'string') return;
+  const payload: Record<string, unknown> = {
+    url: d.url,
+    method: typeof d.method === 'string' ? d.method : 'GET',
+    status: typeof d.status === 'number' ? d.status : 0,
+    ...(typeof d.reqBody === 'string' && { reqBody: d.reqBody }),
+    ...(typeof d.resBody === 'string' && { resBody: d.resBody }),
+  };
+  // Attribute a message send to its recipient from the thread DOM, here, before
+  // the thread can change — the SW cannot read the page.
+  if (classifyMessageSend(String(payload.method), d.url)) {
+    const r = scrapeMessageRecipient();
+    if (r) {
+      payload.recipientName = r.name;
+      payload.recipientLinkedin = r.linkedin;
+    }
+  }
+  emitNet(payload);
+});
 
 document.addEventListener(
   'click',

@@ -53,6 +53,7 @@ import {
   renderTranscript,
   renderWorkflows,
   setGraphViewBox,
+  setMarqueeBox,
   setNodePosition,
   showActError,
   showFieldError,
@@ -157,6 +158,14 @@ let panStartClientY = 0;
 let panStartBox: GraphViewBox | null = null;
 let nodeDrag: { id: string; startClientX: number; startClientY: number; x0: number; y0: number; moved: boolean } | null = null;
 let selectedGraphNodeId: string | null = null;
+// Shift-drag box-select: 2+ ids at once. Kept separate from selectedGraphNodeId
+// (singular) rather than folding them into one type — most of the app only
+// ever cares about "the one selected node".
+let multiSelectedIds: string[] | null = null;
+// Board-space start point of an in-progress marquee drag, or null when none
+// is active. A plain drag still pans (unchanged); only a shift-held drag on
+// empty canvas starts this instead.
+let marqueeStart: { x: number; y: number } | null = null;
 
 function send(msg: PopupToSw): Promise<SwToPopup> {
   return new Promise((resolve) => {
@@ -987,6 +996,15 @@ async function loadGraph(resetView: boolean): Promise<void> {
   paintGraphNodeDetail(); // re-point the detail strip at the fresh node objects
 }
 
+function clientToBoard(canvas: HTMLElement, clientX: number, clientY: number): { x: number; y: number } | null {
+  if (!graphViewBox) return null;
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: graphViewBox.x + ((clientX - rect.left) / rect.width) * graphViewBox.w,
+    y: graphViewBox.y + ((clientY - rect.top) / rect.height) * graphViewBox.h,
+  };
+}
+
 function zoomGraph(canvas: HTMLElement, clientX: number, clientY: number, factor: number): void {
   if (!graphViewBox) return;
   const rect = canvas.getBoundingClientRect();
@@ -1033,13 +1051,29 @@ const graphHandlers: GraphHandlers = {
   },
   onSelectNode: (id) => {
     selectedGraphNodeId = id;
+    multiSelectedIds = null;
     paintGraphNodeDetail();
   },
 };
 
-/** The selected node's company-sync controls under the canvas. */
+/** The selected node's company-sync controls under the canvas — or, when a
+ *  box-select caught 2+ nodes, a plain title list in the same row (the
+ *  private/shared toggles only make sense for exactly one node). */
 function paintGraphNodeDetail(): void {
   const detail = $('graph-node-detail');
+  const priv = $('graph-node-private') as HTMLButtonElement;
+  const shared = $('graph-node-shared') as HTMLButtonElement;
+
+  if (multiSelectedIds && multiSelectedIds.length > 1) {
+    const titles = multiSelectedIds.map((id) => latestGraphNodes.find((n) => n.id === id)?.title ?? id);
+    detail.classList.remove('hidden');
+    $('graph-node-title').textContent = `${multiSelectedIds.length} selected: ${titles.join(', ')}`;
+    priv.classList.add('hidden');
+    shared.classList.add('hidden');
+    return;
+  }
+  priv.classList.remove('hidden');
+
   const node = selectedGraphNodeId ? latestGraphNodes.find((n) => n.id === selectedGraphNodeId) : null;
   if (!node) {
     selectedGraphNodeId = null;
@@ -1048,8 +1082,6 @@ function paintGraphNodeDetail(): void {
   }
   detail.classList.remove('hidden');
   $('graph-node-title').textContent = node.title;
-  const priv = $('graph-node-private') as HTMLButtonElement;
-  const shared = $('graph-node-shared') as HTMLButtonElement;
   priv.textContent = node.private ? '🔒 Private' : 'Make private';
   priv.title = node.private
     ? 'Private: never synced to the company brain — click to allow syncing again'
@@ -1094,6 +1126,13 @@ function wireGraphCanvas(): void {
 
   canvas.addEventListener('mousedown', (e) => {
     if (!graphViewBox) return;
+    if (e.shiftKey) {
+      const p = clientToBoard(canvas, e.clientX, e.clientY);
+      if (!p) return;
+      marqueeStart = p;
+      setMarqueeBox({ x: p.x, y: p.y, w: 0, h: 0 });
+      return;
+    }
     panning = true;
     panStartClientX = e.clientX;
     panStartClientY = e.clientY;
@@ -1102,6 +1141,17 @@ function wireGraphCanvas(): void {
   });
 
   window.addEventListener('mousemove', (e) => {
+    if (marqueeStart) {
+      const p = clientToBoard(canvas, e.clientX, e.clientY);
+      if (!p) return;
+      setMarqueeBox({
+        x: Math.min(marqueeStart.x, p.x),
+        y: Math.min(marqueeStart.y, p.y),
+        w: Math.abs(p.x - marqueeStart.x),
+        h: Math.abs(p.y - marqueeStart.y),
+      });
+      return;
+    }
     if (nodeDrag) {
       dragNode(canvas, e.clientX, e.clientY);
       return;
@@ -1111,6 +1161,28 @@ function wireGraphCanvas(): void {
   });
 
   window.addEventListener('mouseup', (e) => {
+    if (marqueeStart) {
+      const start = marqueeStart;
+      marqueeStart = null;
+      setMarqueeBox(null);
+      const end = clientToBoard(canvas, e.clientX, e.clientY) ?? start;
+      const minX = Math.min(start.x, end.x), maxX = Math.max(start.x, end.x);
+      const minY = Math.min(start.y, end.y), maxY = Math.max(start.y, end.y);
+      if (maxX - minX < 3 && maxY - minY < 3) return; // a shift-click, not a drag — no-op
+      const hits = latestGraphNodes
+        .filter((n) => n.x >= minX && n.x <= maxX && n.y >= minY && n.y <= maxY)
+        .map((n) => n.id);
+      if (hits.length >= 2) {
+        multiSelectedIds = hits;
+        selectedGraphNodeId = null;
+        paintGraphNodeDetail();
+      } else if (hits.length === 1) {
+        selectedGraphNodeId = hits[0];
+        multiSelectedIds = null;
+        paintGraphNodeDetail();
+      }
+      return;
+    }
     if (nodeDrag) {
       const drag = nodeDrag;
       const pos = dragNode(canvas, e.clientX, e.clientY);
@@ -1129,6 +1201,7 @@ function wireGraphCanvas(): void {
         // A press-and-release without movement is a SELECT — show the node's
         // company-sync controls (private / shared) under the canvas.
         selectedGraphNodeId = selectedGraphNodeId === drag.id ? null : drag.id;
+        multiSelectedIds = null;
         paintGraphNodeDetail();
       }
       return;

@@ -46,7 +46,7 @@ import { HEALTH_ALARM, currentPhase, ensureAlarm, pairWithServer, probe, unpair 
 import { clearActivity, removableNodeCount } from './activity.js';
 import { parseRuleInput, ruleLabel } from './gate.js';
 import { derivePhase } from './health.js';
-import { ensureRecorderScripts, onLinkedinInviteRequest, onRecorderEvent, recorderPublicState, setRecorderEnabled } from './recorder.js';
+import { ensureRecorderScripts, onLinkedinInviteRequest, onLinkedinNet, onRecorderEvent, recorderPublicState, setRecorderEnabled } from './recorder.js';
 import {
   AGENT_POLL_ALARM,
   agentActionAllowPublicState,
@@ -818,6 +818,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // fire-and-forget, and their sender matters (the SW stamps the trusted url).
   if ((msg as { type?: string })?.type === 'traceEvent') {
     void onTraceEvent((msg as { event?: unknown }).event, sender);
+    sendResponse({ type: 'state' });
+    return true;
+  }
+  // LinkedIn network-tap summaries forwarded by content/linkedin.ts — again a
+  // content script, fire-and-forget, sender-matters (recorder toggle + url gate).
+  if ((msg as { type?: string })?.type === 'linkedinNet') {
+    void onLinkedinNet((msg as { payload?: unknown }).payload, sender);
     sendResponse({ type: 'state' });
     return true;
   }

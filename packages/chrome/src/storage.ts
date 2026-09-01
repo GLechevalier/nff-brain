@@ -34,7 +34,7 @@ import type {
   WorkflowStore,
 } from './schema.js';
 import type { RecorderSeenEntry, RecorderState } from './recorderTypes.js';
-import type { PendingInvite } from './inviteNet.js';
+import type { NetLogEntry, PendingInvite } from './inviteNet.js';
 import type { AgentActionAllowState, AgentAdapterState, AgentTabRef, NavigateHostAllowState } from './agentTypes.js';
 
 async function raw<T>(key: string, fallback: T, valid: (v: unknown) => boolean): Promise<T> {
@@ -125,6 +125,22 @@ export function getInvitePending(): Promise<PendingInvite[]> {
 
 export async function setInvitePending(list: PendingInvite[]): Promise<void> {
   await chrome.storage.local.set({ [KEYS.invitePending]: list });
+}
+
+export function getNetLog(): Promise<NetLogEntry[]> {
+  return raw<NetLogEntry[]>(KEYS.netLog, [], (v) => Array.isArray(v));
+}
+
+export async function setNetLog(list: NetLogEntry[]): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.netLog]: list });
+}
+
+export function getAcceptSeen(): Promise<Record<string, number>> {
+  return raw<Record<string, number>>(KEYS.acceptSeen, {}, (v) => isObj(v));
+}
+
+export async function setAcceptSeen(map: Record<string, number>): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.acceptSeen]: map });
 }
 
 export function getAgentAdapters(): Promise<AgentAdapterState> {

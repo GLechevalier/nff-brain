@@ -14,13 +14,24 @@ import {
   validateRecorderEvent,
 } from '../src/recorderFormat.js';
 import {
+  acceptSeenHas,
+  acceptSeenPut,
+  ACCEPT_SEEN_TTL_MS,
+  classifyAcceptedFromResponse,
   classifyInviteRequest,
+  classifyMessageSend,
   dayBucket,
+  endpointOf,
+  isRecentConnectionsResponse,
   nameFromTabTitle,
+  NETLOG_MAX,
+  parseMessageText,
   PENDING_INVITE_MAX,
   PENDING_INVITE_TTL_MS,
+  pushNetLog,
   pushPendingInvite,
   takePendingInvite,
+  type NetLogEntry,
   type PendingInvite,
 } from '../src/inviteNet.js';
 import { ADAPTERS, adapterById } from '../src/recorderRegistry.js';
@@ -285,5 +296,105 @@ describe('registry', () => {
       expect(a.hosts.length).toBeGreaterThan(0);
       expect(adapterById(a.id)).toBe(a);
     }
+  });
+
+  it('linkedin adapter declares the accept + message actions and the MAIN-world tap', () => {
+    const li = adapterById('linkedin')!;
+    expect(li.actions).toContain('linkedin.invite_accepted');
+    expect(li.actions).toContain('linkedin.message_sent');
+    expect(li.mainWorldScriptFile).toBe('rec-linkedin-net.js');
+  });
+});
+
+// ── the network-tap pure classifiers ─────────────────────────────────────────
+
+describe('classifyMessageSend', () => {
+  const V = 'https://www.linkedin.com/voyager/api/';
+  it('accepts a createMessage / messengerMessages POST', () => {
+    expect(classifyMessageSend('POST', `${V}voyagerMessagingDashMessengerMessages?action=createMessage`)).toBe(true);
+    expect(classifyMessageSend('post', `${V}messaging/conversations/x/events?action=create`)).toBe(true);
+  });
+  it('rejects GETs, non-messaging POSTs, and non-voyager URLs', () => {
+    expect(classifyMessageSend('GET', `${V}voyagerMessagingDashMessengerMessages`)).toBe(false);
+    expect(classifyMessageSend('POST', `${V}relationships/invitations`)).toBe(false);
+    expect(classifyMessageSend('POST', 'https://www.linkedin.com/messaging/thread/1')).toBe(false);
+  });
+});
+
+describe('parseMessageText', () => {
+  it('digs the text out of the common shapes', () => {
+    expect(parseMessageText(JSON.stringify({ message: { body: { text: 'hi there' } } }))).toBe('hi there');
+    expect(parseMessageText(JSON.stringify({ body: 'plain body' }))).toBe('plain body');
+    expect(parseMessageText(JSON.stringify({ eventCreate: { value: { x: { body: 'nested' } } } }))).toBe('nested');
+  });
+  it('returns empty on junk / missing', () => {
+    expect(parseMessageText(undefined)).toBe('');
+    expect(parseMessageText('not json')).toBe('');
+    expect(parseMessageText(JSON.stringify({ nothing: 1 }))).toBe('');
+  });
+});
+
+describe('isRecentConnectionsResponse / classifyAcceptedFromResponse', () => {
+  const V = 'https://www.linkedin.com/voyager/api/';
+  const url = `${V}relationships/dash/connections?count=40&sortType=RECENTLY_ADDED&start=0`;
+
+  it('flags only the RECENTLY_ADDED connections endpoint', () => {
+    expect(isRecentConnectionsResponse(url)).toBe(true);
+    expect(isRecentConnectionsResponse(`${V}relationships/dash/connections?sortType=DISTANCE`)).toBe(false);
+    expect(isRecentConnectionsResponse(`${V}relationships/invitations`)).toBe(false);
+  });
+
+  it('extracts every named profile, whatever the nesting, deduped by slug', () => {
+    const body = JSON.stringify({
+      elements: [{ connected: { publicIdentifier: 'ada-l', firstName: 'Ada', lastName: 'Lovelace' } }],
+      included: [
+        { publicIdentifier: 'ada-l', firstName: 'Ada', lastName: 'Lovelace' }, // dup slug
+        { publicIdentifier: 'grace-h', name: 'Grace Hopper' },
+      ],
+    });
+    const out = classifyAcceptedFromResponse(url, body);
+    expect(out).toEqual([
+      { slug: 'ada-l', name: 'Ada Lovelace' },
+      { slug: 'grace-h', name: 'Grace Hopper' },
+    ]);
+  });
+
+  it('is empty on the wrong endpoint, junk body, or a slug with no name', () => {
+    expect(classifyAcceptedFromResponse(`${V}other`, '{}')).toEqual([]);
+    expect(classifyAcceptedFromResponse(url, 'not json')).toEqual([]);
+    expect(classifyAcceptedFromResponse(url, JSON.stringify({ publicIdentifier: 'x' }))).toEqual([]);
+  });
+});
+
+describe('endpointOf', () => {
+  it('strips host and query, keeps the path', () => {
+    expect(endpointOf('https://www.linkedin.com/voyager/api/feed/x?count=10')).toBe('/voyager/api/feed/x');
+  });
+});
+
+describe('pushNetLog', () => {
+  it('appends and caps at NETLOG_MAX', () => {
+    let ring: NetLogEntry[] = [];
+    for (let i = 0; i < NETLOG_MAX + 25; i++) {
+      ring = pushNetLog(ring, { atMs: i, method: 'GET', endpoint: `/x/${i}`, status: 200 });
+    }
+    expect(ring.length).toBe(NETLOG_MAX);
+    expect(ring[ring.length - 1].endpoint).toBe(`/x/${NETLOG_MAX + 24}`);
+  });
+});
+
+describe('acceptSeen', () => {
+  it('remembers a slug within the TTL and forgets it after', () => {
+    const t0 = 1_000_000;
+    const m = acceptSeenPut({}, 'ada', t0);
+    expect(acceptSeenHas(m, 'ada', t0 + 1000)).toBe(true);
+    expect(acceptSeenHas(m, 'ada', t0 + ACCEPT_SEEN_TTL_MS + 1)).toBe(false);
+    expect(acceptSeenHas(m, 'grace', t0)).toBe(false);
+  });
+  it('prunes expired entries as it adds', () => {
+    const t0 = 0;
+    const old = acceptSeenPut({}, 'old', t0);
+    const next = acceptSeenPut(old, 'fresh', t0 + ACCEPT_SEEN_TTL_MS + 1);
+    expect(Object.keys(next).sort()).toEqual(['fresh']);
   });
 });

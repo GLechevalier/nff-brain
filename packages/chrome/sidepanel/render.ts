@@ -8,7 +8,7 @@
 
 import { PROVIDERS, PROVIDER_CHOICES } from '@nff-brain/core/provider';
 import type { ProviderId } from '@nff-brain/core/provider';
-import { buildDensityClusters, DEFAULT_DENSITY_SCREEN_RADIUS } from '@nff-brain/core/density';
+import { buildDensityClusters, MERGE_SCREEN_SLACK } from '@nff-brain/core/density';
 import type { DensityCluster } from '@nff-brain/core/density';
 import { relativeAge } from '../src/health.js';
 import { ruleLabel } from '../src/gate.js';
@@ -565,6 +565,15 @@ const graphNodeEls = new Map<string, GraphNodeEls>();
 // the popover doesn't vanish out from under the reader every few seconds.
 let expandedClusterId: string | null = null;
 
+// Member ids merged into a hub (nearBigNodeId) as of the LAST renderGraph
+// call. This renderer rebuilds the whole SVG from scratch every call (no
+// React-style diffing to animate through), so a node can't just transition
+// its own attributes across renders — the "just got absorbed" animation
+// below instead compares this call's merged set against the previous one:
+// an id that's newly merged gets one SMIL-animated farewell circle; an id
+// that was ALREADY merged last call is simply skipped, same as always.
+let prevMergedIds = new Set<string>();
+
 /**
  * Rebuilds the graph SVG from scratch and returns a fitted view box (node
  * bounding box + padding) for the caller to hand to setGraphViewBox. Pan/zoom
@@ -607,46 +616,46 @@ export function renderGraph(
   const pad = 40;
   const box: GraphViewBox = { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
 
-  // Density clustering — where the graph is actually crowded on screen,
-  // same-category connected groups collapse into one super-node. Derived
-  // here, never persisted. GraphNode's x/y are already the settled on-disk
-  // positions (this renderer never runs its own layout pass), so no extra
-  // position resolution is needed before calling in, unlike the vscode
-  // webview's own live layoutBrain() pass.
+  // Overlap merging — Agar.io style. Nodes that visually overlap at the
+  // current zoom fuse into one blob anchored on the largest member; the
+  // anchor keeps rendering as itself (grown by core's blobSize, carried on
+  // c.size) and the other members hide behind it. Derived here, never
+  // persisted. GraphNode's x/y are already the settled on-disk positions
+  // (this renderer never runs its own layout pass), so no extra position
+  // resolution is needed before calling in.
   //
-  // Radius: this renderer has no `view.scale` the way the two React
-  // renderers do — pan/zoom here is just the SVG viewBox — so the effective
-  // zoom is derived from the ratio of the canvas's on-screen width to the
-  // current viewBox width. Falls back to the freshly fitted `box` (and then
-  // to scale 1) when there's no prior view yet, e.g. first load. Same
-  // DEFAULT_DENSITY_SCREEN_RADIUS as nff-admin's density-heatmap toggle and
-  // the vscode webview — one shared definition of "crowded" everywhere it's
-  // shown.
+  // Slack: this renderer has no `view.scale` the way the two React renderers
+  // do — pan/zoom here is just the SVG viewBox — so the effective zoom is
+  // derived from the ratio of the canvas's on-screen width to the current
+  // viewBox width. Falls back to the freshly fitted `box` (and then to scale
+  // 1) when there's no prior view yet, e.g. first load. Same
+  // MERGE_SCREEN_SLACK as the other renderers — one shared definition of
+  // "stacked" everywhere it's shown.
   const screenRect = host.getBoundingClientRect();
   const refBox = currentViewBox ?? box;
   const scale = refBox.w > 0 && screenRect.width > 0 ? screenRect.width / refBox.w : 1;
-  const densityClusters = buildDensityClusters(nodes, edges, { radius: DEFAULT_DENSITY_SCREEN_RADIUS / scale });
-  const clusteredIds = new Set(densityClusters.flatMap((c) => c.memberIds));
-  const memberToCluster = new Map<string, string>();
-  for (const c of densityClusters) for (const id of c.memberIds) memberToCluster.set(id, c.id);
-  // Cluster position = centroid of its members' existing coordinates.
-  const clusterPos = new Map<string, { x: number; y: number }>();
-  for (const c of densityClusters) {
-    let sx = 0, sy = 0, n = 0;
-    for (const id of c.memberIds) {
-      const p = byId.get(id);
-      if (!p) continue;
-      sx += p.x;
-      sy += p.y;
-      n++;
-    }
-    if (n > 0) clusterPos.set(c.id, { x: sx / n, y: sy / n });
-  }
-  const posOf = (id: string): { x: number; y: number } | undefined => byId.get(id) ?? clusterPos.get(id);
+  // Core nodes (the hub) are important landmarks: they may anchor blobs but
+  // must never be hidden as another blob's member.
+  const protectedIds = new Set(nodes.filter((n) => n.category === 'core').map((n) => n.id));
+  const densityClusters = buildDensityClusters(nodes, edges, { slack: MERGE_SCREEN_SLACK / scale, protectedIds });
+  // A blob's anchor keeps rendering as itself; only the OTHER members hide.
+  const blobByAnchor = new Map(densityClusters.map((c) => [c.anchorId, c]));
+  const hiddenIds = new Set(densityClusters.flatMap((c) => c.memberIds.filter((id) => id !== c.anchorId)));
+  const memberToAnchor = new Map<string, string>();
+  for (const c of densityClusters) for (const id of c.memberIds) if (id !== c.anchorId) memberToAnchor.set(id, c.anchorId);
   if (expandedClusterId && !densityClusters.some((c) => c.id === expandedClusterId)) expandedClusterId = null;
 
-  // Redirect any edge touching a clustered member to the cluster node
-  // instead, dedupe, and drop now-internal edges (both ends in one cluster).
+  // An anchor renders at the blob's grown size (core's blobSize, already
+  // computed on the cluster); everything else at its own.
+  const renderSizeFor = (n: { id: string; size: number }): number => blobByAnchor.get(n.id)?.size ?? n.size;
+
+  // Which members are newly hidden since the LAST call (see prevMergedIds
+  // above) — those get the one-shot absorb animation below.
+  const newlyAbsorbedIds = new Set([...memberToAnchor.keys()].filter((id) => !prevMergedIds.has(id)));
+  prevMergedIds = new Set(memberToAnchor.keys());
+
+  // Redirect any edge touching a hidden member to its blob's anchor (a real,
+  // visible node), dedupe, and drop now-internal edges (both ends in one blob).
   const visibleEdges: readonly GraphEdge[] =
     densityClusters.length === 0
       ? edges
@@ -654,8 +663,8 @@ export function renderGraph(
           const seen = new Set<string>();
           const out: GraphEdge[] = [];
           for (const e of edges) {
-            const from = memberToCluster.get(e.from) ?? e.from;
-            const to = memberToCluster.get(e.to) ?? e.to;
+            const from = memberToAnchor.get(e.from) ?? e.from;
+            const to = memberToAnchor.get(e.to) ?? e.to;
             if (from === to) continue;
             const key = `${from}>${to}`;
             if (seen.has(key)) continue;
@@ -664,6 +673,7 @@ export function renderGraph(
           }
           return out;
         })();
+  const posOf = (id: string): { x: number; y: number } | undefined => byId.get(id);
 
   // Lines whose endpoint touches a given node id — setNodePosition re-anchors
   // these during a drag so a node's connections never visually detach from it.
@@ -689,42 +699,105 @@ export function renderGraph(
 
   const nodeGroup = svgEl('g');
   for (const n of nodes) {
-    if (clusteredIds.has(n.id)) continue;
+    if (newlyAbsorbedIds.has(n.id)) {
+      // Just merged into a blob this call — a one-shot farewell circle at
+      // ITS OWN last position, SMIL-animated (attribute-level, no state to
+      // track — see prevMergedIds' comment) sliding/shrinking/fading into
+      // the anchor over the next call. Not registered in graphNodeEls: it's
+      // not draggable/interactive, and by the next renderGraph it's excluded
+      // like any other already-hidden member.
+      const hub = byId.get(memberToAnchor.get(n.id)!);
+      const circle = svgEl('circle');
+      circle.setAttribute('class', 'graph-node');
+      circle.setAttribute('cx', String(n.x));
+      circle.setAttribute('cy', String(n.y));
+      circle.setAttribute('r', String(n.size));
+      circle.setAttribute('fill', n.color);
+      circle.style.pointerEvents = 'none';
+      if (hub) {
+        for (const [attr, from, to] of [
+          ['cx', n.x, hub.x],
+          ['cy', n.y, hub.y],
+          ['r', n.size, 2],
+          ['opacity', 1, 0],
+        ] as const) {
+          const anim = svgEl('animate');
+          anim.setAttribute('attributeName', attr);
+          anim.setAttribute('from', String(from));
+          anim.setAttribute('to', String(to));
+          anim.setAttribute('dur', '0.4s');
+          anim.setAttribute('fill', 'freeze');
+          circle.append(anim);
+        }
+      }
+      nodeGroup.append(circle);
+      continue;
+    }
+    if (hiddenIds.has(n.id)) continue;
+    // A blob's anchor renders bigger than its base size — as if it ate its
+    // hidden members (which is exactly what happened). Stored in
+    // graphNodeEls below too, so a drag repositions the label at the right
+    // offset from this (possibly grown) radius, not the base one.
+    const blob = blobByAnchor.get(n.id);
+    const size = renderSizeFor(n);
     const circle = svgEl('circle');
     circle.setAttribute('class', 'graph-node');
     circle.setAttribute('cx', String(n.x));
     circle.setAttribute('cy', String(n.y));
-    circle.setAttribute('r', String(n.size));
+    circle.setAttribute('r', String(size));
     circle.setAttribute('fill', n.color);
     circle.addEventListener('mousedown', (e) => {
       e.stopPropagation(); // a node drag must never also start a canvas pan
       handlers.onNodeMouseDown(n.id, e);
     });
     const title = svgEl('title');
-    title.textContent = n.title;
+    title.textContent = blob
+      ? `${n.title}\n\n${blob.summary}\n\n(click selects ${n.title}, double-click lists the absorbed nodes)`
+      : n.title;
     circle.append(title);
+    if (blob) {
+      // A blob anchor's double-click toggles its absorbed-members popover.
+      circle.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        if (expandedClusterId === blob.id) closePopover();
+        else openPopover(blob, n.x, n.y);
+      });
+    }
     nodeGroup.append(circle);
 
     const label = svgEl('text');
     label.setAttribute('class', 'graph-label');
     label.setAttribute('x', String(n.x));
-    label.setAttribute('y', String(n.y + n.size + 7));
+    label.setAttribute('y', String(n.y + size + 7));
     label.setAttribute('text-anchor', 'middle');
     label.textContent = truncateLabel(n.title);
     nodeGroup.append(label);
 
+    if (blob) {
+      // Mass badge: how many nodes this anchor absorbed. Corner glyph, no
+      // layout cost — same style as the cluster label it replaces.
+      const badge = svgEl('text');
+      badge.setAttribute('class', 'graph-label graph-cluster-label');
+      badge.setAttribute('x', String(n.x + size));
+      badge.setAttribute('y', String(n.y - size + 2));
+      badge.setAttribute('text-anchor', 'middle');
+      badge.textContent = `×${blob.memberIds.length - 1}`;
+      nodeGroup.append(badge);
+    }
+
     graphNodeEls.set(n.id, {
       circle,
       label,
-      size: n.size,
+      size,
       edgeEnds: edgeEndsByNode.get(n.id) ?? [],
     });
   }
   svg.append(nodeGroup);
 
-  // Density clusters — drawn LAST so a super-node sits on top of the real
-  // graph. A square (real nodes are circles) marks it as something standing
-  // in for hidden nodes. The popover toggle is a cheap DOM mutation on this
+  // Blob popovers — drawn LAST so an open member list sits on top of the
+  // real graph. The blob itself is its anchor node, already rendered
+  // (grown, with a ×N badge) in the node loop above; only the double-click
+  // member list lives here. The toggle is a cheap DOM mutation on this
   // already-mounted group — same "never rebuild the whole SVG for a small
   // change" discipline as setNodePosition/setGraphViewBox.
   const clusterGroup = svgEl('g');
@@ -738,11 +811,9 @@ export function renderGraph(
   const openPopover = (c: DensityCluster, cx: number, cy: number): void => {
     closePopover();
     expandedClusterId = c.id;
-    const bigNode = c.nearBigNodeId ? byId.get(c.nearBigNodeId) : undefined;
-    const renderSize = bigNode ? Math.max(c.size, bigNode.size) : c.size;
     const fo = svgEl('foreignObject');
-    fo.setAttribute('x', String(cx + renderSize + 8));
-    fo.setAttribute('y', String(cy - renderSize));
+    fo.setAttribute('x', String(cx + c.size + 8));
+    fo.setAttribute('y', String(cy - c.size));
     fo.setAttribute('width', '220');
     fo.setAttribute('height', String(Math.min(300, c.memberIds.length * 20 + 36)));
     const div = document.createElement('div');
@@ -766,54 +837,12 @@ export function renderGraph(
     popoverEl = fo;
   };
 
+  // Re-open a popover that was open before this rebuild.
   for (const c of densityClusters) {
-    const p = clusterPos.get(c.id);
-    if (!p) continue;
-    // Landed next to a core/hub node — draw it in that node's own shape
-    // (a circle, like every real node) at hub scale, so it reads as
-    // belonging to the hub rather than an unrelated square overlapping it.
-    // Fill/glyph/label stay the cluster's own.
-    const bigNode = c.nearBigNodeId ? byId.get(c.nearBigNodeId) : undefined;
-    const renderSize = bigNode ? Math.max(c.size, bigNode.size) : c.size;
-    const shape = svgEl(bigNode ? 'circle' : 'rect');
-    shape.setAttribute('class', 'graph-node-cluster');
-    if (bigNode) {
-      shape.setAttribute('cx', String(p.x));
-      shape.setAttribute('cy', String(p.y));
-      shape.setAttribute('r', String(renderSize));
-    } else {
-      shape.setAttribute('x', String(p.x - renderSize));
-      shape.setAttribute('y', String(p.y - renderSize));
-      shape.setAttribute('width', String(renderSize * 2));
-      shape.setAttribute('height', String(renderSize * 2));
-    }
-    shape.addEventListener('dblclick', (e) => {
-      e.stopPropagation();
-      if (expandedClusterId === c.id) closePopover();
-      else openPopover(c, p.x, p.y);
-    });
-    const title = svgEl('title');
-    title.textContent = `${c.summary}\n\n(density cluster — double-click for details)`;
-    shape.append(title);
-    clusterGroup.append(shape);
-
-    const label = svgEl('text');
-    label.setAttribute('class', 'graph-label graph-cluster-label');
-    label.setAttribute('x', String(p.x));
-    label.setAttribute('y', String(p.y + 2));
-    label.setAttribute('text-anchor', 'middle');
-    label.textContent = `×${c.memberIds.length}`;
-    clusterGroup.append(label);
-
-    const caption = svgEl('text');
-    caption.setAttribute('class', 'graph-label');
-    caption.setAttribute('x', String(p.x));
-    caption.setAttribute('y', String(p.y + renderSize + 7));
-    caption.setAttribute('text-anchor', 'middle');
-    caption.textContent = c.category;
-    clusterGroup.append(caption);
-
-    if (expandedClusterId === c.id) openPopover(c, p.x, p.y);
+    if (c.id !== expandedClusterId) continue;
+    const anchor = byId.get(c.anchorId);
+    if (anchor) openPopover(c, anchor.x, anchor.y);
+    break;
   }
   svg.append(clusterGroup);
 
@@ -827,6 +856,31 @@ export function setGraphViewBox(box: GraphViewBox): void {
   const svg = $('graph-canvas').querySelector('svg');
   if (!svg) return;
   svg.setAttribute('viewBox', `${box.x} ${box.y} ${box.w} ${box.h}`);
+}
+
+/**
+ * Draws (or updates, or removes on `null`) the shift-drag box-select
+ * rectangle, in board coordinates — same cheap "mutate the existing SVG,
+ * never rebuild it" discipline as setNodePosition/setGraphViewBox.
+ */
+export function setMarqueeBox(box: { x: number; y: number; w: number; h: number } | null): void {
+  const svg = $('graph-canvas').querySelector('svg');
+  if (!svg) return;
+  let rect = svg.querySelector('.graph-marquee') as SVGRectElement | null;
+  if (!box) {
+    rect?.remove();
+    return;
+  }
+  if (!rect) {
+    rect = svgEl('rect');
+    rect.setAttribute('class', 'graph-marquee');
+    rect.style.pointerEvents = 'none';
+    svg.append(rect); // last child — always drawn on top
+  }
+  rect.setAttribute('x', String(box.x));
+  rect.setAttribute('y', String(box.y));
+  rect.setAttribute('width', String(box.w));
+  rect.setAttribute('height', String(box.h));
 }
 
 /**

@@ -41,6 +41,22 @@ export function emitTrace(raw: Record<string, unknown>): void {
   }
 }
 
+/**
+ * The LinkedIn network-tap wire: the MAIN-world tap (rec-linkedin-net.js) can't
+ * message the SW itself (it holds no chrome.*), so it window.postMessage's to
+ * the isolated content script, which forwards the raw summary here. Same blind
+ * posture — no token, no fetch, no storage; the SW (onLinkedinNet) classifies,
+ * gates on sender.tab.url + the recorder toggle, and owns storage/CRM. `payload`
+ * is untrusted by construction and re-validated SW-side.
+ */
+export function emitNet(payload: Record<string, unknown>): void {
+  try {
+    chrome.runtime.sendMessage({ type: 'linkedinNet', payload }, () => void chrome.runtime.lastError);
+  } catch {
+    /* extension reloaded under the page — nothing to do */
+  }
+}
+
 /** First non-empty line of a textarea-ish value, for comment titles. */
 export function firstLine(text: string, max = 120): string {
   return (

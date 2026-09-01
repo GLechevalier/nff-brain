@@ -12,11 +12,19 @@ import { currentPhase } from './connection.js';
 import { maybeSyncCrmContact } from './crmSync.js';
 import { isAllowed, shouldCapture } from './gate.js';
 import {
+  acceptSeenHas,
+  acceptSeenPut,
+  classifyAcceptedFromResponse,
   classifyInviteRequest,
+  classifyMessageSend,
   dayBucket,
+  endpointOf,
   nameFromTabTitle,
+  parseMessageText,
+  pushNetLog,
   pushPendingInvite,
   takePendingInvite,
+  type NetTapPayload,
   type PendingInvite,
 } from './inviteNet.js';
 import { scrapeProfileTopCard, type ProfileTopCard } from './profileScrapeScript.js';
@@ -28,14 +36,18 @@ import { ADAPTERS, adapterById } from './recorderRegistry.js';
 import { formatRecorderClip, pushRecorderSeen, recorderSeenRecently, validateRecorderEvent } from './recorderFormat.js';
 import type { RecorderEventMsg } from './recorderTypes.js';
 import {
+  getAcceptSeen,
   getAllowlist,
   getCapture,
   getInvitePending,
+  getNetLog,
   getPairing,
   getRecorderSeen,
   getRecorders,
+  setAcceptSeen,
   setAllowlist,
   setInvitePending,
+  setNetLog,
   setRecorderSeen,
   setRecorders,
 } from './storage.js';
@@ -70,6 +82,27 @@ export async function ensureRecorderScripts(): Promise<void> {
       ]);
     } else if (!want && registeredIds.has(scriptId)) {
       await chrome.scripting.unregisterContentScripts({ ids: [scriptId] });
+    }
+
+    // The MAIN-world network tap (LinkedIn). Registered as its own script in the
+    // page's world at document_start so it wraps fetch/XHR before the LinkedIn
+    // app makes its first call. Same enable+grant gate as the isolated script.
+    if (adapter.mainWorldScriptFile) {
+      const netId = `rec.${adapter.id}.net`;
+      if (want && !registeredIds.has(netId)) {
+        await chrome.scripting.registerContentScripts([
+          {
+            id: netId,
+            js: [adapter.mainWorldScriptFile],
+            matches: adapter.matches,
+            runAt: 'document_start',
+            world: 'MAIN',
+            persistAcrossSessions: true,
+          },
+        ]);
+      } else if (!want && registeredIds.has(netId)) {
+        await chrome.scripting.unregisterContentScripts({ ids: [netId] });
+      }
     }
   }
 }
@@ -317,6 +350,124 @@ export async function onLinkedinInviteRequest(details: {
   });
   if (!msg) return;
   await deliverRecorderClip(url, msg);
+}
+
+/**
+ * The MAIN-world network tap sink (message type 'linkedinNet', forwarded by
+ * content/linkedin.ts). Turns a tapped voyager call into: a metadata-only
+ * net-log row for anything untracked (nothing invisible), a message-sent
+ * interaction, or one accept per newly-connected person. Classification is the
+ * pure inviteNet.ts functions; identity/bodies are re-validated here (the page
+ * is untrusted). Recorder-toggle + shouldCapture gate exactly as the other
+ * paths do.
+ */
+export async function onLinkedinNet(raw: unknown, sender: chrome.runtime.MessageSender): Promise<void> {
+  if (sender.id !== chrome.runtime.id) return;
+  const url = sender.tab?.url;
+  if (!url) return;
+  // Untrusted page-derived payload — coerce to a known shape, never assume it.
+  if (typeof raw !== 'object' || raw === null) return;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.url !== 'string' || typeof r.method !== 'string') return;
+  const payload: NetTapPayload = {
+    url: r.url,
+    method: r.method,
+    status: typeof r.status === 'number' ? r.status : 0,
+    reqBody: typeof r.reqBody === 'string' ? r.reqBody : undefined,
+    resBody: typeof r.resBody === 'string' ? r.resBody : undefined,
+    recipientName: typeof r.recipientName === 'string' ? r.recipientName : undefined,
+    recipientLinkedin: typeof r.recipientLinkedin === 'string' ? r.recipientLinkedin : undefined,
+  };
+  const state = await getRecorders();
+  if (state.byId['linkedin']?.enabled !== true) return;
+
+  const isMsg = classifyMessageSend(payload.method, payload.url);
+  const accepted = classifyAcceptedFromResponse(payload.url, payload.resBody);
+
+  // A tracked kind delivers a clip; anything else (or a message we could not
+  // attribute to a recipient) falls through to the metadata-only net-log — the
+  // ledger that keeps an un-classified endpoint visible for the next classifier.
+  let recorded = false;
+  if (isMsg) recorded = await onLinkedinMessageSent(payload, url);
+  if (accepted.length) {
+    await onLinkedinAccepted(accepted, url);
+    recorded = true; // handled (a baselined first run records nothing, by design)
+  }
+  if (recorded) return;
+
+  const log = await getNetLog();
+  await setNetLog(
+    pushNetLog(log, {
+      atMs: Date.now(),
+      method: payload.method,
+      endpoint: endpointOf(payload.url),
+      status: payload.status,
+    }),
+  );
+}
+
+/** A message you sent → a linkedin.message_sent clip on the recipient, when the
+ *  content-side thread scrape named them. Returns false (⇒ net-log it instead)
+ *  when the thread named nobody — never a mystery contact. */
+async function onLinkedinMessageSent(payload: NetTapPayload, tabUrl: string): Promise<boolean> {
+  const name = (payload.recipientName ?? '').trim().slice(0, 80);
+  if (!name) return false; // group/unknown thread — fall through to the net-log
+  const text = parseMessageText(payload.reqBody);
+  const at = new Date().toISOString();
+  const msg = validateRecorderEvent({
+    type: 'recorderEvent',
+    adapter: 'linkedin',
+    action: 'linkedin.message_sent',
+    // Second-resolution timestamp in the key: an exact double-fire of the same
+    // POST collapses, but two genuinely separate messages stay distinct rows.
+    key: `linkedin.message_sent:${name}:${at.slice(0, 19)}`,
+    at,
+    title: `Messaged ${name}`,
+    fields: {
+      name,
+      ...(payload.recipientLinkedin && { linkedin: payload.recipientLinkedin }),
+      ...(text && { message: text }),
+    },
+  });
+  if (!msg) return false;
+  await deliverRecorderClip(tabUrl, msg);
+  return true;
+}
+
+/**
+ * The "recently added connections" response names people who accepted you.
+ * First run baselines the current list silently (nb.acceptSeen empty) so we
+ * only ever report accepts that land AFTER tracking is on; thereafter each new
+ * slug is one linkedin.invite_accepted clip, deduped across days by the map.
+ */
+async function onLinkedinAccepted(accepted: { slug: string; name: string }[], tabUrl: string): Promise<void> {
+  const nowMs = Date.now();
+  let seen = await getAcceptSeen();
+  const firstRun = Object.keys(seen).length === 0;
+  const toReport: { slug: string; name: string }[] = [];
+  for (const a of accepted) {
+    if (acceptSeenHas(seen, a.slug, nowMs)) continue;
+    seen = acceptSeenPut(seen, a.slug, nowMs);
+    if (!firstRun) toReport.push(a);
+  }
+  await setAcceptSeen(seen);
+  if (firstRun) {
+    console.debug('[nff-brain] accept baseline —', accepted.length, 'existing connections recorded silently');
+    return;
+  }
+  for (const a of toReport) {
+    const at = new Date().toISOString();
+    const msg = validateRecorderEvent({
+      type: 'recorderEvent',
+      adapter: 'linkedin',
+      action: 'linkedin.invite_accepted',
+      key: `linkedin.invite_accepted:${a.slug}`,
+      at,
+      title: `${a.name} accepted your invite`,
+      fields: { name: a.name, linkedin: `https://www.linkedin.com/in/${a.slug}` },
+    });
+    if (msg) await deliverRecorderClip(tabUrl, msg);
+  }
 }
 
 /** The content-script event sink — the second registered shouldCapture caller (via deliverRecorderClip). */

@@ -11,7 +11,7 @@ const { getCrmSync, appendActivity } = vi.hoisted(() => ({
 vi.mock('../src/storage.js', () => ({ getCrmSync }));
 vi.mock('../src/activity.js', () => ({ appendActivity }));
 
-import { CRM_INGEST_URL, maybeSyncCrmContact } from '../src/crmSync.js';
+import { CRM_EVENTS_URL, CRM_INGEST_URL, maybeSyncCrmContact } from '../src/crmSync.js';
 
 const invite = (fields: Record<string, string>): RecorderEventMsg => ({
   type: 'recorderEvent',
@@ -127,6 +127,41 @@ describe('maybeSyncCrmContact', () => {
     await maybeSyncCrmContact(invite({ name: 'Ada' }));
     const row = appendActivity.mock.calls[0][0] as { title: string };
     expect(row.title).toBe('CRM: already tracking Ada');
+  });
+
+  it('an accept posts kind=invite_accepted to /events with an interaction body', async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({ id: 'c1', created: false, type: 'linkedin_accept' }) }));
+    vi.stubGlobal('fetch', fetchSpy);
+    getCrmSync.mockResolvedValue(cfg);
+    await maybeSyncCrmContact({
+      ...invite({ name: 'Ada', linkedin: 'https://www.linkedin.com/in/ada' }),
+      action: 'linkedin.invite_accepted',
+    });
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(CRM_EVENTS_URL);
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      kind: 'invite_accepted',
+      name: 'Ada',
+      linkedin: 'https://www.linkedin.com/in/ada',
+      body: 'Accepted your connection request',
+    });
+    const row = appendActivity.mock.calls[0][0] as { title: string; delivery: string };
+    expect(row.title).toBe('CRM: accepted — Ada');
+    expect(row.delivery).toBe('delivered');
+  });
+
+  it('a message posts kind=message_sent with the message text as the body', async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({ id: 'c1', created: false, type: 'linkedin_message' }) }));
+    vi.stubGlobal('fetch', fetchSpy);
+    getCrmSync.mockResolvedValue(cfg);
+    await maybeSyncCrmContact({
+      ...invite({ name: 'Ada', linkedin: 'https://www.linkedin.com/in/ada', message: 'thanks for connecting!' }),
+      action: 'linkedin.message_sent',
+    });
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(CRM_EVENTS_URL);
+    expect(JSON.parse(init.body as string)).toMatchObject({ kind: 'message_sent', body: 'thanks for connecting!' });
+    expect((appendActivity.mock.calls[0][0] as { title: string }).title).toBe('CRM: messaged — Ada');
   });
 
   it('never throws: HTTP errors and network failures become failed activity rows', async () => {

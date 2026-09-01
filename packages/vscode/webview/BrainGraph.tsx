@@ -4,12 +4,11 @@ import type { ViewEdge, ViewNode } from '../src/protocol';
 import {
   buildDensityClusters,
   buildSpine,
-  DEFAULT_DENSITY_SCREEN_RADIUS,
   hash,
   isDensityClusterId,
   layoutBrain,
+  MERGE_SCREEN_SLACK,
   resolveRoot,
-  type DensityCluster,
   type SpineNode,
 } from './brainSpacing';
 import { usePanZoom, type FitBox } from './usePanZoom';
@@ -98,6 +97,10 @@ interface BrainGraphProps {
   /** Live-activity heat: nodes the agent recently looked at glow and breathe. */
   glow?: ReadonlyMap<string, GlowInfo>;
   onSelect: (id: string) => void;
+  /** Shift-drag box-selected 2+ real nodes at once — their ids, in no particular order. */
+  onMultiSelect?: (ids: string[]) => void;
+  /** The parent's current box-selection, if any — rendered with the same highlight as selectedId. */
+  multiSelectedIds?: ReadonlySet<string>;
   onHover: (id: string | null) => void;
   /** Positions the layout settled for nodes that arrived without one, for persisting. */
   onLayout?: (positions: Array<{ id: string; x: number; y: number }>) => void;
@@ -117,6 +120,8 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
     matchedIds,
     glow,
     onSelect,
+    onMultiSelect,
+    multiSelectedIds,
     onHover,
     onLayout,
     onMove,
@@ -243,46 +248,156 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
     onScaleChange?.(view.scale);
   }, [view.scale, onScaleChange]);
 
-  // Density clustering — where the graph is actually crowded on screen,
-  // same-category connected groups collapse into one super-node. Derived
-  // here, never persisted, same as the spine above; the difference is this
-  // one HIDES its members instead of drawing a boundary around them. Fed the
-  // SETTLED (laid-out) positions, not the raw disk x/y — a freshly-added
-  // node's on-disk position hasn't been placed by the layout yet, and
-  // "crowded" has to mean crowded where it actually renders. The radius is
-  // DEFAULT_DENSITY_SCREEN_RADIUS / view.scale — the same screen-pixel-at-
-  // current-zoom definition nff-admin's density-heatmap toggle uses, so
-  // "density" means one thing across every surface that shows it.
+  // Shift-drag box-select: a plain drag on empty canvas still pans (startPan,
+  // unchanged) — only a shift-held drag starts a marquee instead. Board-space
+  // corners, so the drawn box tracks the content under the pan/zoom transform
+  // like everything else. The move/up handlers are created fresh per gesture
+  // and attached directly to `document` (same "survives leaving the SVG"
+  // reasoning as the pan gesture in usePanZoom) — closing over `view`/
+  // `visibleNodes`/`nodeMap` from the render the drag started in is fine
+  // since none of them move mid-drag.
+  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  // svgRef from usePanZoom is a callback ref (deliberately, see its own file's
+  // comment), not a RefObject — this local one composes onto the same <svg>
+  // just to get a synchronous getBoundingClientRect() read for box-select math.
+  const localSvgRef = useRef<SVGSVGElement | null>(null);
+  const toBoard = (clientX: number, clientY: number): { x: number; y: number } | null => {
+    const rect = localSvgRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    return { x: (clientX - rect.left - view.tx) / view.scale, y: (clientY - rect.top - view.ty) / view.scale };
+  };
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (!e.shiftKey || e.pointerType !== 'mouse' || e.button !== 0) {
+      startPan(e);
+      return;
+    }
+    e.preventDefault();
+    const start = toBoard(e.clientX, e.clientY);
+    if (!start) return;
+    setMarquee({ x0: start.x, y0: start.y, x1: start.x, y1: start.y });
+
+    const onMove = (ev: PointerEvent) => {
+      const p = toBoard(ev.clientX, ev.clientY);
+      if (p) setMarquee((m) => (m ? { ...m, x1: p.x, y1: p.y } : m));
+    };
+    const onUp = (ev: PointerEvent) => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      const end = toBoard(ev.clientX, ev.clientY) ?? start;
+      const minX = Math.min(start.x, end.x), maxX = Math.max(start.x, end.x);
+      const minY = Math.min(start.y, end.y), maxY = Math.max(start.y, end.y);
+      setMarquee(null);
+      if (maxX - minX < 3 && maxY - minY < 3) return; // a shift-click, not a drag — no-op
+      const hits = visibleNodes
+        .filter((n) => {
+          const p = nodeMap[n.id];
+          return p && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY;
+        })
+        .map((n) => n.id);
+      if (hits.length >= 2) onMultiSelect?.(hits);
+      else if (hits.length === 1) onSelect(hits[0]);
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  };
+
+  // Overlap merging — Agar.io style. Nodes whose squares visually overlap at
+  // the current zoom fuse into one blob anchored on the largest member; the
+  // anchor stays rendered (grown by core's blobSize) and the other members
+  // hide behind it. Derived here, never persisted, same as the spine above;
+  // the difference is this one HIDES members instead of drawing a boundary
+  // around them. Fed the SETTLED (laid-out) positions, not the raw disk x/y —
+  // "stacked" has to mean stacked where it actually renders. The slack is
+  // MERGE_SCREEN_SLACK / view.scale, so zooming out coalesces and zooming
+  // in dissolves — the same definition every surface uses.
   const densityClusters = useMemo(() => {
     const positioned = nodes.map((n) => {
       const p = laidOut[n.id];
       return p ? { ...n, x: p.x, y: p.y } : n;
     });
-    return buildDensityClusters(positioned, edges, { radius: DEFAULT_DENSITY_SCREEN_RADIUS / view.scale });
+    // Core nodes (the hub) are important landmarks: they may anchor blobs
+    // but must never be hidden as another blob's member.
+    const protectedIds = new Set(positioned.filter((n) => n.category === 'core').map((n) => n.id));
+    return buildDensityClusters(positioned, edges, { slack: MERGE_SCREEN_SLACK / view.scale, protectedIds });
   }, [nodes, edges, laidOut, view.scale]);
-  const clusteredIds = useMemo(
-    () => new Set(densityClusters.flatMap((c) => c.memberIds)),
+  // A blob's anchor keeps rendering as itself; only the OTHER members hide.
+  const blobByAnchor = useMemo(
+    () => new Map(densityClusters.map((c) => [c.anchorId, c])),
     [densityClusters],
   );
-  const memberToCluster = useMemo(() => {
+  const hiddenIds = useMemo(
+    () => new Set(densityClusters.flatMap((c) => c.memberIds.filter((id) => id !== c.anchorId))),
+    [densityClusters],
+  );
+  // A hidden member doesn't just vanish the instant it merges — it stays
+  // rendered for one transition, sliding and shrinking into the anchor that
+  // ate it, then drops out for good (by then it's sitting invisibly on top
+  // of the anchor anyway). memberId -> the anchor id it's animating toward.
+  const memberToAnchor = useMemo(() => {
     const m = new Map<string, string>();
-    for (const c of densityClusters) for (const id of c.memberIds) m.set(id, c.id);
+    for (const c of densityClusters) for (const id of c.memberIds) if (id !== c.anchorId) m.set(id, c.anchorId);
     return m;
   }, [densityClusters]);
-  const visibleNodes = useMemo(
-    () => nodes.filter((n) => !clusteredIds.has(n.id)),
-    [nodes, clusteredIds],
+  // A CONTENT signature, not the Map's reference — `densityClusters` gets a
+  // fresh object every render regardless of whether membership actually
+  // changed (laidOut is rebuilt every render), so depending on the Map
+  // itself re-ran this effect — and re-cancelled its own just-armed removal
+  // timer via the cleanup below — on almost every render, and an absorbed
+  // node's timer never survived long enough to fire: it got added to
+  // `absorbing` and then stuck there forever, permanently invisible
+  // (opacity 0) instead of reappearing hidden-but-fine behind clusteredIds.
+  // The signature alone isn't enough, though — wheel zoom still changes it
+  // several times per gesture, cancelling timers — so the effect also prunes
+  // any id that un-merged, the only moment stranding becomes visible.
+  const mergedKey = useMemo(
+    () => [...memberToAnchor.entries()].map(([id, anchor]) => `${id}:${anchor}`).sort().join('|'),
+    [memberToAnchor],
   );
-  // Redirect any edge touching a clustered member to the cluster node instead,
-  // dedupe, and drop edges that end up with both ends in the same cluster
-  // (now-internal). Non-clustered edges pass through unchanged.
+  const [absorbing, setAbsorbing] = useState<Map<string, string>>(new Map());
+  const prevMergedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const newlyAbsorbed = [...memberToAnchor.keys()].filter((id) => !prevMergedRef.current.has(id));
+    prevMergedRef.current = new Set(memberToAnchor.keys());
+    setAbsorbing((prev) => {
+      // An id that left memberToAnchor un-merged (zoom back in): it must leave
+      // the farewell state too, or it keeps rendering at the anchor at
+      // opacity 0 forever. This prune is also the safety net for batches whose
+      // removal timer got cancelled by a mid-gesture mergedKey change — the
+      // cleanup below clears the pending timer every time the merge set
+      // shifts, and wheel zoom shifts it many times per 500ms window.
+      let changed = false;
+      const next = new Map(prev);
+      for (const id of prev.keys())
+        if (!memberToAnchor.has(id)) { next.delete(id); changed = true; }
+      for (const id of newlyAbsorbed) { next.set(id, memberToAnchor.get(id)!); changed = true; }
+      return changed ? next : prev;
+    });
+    if (newlyAbsorbed.length === 0) return;
+    const timer = setTimeout(() => {
+      setAbsorbing((prev) => {
+        const next = new Map(prev);
+        for (const id of newlyAbsorbed) next.delete(id);
+        return next;
+      });
+    }, 500); // outlasts the transitions below
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mergedKey]);
+
+  const visibleNodes = useMemo(
+    () => nodes.filter((n) => !hiddenIds.has(n.id) || absorbing.has(n.id)),
+    [nodes, hiddenIds, absorbing],
+  );
+  // Redirect any edge touching a hidden member to its blob's anchor (a real,
+  // visible node), dedupe, and drop edges that end up with both ends in the
+  // same blob (now-internal). Non-merged edges pass through unchanged.
   const visibleEdges = useMemo(() => {
     if (densityClusters.length === 0) return edges;
     const seen = new Set<string>();
     const out: ViewEdge[] = [];
     for (const e of edges) {
-      const from = memberToCluster.get(e.from) ?? e.from;
-      const to = memberToCluster.get(e.to) ?? e.to;
+      const from = memberToAnchor.get(e.from) ?? e.from;
+      const to = memberToAnchor.get(e.to) ?? e.to;
       if (from === to) continue;
       const key = `${from}>${to}`;
       if (seen.has(key)) continue;
@@ -290,32 +405,11 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
       out.push({ ...e, from, to });
     }
     return out;
-  }, [edges, densityClusters, memberToCluster]);
-  // Cluster node position = centroid of its members' laid-out coordinates —
-  // works whether that position came from this render's layout pass or was
-  // already on disk, no extra layout step needed.
-  const clusterLaidOut = useMemo(() => {
-    const out: Array<{ c: DensityCluster; p: { x: number; y: number } }> = [];
-    for (const c of densityClusters) {
-      let sx = 0,
-        sy = 0,
-        n = 0;
-      for (const id of c.memberIds) {
-        const p = laidOut[id];
-        if (!p) continue;
-        sx += p.x;
-        sy += p.y;
-        n++;
-      }
-      if (n > 0) out.push({ c, p: { x: sx / n, y: sy / n } });
-    }
-    return out;
-  }, [densityClusters, laidOut]);
-  const clusterPosMap = useMemo(
-    () => Object.fromEntries(clusterLaidOut.map(({ c, p }) => [c.id, p])),
-    [clusterLaidOut],
-  );
-  // Which cluster's member list is open, if any. Local UI state, not knowledge.
+  }, [edges, densityClusters, memberToAnchor]);
+  // An anchor renders at the blob's grown size (core's blobSize, already
+  // computed on the cluster); everything else at its own.
+  const renderSizeFor = (n: { id: string; size: number }) => blobByAnchor.get(n.id)?.size ?? n.size;
+  // Which blob's member list is open, if any. Local UI state, not knowledge.
   const [expandedClusterId, setExpandedClusterId] = useState<string | null>(null);
   useEffect(() => {
     if (expandedClusterId && !densityClusters.some((c) => c.id === expandedClusterId)) {
@@ -360,8 +454,8 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
   // Edges/glow must track a node mid-drag too, or its connections visually
   // detach from it while it's being moved.
   const posFor = useCallback(
-    (id: string) => (drag?.id === id ? drag : nodeMap[id] ?? clusterPosMap[id]),
-    [drag, nodeMap, clusterPosMap],
+    (id: string) => (drag?.id === id ? drag : nodeMap[id]),
+    [drag, nodeMap],
   );
 
   const startNodeDrag = useCallback(
@@ -422,8 +516,8 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
 
   return (
     <svg
-      ref={svgRef}
-      onPointerDown={startPan}
+      ref={(el) => { svgRef(el); localSvgRef.current = el; }}
+      onPointerDown={handlePointerDown}
       style={{
         width: '100%',
         height: '100%',
@@ -559,6 +653,7 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
             const g = glow.get(node.id);
             const p = posFor(node.id);
             if (!g || !p) return null;
+            const size = renderSizeFor(node);
             const pad = 6;
             return (
               // Drift lives on a wrapper, not the halo itself: the halo already
@@ -567,10 +662,10 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
               <g key={`glow-${node.id}`} className="nb-drift" style={driftVars(node.id, g)}>
                 <rect
                   className={`nb-glow${g.fresh ? ' nb-glow--fresh' : ''}`}
-                  x={p.x - node.size - pad}
-                  y={p.y - node.size - pad}
-                  width={(node.size + pad) * 2}
-                  height={(node.size + pad) * 2}
+                  x={p.x - size - pad}
+                  y={p.y - size - pad}
+                  width={(size + pad) * 2}
+                  height={(size + pad) * 2}
                   filter="url(#nb-blur)"
                   style={
                     {
@@ -587,9 +682,15 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
           })}
         {visibleNodes.map((node) => {
           const isDragging = drag?.id === node.id;
-          const p = isDragging ? drag : nodeMap[node.id];
+          // Just absorbed into a merged cluster — animate toward the hub
+          // that ate it instead of vanishing outright: render AT the hub's
+          // position, shrunk to nearly nothing, faded to 0 opacity. The x/y/
+          // width/height/opacity CSS transitions do the actual sliding —
+          // React just moves the target, the browser tweens it.
+          const absorbTarget = absorbing.get(node.id);
+          const p = isDragging ? drag : absorbTarget ? (nodeMap[absorbTarget] ?? nodeMap[node.id]) : nodeMap[node.id];
           if (!p) return null;
-          const isSelected = node.id === selectedId;
+          const isSelected = node.id === selectedId || !!multiSelectedIds?.has(node.id);
           const isHovered = node.id === hoveredId && !isSelected;
           const dimmed =
             (matchedIds != null && !matchedIds.has(node.id)) ||
@@ -597,12 +698,21 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
           // Hot nodes wander; cold ones carry no class at all, so a quiet graph
           // is exactly as static as before.
           const g = glow?.get(node.id);
+          // The anchor of an overlap blob renders grown — as if it ate its
+          // hidden members (which is exactly what happened).
+          const blob = blobByAnchor.get(node.id);
+          const size = absorbTarget ? 2 : renderSizeFor(node);
           return (
             <g
               key={node.id}
-              opacity={dimmed ? 0.2 : 1}
+              opacity={absorbTarget ? 0 : dimmed ? 0.2 : 1}
               className={g && !isDragging ? 'nb-drift' : undefined}
-              style={{ cursor: isDragging ? 'grabbing' : 'grab', ...(g && !isDragging ? driftVars(node.id, g) : null) }}
+              style={{
+                cursor: absorbTarget ? 'default' : isDragging ? 'grabbing' : 'grab',
+                pointerEvents: absorbTarget ? 'none' : undefined,
+                transition: 'opacity 400ms ease',
+                ...(g && !isDragging ? driftVars(node.id, g) : null),
+              }}
               onPointerDown={(e) => startNodeDrag(e, node.id, p.x, p.y)}
               onPointerMove={(e) => moveNodeDrag(e, node.id)}
               onPointerUp={(e) => endNodeDrag(e, node.id)}
@@ -617,14 +727,19 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
                 setSpineSel(null); // picking a real node drops the group focus
                 onSelect(node.id);
               }}
+              // A blob anchor's double-click toggles its absorbed-members popover.
+              onDoubleClick={() => {
+                if (movedRef.current || !blob) return;
+                setExpandedClusterId((cur) => (cur === blob.id ? null : blob.id));
+              }}
               onMouseEnter={() => onHover(node.id)}
               onMouseLeave={() => onHover(null)}
             >
               <rect
-                x={p.x - node.size}
-                y={p.y - node.size}
-                width={node.size * 2}
-                height={node.size * 2}
+                x={p.x - size}
+                y={p.y - size}
+                width={size * 2}
+                height={size * 2}
                 fill={isSelected ? INK : isHovered ? HOVER : PAPER}
                 stroke={INK}
                 strokeWidth={isSelected ? 0 : 1}
@@ -633,7 +748,7 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
                 x={p.x}
                 y={p.y + 4}
                 textAnchor="middle"
-                fontSize={node.size > 20 ? 13 : 9}
+                fontSize={size > 20 ? 13 : 9}
                 fill={isSelected ? PAPER : INK}
                 fontFamily="var(--nb-mono)"
                 style={{ pointerEvents: 'none', userSelect: 'none' }}
@@ -644,8 +759,8 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
                   (shown in the company brain too). Corner glyph, no layout cost. */}
               {(node.private || node.shared) && (
                 <text
-                  x={p.x + node.size}
-                  y={p.y - node.size + 3}
+                  x={p.x + size}
+                  y={p.y - size + 3}
                   textAnchor="middle"
                   fontSize={9}
                   fill={INK}
@@ -657,7 +772,7 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
               )}
               <text
                 x={p.x}
-                y={p.y + node.size + 13}
+                y={p.y + size + 13}
                 textAnchor="middle"
                 fontSize={10}
                 fill={INK}
@@ -667,103 +782,84 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
               >
                 {node.title}
               </text>
-            </g>
-          );
-        })}
-        {/* Density clusters — drawn LAST so a super-node sits on top of the real
-            graph, like the spine's grouping nodes. A filled square (not a
-            dashed outline) marks it as something standing in for hidden
-            nodes, not just an overlay. */}
-        {clusterLaidOut.map(({ c, p }) => {
-          const isOpen = c.id === expandedClusterId;
-          // Landed next to a core/hub node — read at hub scale with the
-          // hub's own solid-outline treatment (strokeWidth 1, like a real
-          // node) instead of the cluster's thicker outline, so it reads as
-          // belonging to the hub. Fill/glyph/label stay the cluster's own.
-          const bigNode = c.nearBigNodeId ? nodes.find((n) => n.id === c.nearBigNodeId) : undefined;
-          const renderSize = bigNode ? Math.max(c.size, bigNode.size) : c.size;
-          return (
-            <g key={c.id} style={{ cursor: 'pointer' }}>
-              <g
-                onClick={() => {
-                  if (movedRef.current) return;
-                  setSpineSel(null);
-                }}
-                onDoubleClick={() => {
-                  if (movedRef.current) return;
-                  setExpandedClusterId((cur) => (cur === c.id ? null : c.id));
-                }}
-              >
-                <rect
-                  x={p.x - renderSize}
-                  y={p.y - renderSize}
-                  width={renderSize * 2}
-                  height={renderSize * 2}
-                  fill={isOpen ? INK : PAPER}
-                  stroke={INK}
-                  strokeWidth={bigNode ? 1 : 2}
-                />
-                <text
-                  x={p.x}
-                  y={p.y + 4}
-                  textAnchor="middle"
-                  fontSize={13}
-                  fontWeight="bold"
-                  fill={isOpen ? PAPER : INK}
-                  fontFamily="var(--nb-mono)"
-                  style={{ pointerEvents: 'none', userSelect: 'none' }}
-                >
-                  {`${CATEGORY_ICON[c.category as ViewNode['category']] ?? '·'} ×${c.memberIds.length}`}
-                </text>
-                <text
-                  x={p.x}
-                  y={p.y + renderSize + 13}
-                  textAnchor="middle"
-                  fontSize={10}
-                  fill={INK}
-                  fontFamily="var(--nb-mono)"
-                  style={{ pointerEvents: 'none', userSelect: 'none' }}
-                >
-                  {c.category}
-                </text>
-                <title>{`${c.summary}\n\n(density cluster — double-click for details)`}</title>
-              </g>
-              {isOpen && (
-                <foreignObject x={p.x + renderSize + 8} y={p.y - renderSize} width={240} height={c.memberIds.length * 20 + 40}>
-                  <div
-                    style={{
-                      background: PAPER,
-                      border: `1px solid ${INK}`,
-                      color: INK,
-                      fontFamily: 'var(--nb-mono)',
-                      fontSize: 11,
-                      padding: 8,
-                      maxHeight: c.memberIds.length * 20 + 40,
-                      overflowY: 'auto',
-                    }}
+              {blob && !absorbTarget && (
+                <>
+                  {/* Mass badge: how many nodes this anchor absorbed. Top-LEFT
+                      corner — the private/shared badge owns the top-right. */}
+                  <text
+                    x={p.x - size}
+                    y={p.y - size + 3}
+                    textAnchor="middle"
+                    fontSize={9}
+                    fontWeight="bold"
+                    fill={INK}
+                    fontFamily="var(--nb-mono)"
+                    style={{ pointerEvents: 'none', userSelect: 'none' }}
                   >
-                    <div style={{ fontWeight: 'bold', marginBottom: 4 }}>{c.summary}</div>
-                    {c.memberIds.map((id) => {
-                      const n = nodes.find((x) => x.id === id);
-                      return (
-                        <div
-                          key={id}
-                          style={{ cursor: 'pointer', padding: '2px 0' }}
-                          onClick={() => {
-                            setExpandedClusterId(null);
-                            onSelect(id);
-                          }}
-                        >
-                          {n?.title ?? id}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </foreignObject>
+                    {`×${blob.memberIds.length - 1}`}
+                  </text>
+                  <title>
+                    {`${blob.summary}\n\n(click selects ${node.title}, double-click lists the absorbed nodes)`}
+                  </title>
+                </>
               )}
             </g>
           );
         })}
+        {/* Open blob popover — drawn LAST so it sits on top of the graph. The
+            blob itself is its anchor node, already rendered (grown, with a
+            ×N badge) in the node pass above; only the double-click member
+            list lives here. */}
+        {densityClusters.map((c) => {
+          if (c.id !== expandedClusterId) return null;
+          const p = nodeMap[c.anchorId];
+          if (!p) return null;
+          const renderSize = c.size;
+          return (
+            <foreignObject key={c.id} x={p.x + renderSize + 8} y={p.y - renderSize} width={240} height={c.memberIds.length * 20 + 40}>
+              <div
+                style={{
+                  background: PAPER,
+                  border: `1px solid ${INK}`,
+                  color: INK,
+                  fontFamily: 'var(--nb-mono)',
+                  fontSize: 11,
+                  padding: 8,
+                  maxHeight: c.memberIds.length * 20 + 40,
+                  overflowY: 'auto',
+                }}
+              >
+                <div style={{ fontWeight: 'bold', marginBottom: 4 }}>{c.summary}</div>
+                {c.memberIds.map((id) => {
+                  const n = nodes.find((x) => x.id === id);
+                  return (
+                    <div
+                      key={id}
+                      style={{ cursor: 'pointer', padding: '2px 0' }}
+                      onClick={() => {
+                        setExpandedClusterId(null);
+                        onSelect(id);
+                      }}
+                    >
+                      {n?.title ?? id}
+                    </div>
+                  );
+                })}
+              </div>
+            </foreignObject>
+          );
+        })}
+        {/* Shift-drag box-select — drawn LAST so it's never hidden under a
+            node/cluster it's being dragged over. */}
+        {marquee && (
+          <rect
+            x={Math.min(marquee.x0, marquee.x1)} y={Math.min(marquee.y0, marquee.y1)}
+            width={Math.abs(marquee.x1 - marquee.x0)} height={Math.abs(marquee.y1 - marquee.y0)}
+            fill={INK} fillOpacity={0.08}
+            stroke={INK} strokeWidth={1} strokeDasharray="4 3"
+            style={{ pointerEvents: 'none' }}
+          />
+        )}
       </g>
     </svg>
   );

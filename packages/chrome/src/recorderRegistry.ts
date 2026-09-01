@@ -17,12 +17,18 @@ export const ADAPTERS: readonly RecorderAdapter[] = [
   },
   {
     id: 'linkedin',
-    label: 'LinkedIn — invites you send',
+    label: 'LinkedIn — invites, accepts & messages',
     hosts: ['www.linkedin.com'],
     originPatterns: ['https://www.linkedin.com/*'],
     matches: ['https://www.linkedin.com/*'],
     scriptFile: 'rec-linkedin.js',
-    actions: ['linkedin.invite_sent', 'linkedin.connect_click'],
+    mainWorldScriptFile: 'rec-linkedin-net.js',
+    actions: [
+      'linkedin.invite_sent',
+      'linkedin.connect_click',
+      'linkedin.invite_accepted',
+      'linkedin.message_sent',
+    ],
   },
 ];
 

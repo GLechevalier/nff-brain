@@ -32,6 +32,11 @@ export const KEYS = {
   recorders: 'nb.recorders',
   recorderSeen: 'nb.recorderSeen',
   invitePending: 'nb.invitePending',
+  // LinkedIn network tap (src/netTapScript.ts → onLinkedinNet): a metadata-only
+  // ring of every voyager call seen (nothing invisible), and the slug→first-seen
+  // map that dedupes "accepted your invite" across days. See inviteNet.ts.
+  netLog: 'nb.netLog',
+  acceptSeen: 'nb.acceptSeen',
   agentAdapters: 'nb.agentAdapters',
   agentActionAllow: 'nb.agentActionAllow',
   navigateHostAllow: 'nb.navigateHostAllow',

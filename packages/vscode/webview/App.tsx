@@ -27,6 +27,10 @@ export function App() {
   const [edges, setEdges] = useState<{ from: string; to: string; strength: number }[]>([]);
   const [projectName, setProjectName] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Shift-drag box-selected 2+ ids at once. Highlighted in the graph only —
+  // unlike a single select, it does NOT open every hit as an editor tab
+  // (that would be a surprising side effect of a drag gesture).
+  const [multiSelectedIds, setMultiSelectedIds] = useState<string[] | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
@@ -149,6 +153,7 @@ export function App() {
 
   function openNode(id: string) {
     setSelectedId(id);
+    setMultiSelectedIds(null);
     vscode.postMessage({ type: 'openNode', id }); // → native .md tab beside the graph
   }
 
@@ -304,6 +309,8 @@ export function App() {
           matchedIds={matchedIds}
           glow={glow}
           onSelect={openNode}
+          onMultiSelect={(ids) => { setMultiSelectedIds(ids); setSelectedId(null); }}
+          multiSelectedIds={multiSelectedIds ? new Set(multiSelectedIds) : undefined}
           onHover={setHoveredId}
           onLayout={onLayout}
           onMove={onMove}

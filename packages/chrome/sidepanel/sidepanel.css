@@ -358,6 +358,13 @@ label.small { min-width: 84px; }
   font-size: 13px;
   font-family: inherit;
 }
+.graph-canvas .graph-marquee {
+  fill: #eee;
+  fill-opacity: 0.08;
+  stroke: #eee;
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
 .graph-canvas .graph-node-cluster {
   fill: #2a2a2a;
   stroke: #eee;

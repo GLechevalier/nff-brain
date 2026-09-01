@@ -347,14 +347,19 @@ describe('content-script isolation', () => {
     },
   );
 
-  it('content scripts send only recorderEvent / traceEvent messages', () => {
+  it('content scripts send only recorderEvent / traceEvent / linkedinNet messages', () => {
     for (const f of contentFiles) {
       const c = code(f.text);
       if (/sendMessage/.test(c)) {
         expect(f.rel).toBe('content/runtime.ts'); // one wire, one place
-        // Two message types are permitted through the single wire: the passive
-        // recorder's clip event and the task recorder's trace event.
-        expect(c.includes("type: 'recorderEvent'") || c.includes("type: 'traceEvent'")).toBe(true);
+        // Three message types through the single wire: the passive recorder's
+        // clip event, the task recorder's trace event, and the LinkedIn network
+        // tap's raw summary (classified + gated SW-side in onLinkedinNet).
+        expect(
+          c.includes("type: 'recorderEvent'") ||
+            c.includes("type: 'traceEvent'") ||
+            c.includes("type: 'linkedinNet'"),
+        ).toBe(true);
       }
     }
   });
@@ -377,6 +382,7 @@ describe('built artifacts', () => {
       'rec-github.js',
       'rec-linkedin.js',
       'rec-linkedin-agent.js',
+      'rec-linkedin-net.js',
       'rec-trace.js',
     ]) {
       expect(fs.existsSync(path.join(dist, f)), `dist/${f} missing`).toBe(true);
@@ -385,7 +391,7 @@ describe('built artifacts', () => {
 
   it('contains no off-device URL and no framework runtime', () => {
     if (!fs.existsSync(dist)) return;
-    for (const name of ['sw.js', 'sidepanel.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js', 'rec-trace.js']) {
+    for (const name of ['sw.js', 'sidepanel.js', 'rec-github.js', 'rec-linkedin.js', 'rec-linkedin-agent.js', 'rec-linkedin-net.js', 'rec-trace.js']) {
       const text = read(name);
       // This is what actually ships — it catches an egress URL arriving through
       // a dependency rather than through our own source.

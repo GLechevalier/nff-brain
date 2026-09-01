@@ -84,6 +84,10 @@ const CONTENT = [
   ['content/github.ts', 'rec-github.js'],
   ['content/linkedin.ts', 'rec-linkedin.js'],
   ['content/linkedinAgent.ts', 'rec-linkedin-agent.js'],
+  // The LinkedIn MAIN-world network tap. Lives in src/ (not content/) so its
+  // fetch/XHR wrapping stays outside the content-purity guard; registered in the
+  // page world at document_start by recorder.ts, it only postMessages summaries.
+  ['src/netTapScript.ts', 'rec-linkedin-net.js'],
   // Record-and-automate: the generic task recorder, injected only while a
   // recording is active on a granted origin.
   ['content/traceRecorder.ts', 'rec-trace.js'],

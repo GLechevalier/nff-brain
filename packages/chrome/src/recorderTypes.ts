@@ -21,6 +21,12 @@ export interface RecorderAdapter {
   matches: string[];
   /** Built content-script file in dist/ (see build.mjs CONTENT list). */
   scriptFile: string;
+  /**
+   * Optional second bundle registered in the MAIN world (page context) at
+   * document_start — a network tap that reads request/response bodies the
+   * isolated content script and chrome.webRequest cannot. LinkedIn only.
+   */
+  mainWorldScriptFile?: string;
   /** The declared action set — documentation and store-review honesty. */
   actions: readonly string[];
 }

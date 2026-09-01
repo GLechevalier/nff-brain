@@ -121,3 +121,176 @@ export function takePendingInvite(
   }
   return { entry, rest: fresh.filter((p) => p.tabId !== tabId) };
 }
+
+// ── the MAIN-world network tap (rec-linkedin-net.js) ────────────────────────
+// The tap wraps window.fetch/XHR in the page's own world and postMessages a
+// compact summary of every voyager call it sees. content/linkedin.ts forwards
+// it to the SW (message type 'linkedinNet'); onLinkedinNet in recorder.ts uses
+// these PURE classifiers to turn the summary into records. Two facts that the
+// invite webRequest path cannot see live in bodies: the text of a message you
+// send (request body) and who just accepted you (a connections response body).
+
+/** What the tap forwards. Bodies present only for the shortlisted endpoints. */
+export interface NetTapPayload {
+  url: string;
+  method: string;
+  status: number;
+  /** Request body text — messaging createMessage only, clamped by the tap. */
+  reqBody?: string;
+  /** Response body text — RECENTLY_ADDED connections only, clamped by the tap. */
+  resBody?: string;
+  /** Recipient scraped from the messaging thread DOM (content-side), when one. */
+  recipientName?: string;
+  recipientLinkedin?: string;
+}
+
+/** Path (no host, no query) — for the local net-log. Regex, never new URL (the
+ *  bundlePurity .hostname pin). */
+export function endpointOf(url: string): string {
+  return url.replace(/^https?:\/\/[^/]+/, '').split('?')[0].slice(0, 200);
+}
+
+/** Is this the page POSTing a chat message you typed? */
+export function classifyMessageSend(method: string, url: string): boolean {
+  if (method.toUpperCase() !== 'POST') return false;
+  if (!url.startsWith('https://www.linkedin.com/voyager/api/')) return false;
+  if (!/messaging|messenger/i.test(url)) return false;
+  // The send action across LinkedIn's messaging API renames: createMessage
+  // (GraphQL messengerMessages) and the older eventCreate. Both name "message".
+  return /createMessage|messengerMessages|\/events\b|messagesbyanchor/i.test(url);
+}
+
+/** Does this response carry the "recently added connections" list (accepts)? */
+export function isRecentConnectionsResponse(url: string): boolean {
+  return (
+    url.startsWith('https://www.linkedin.com/voyager/api/') &&
+    /connections/i.test(url) &&
+    /RECENTLY_ADDED/i.test(url)
+  );
+}
+
+/**
+ * The message text from a createMessage request body. Tolerant: LinkedIn's
+ * messaging payload shape drifts, so this walks the parsed JSON for the first
+ * plausible `body`/`text` string under a message-ish key. '' on any miss —
+ * the caller keeps the local net-log entry and skips CRM.
+ */
+export function parseMessageText(reqBody: string | undefined): string {
+  if (!reqBody) return '';
+  let root: unknown;
+  try {
+    root = JSON.parse(reqBody);
+  } catch {
+    return '';
+  }
+  const seen = new Set<unknown>();
+  const walk = (v: unknown): string => {
+    if (typeof v !== 'object' || v === null || seen.has(v)) return '';
+    seen.add(v);
+    const o = v as Record<string, unknown>;
+    // The common shapes: {message:{body:{text}}}, {body:{text}}, {body:'…'}.
+    const body = o.body;
+    if (typeof body === 'string' && body.trim()) return body.trim();
+    if (body && typeof body === 'object' && typeof (body as Record<string, unknown>).text === 'string') {
+      const t = (body as Record<string, unknown>).text as string;
+      if (t.trim()) return t.trim();
+    }
+    for (const val of Object.values(o)) {
+      const found = walk(val);
+      if (found) return found;
+    }
+    return '';
+  };
+  return walk(root).slice(0, 2000);
+}
+
+/** One newly-accepted connection pulled from a RECENTLY_ADDED response. */
+export interface AcceptedConnection {
+  slug: string;
+  name: string;
+}
+
+/**
+ * Every connection profile named in a RECENTLY_ADDED response body. Tolerant:
+ * walks the parsed JSON for objects carrying a publicIdentifier plus a name,
+ * whatever nesting LinkedIn currently uses. [] on parse/shape miss (the SW
+ * breadcrumbs it). Dedupe/baseline/first-run handling is the SW's job — this is
+ * pure extraction only.
+ */
+export function classifyAcceptedFromResponse(url: string, resBody: string | undefined): AcceptedConnection[] {
+  if (!isRecentConnectionsResponse(url) || !resBody) return [];
+  let root: unknown;
+  try {
+    root = JSON.parse(resBody);
+  } catch {
+    return [];
+  }
+  const out = new Map<string, string>();
+  const seen = new Set<unknown>();
+  const walk = (v: unknown): void => {
+    if (typeof v !== 'object' || v === null || seen.has(v)) return;
+    seen.add(v);
+    if (Array.isArray(v)) {
+      for (const item of v) walk(item);
+      return;
+    }
+    const o = v as Record<string, unknown>;
+    const slug = typeof o.publicIdentifier === 'string' ? o.publicIdentifier : '';
+    if (slug) {
+      const first = typeof o.firstName === 'string' ? o.firstName : '';
+      const last = typeof o.lastName === 'string' ? o.lastName : '';
+      const named =
+        [first, last].filter(Boolean).join(' ').trim() ||
+        (typeof o.name === 'string' ? o.name.trim() : '');
+      if (named && !out.has(slug)) out.set(slug, named.slice(0, 80));
+    }
+    for (const val of Object.values(o)) walk(val);
+  };
+  walk(root);
+  return [...out].map(([slug, name]) => ({ slug, name }));
+}
+
+// ── local net-log ring (nb.netLog) — every voyager call, metadata only ──────
+// "Nothing is invisible": each tapped call leaves a lightweight local record so
+// an un-classified endpoint is still visible and a future classifier is a
+// one-liner away. Metadata only — no bodies persisted. Surfaced nowhere yet.
+
+export interface NetLogEntry {
+  atMs: number;
+  method: string;
+  endpoint: string;
+  status: number;
+}
+
+export const NETLOG_MAX = 300;
+
+export function pushNetLog(list: readonly NetLogEntry[], entry: NetLogEntry): NetLogEntry[] {
+  return [...list, entry].slice(-NETLOG_MAX);
+}
+
+// ── accept dedupe (nb.acceptSeen) — slug → first-seen ms, 30-day ────────────
+// A person stays in RECENTLY_ADDED for days, so a 24h ring is not enough. This
+// map is the authoritative accept dedupe; the SW also uses "empty map = first
+// run" to baseline existing connections silently (only accepts AFTER you turn
+// tracking on are reported — "who accepted you RECENTLY").
+
+export const ACCEPT_SEEN_TTL_MS = 30 * 24 * 60 * 60_000;
+
+export function acceptSeenHas(map: Readonly<Record<string, number>>, slug: string, nowMs: number): boolean {
+  const at = map[slug];
+  return at !== undefined && nowMs - at < ACCEPT_SEEN_TTL_MS;
+}
+
+/** Add slug and prune expired entries (keeps the map from growing forever). */
+export function acceptSeenPut(
+  map: Readonly<Record<string, number>>,
+  slug: string,
+  nowMs: number,
+): Record<string, number> {
+  const next: Record<string, number> = {};
+  for (const [k, at] of Object.entries(map)) {
+    if (nowMs - at < ACCEPT_SEEN_TTL_MS) next[k] = at;
+  }
+  next[slug] = nowMs;
+  return next;
+}
