@@ -1,6 +1,6 @@
 {
   "name": "@nff-brain/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Knowledge-graph memory primitives — graph types, deterministic layout, lexical scoring.",
   "license": "MIT",
   "repository": {
