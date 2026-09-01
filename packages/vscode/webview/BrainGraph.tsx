@@ -676,6 +676,12 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
             nodes, not just an overlay. */}
         {clusterLaidOut.map(({ c, p }) => {
           const isOpen = c.id === expandedClusterId;
+          // Landed next to a core/hub node — read at hub scale with the
+          // hub's own solid-outline treatment (strokeWidth 1, like a real
+          // node) instead of the cluster's thicker outline, so it reads as
+          // belonging to the hub. Fill/glyph/label stay the cluster's own.
+          const bigNode = c.nearBigNodeId ? nodes.find((n) => n.id === c.nearBigNodeId) : undefined;
+          const renderSize = bigNode ? Math.max(c.size, bigNode.size) : c.size;
           return (
             <g key={c.id} style={{ cursor: 'pointer' }}>
               <g
@@ -689,13 +695,13 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
                 }}
               >
                 <rect
-                  x={p.x - c.size}
-                  y={p.y - c.size}
-                  width={c.size * 2}
-                  height={c.size * 2}
+                  x={p.x - renderSize}
+                  y={p.y - renderSize}
+                  width={renderSize * 2}
+                  height={renderSize * 2}
                   fill={isOpen ? INK : PAPER}
                   stroke={INK}
-                  strokeWidth={2}
+                  strokeWidth={bigNode ? 1 : 2}
                 />
                 <text
                   x={p.x}
@@ -711,7 +717,7 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
                 </text>
                 <text
                   x={p.x}
-                  y={p.y + c.size + 13}
+                  y={p.y + renderSize + 13}
                   textAnchor="middle"
                   fontSize={10}
                   fill={INK}
@@ -723,7 +729,7 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
                 <title>{`${c.summary}\n\n(density cluster — double-click for details)`}</title>
               </g>
               {isOpen && (
-                <foreignObject x={p.x + c.size + 8} y={p.y - c.size} width={240} height={c.memberIds.length * 20 + 40}>
+                <foreignObject x={p.x + renderSize + 8} y={p.y - renderSize} width={240} height={c.memberIds.length * 20 + 40}>
                   <div
                     style={{
                       background: PAPER,

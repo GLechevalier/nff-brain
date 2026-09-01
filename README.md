@@ -27,14 +27,22 @@ What it does : it runs a shared brain graph on your machine, grown automatically
 
 ## Install
 
-  - **Chrome extension** — load unpacked from `packages/chrome/dist` for now (Web Store listing pending); see `packages/chrome/README.md` for
-  the manual checklist.
-  - **CLI** — `npm i -g nff-brain` once published; until then, `npm pack -w nff-brain` and install the tarball locally.
-  - **VS Code** — install the `.vsix` from `packages/vscode` (`vsce package --no-dependencies`).
+Not published to npm yet, so this builds from source — one command, right after cloning:
 
-Then hook it into Claude Code:
+```sh
+git clone https://github.com/GLechevalier/nff-brain.git
+cd nff-brain
+npm run onboard
+```
 
-nff-brain install-hooks --apply-model
+That installs dependencies, builds every package, and links the `nff-brain` CLI globally, then drops you into a guided setup that asks — one step at a time — whether to package and install the VS Code extension, walks you through loading the Chrome extension and pairing it, and offers to wire hooks into a project, finishing with a `doctor` health check. Run non-interactively (CI, piped, or with any flag) it skips straight to that health check instead of prompting.
+
+Prefer doing it by hand, or just want one piece?
+
+  - **CLI** — `npm ci && npm run build && npm link --workspace packages/cli` (or `npm i -g nff-brain` once published).
+  - **VS Code** — `npx --yes @vscode/vsce package --no-dependencies` in `packages/vscode`, then install the `.vsix`.
+  - **Chrome extension** — load unpacked from `packages/chrome/dist` (Web Store listing pending); see `packages/chrome/README.md` for the manual checklist.
+  - **Hooks** — `nff-brain install-hooks --apply-model` in any project.
 
 That's it — the graph starts empty and grows from whatever you capture and whatever your agent sessions distill.
 

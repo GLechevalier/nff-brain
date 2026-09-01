@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "nff-brain",
-  "version": "0.1.0.86",
+  "version": "0.1.0.87",
   "description": "Local-first memory and a web agent that drives your browser. Reasons through a local nff-brain server (Claude Code) or directly with your own AI API key — no server or Claude Code required in Direct API mode.",
   "minimum_chrome_version": "116",
   "incognito": "not_allowed",

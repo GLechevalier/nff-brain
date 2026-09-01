@@ -10,6 +10,7 @@ import { cmdIngestSupabase } from './commands/ingestSupabase.js';
 import { cmdInit } from './commands/init.js';
 import { cmdLayout } from './commands/layout.js';
 import { cmdMcp } from './commands/mcp.js';
+import { cmdOnboard } from './commands/onboard.js';
 import { cmdRestructure } from './commands/restructure.js';
 import { cmdSpine } from './commands/spine.js';
 import { cmdMerge } from './commands/merge.js';
@@ -32,6 +33,11 @@ const HELP = `nff-brain — local-first knowledge-graph memory for Claude Code
 usage: nff-brain <command> [options]
 
 setup
+  onboard                          bare, in a terminal: guided first-run setup — offers to package
+                                   and install the VS Code extension, walk you through loading the
+                                   Chrome extension and pairing it, and wire hooks into a project —
+                                   then runs \`doctor\`. Non-interactive (CI, a pipe, any flag) skips
+                                   straight to the doctor check
   init [--hooks] [--global] [--import]
                                    create the brain; ingest CLAUDE.md/AGENTS.md via claude -p
   import                           bare, in a terminal: interactive wizard — scan, pick scope and
@@ -188,6 +194,7 @@ Writes target <workspace>/.nff-brain/brain.json; add --global for ~/.nff-brain/b
 `;
 
 const COMMANDS: Record<string, (argv: string[]) => Promise<void>> = {
+  onboard: cmdOnboard,
   init: cmdInit,
   import: cmdImport,
   recall: cmdRecall,

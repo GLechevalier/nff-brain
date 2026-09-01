@@ -39,6 +39,7 @@ export interface DensityInputNode {
   category: string;
   x: number;
   y: number;
+  size: number;
 }
 
 /** A virtual super-node standing in for a group of real nodes. Never persisted. */
@@ -49,6 +50,15 @@ export interface DensityCluster {
   /** Extractive, not generated: count + a few member titles. Same philosophy as spine's summarise(). */
   summary: string;
   size: number;
+  /**
+   * Id of the nearest `category: 'core'` node within `radius` of this
+   * cluster's centroid, or null. A renderer uses this to draw the cluster in
+   * that node's shape/size class instead of the generic cluster square — it
+   * landed next to the hub, so it should read as belonging to it rather than
+   * as an unrelated blob overlapping it. Same `radius` as the clustering
+   * decision itself: "very close" is one definition, not a second number.
+   */
+  nearBigNodeId: string | null;
 }
 
 export interface DensityOptions {
@@ -155,12 +165,34 @@ export function buildDensityClusters(
       (a.memberIds[0] < b.memberIds[0] ? -1 : a.memberIds[0] > b.memberIds[0] ? 1 : 0),
   );
 
+  // Core nodes to test cluster centroids against for the "landed next to the
+  // hub" shape-inheritance signal below. Rare in practice (a handful of hub /
+  // tab-master nodes), so a per-cluster linear scan is cheap.
+  const coreNodes = nodes.filter((n) => n.category === 'core');
+
   let seq = 0;
-  return found.map(({ memberIds, category }) => ({
-    id: `${DENSITY_PREFIX}${category}-${seq++}`,
-    category,
-    memberIds,
-    summary: summarise(memberIds, byId),
-    size: Math.min(48, 20 + Math.sqrt(memberIds.length) * 4),
-  }));
+  return found.map(({ memberIds, category }) => {
+    const members = memberIds.map((id) => byId.get(id)!);
+    const cx = members.reduce((s, m) => s + m.x, 0) / members.length;
+    const cy = members.reduce((s, m) => s + m.y, 0) / members.length;
+    let nearBigNodeId: string | null = null;
+    let nearestDistSq = radius * radius;
+    for (const core of coreNodes) {
+      const dx = core.x - cx;
+      const dy = core.y - cy;
+      const distSq = dx * dx + dy * dy;
+      if (distSq <= nearestDistSq) {
+        nearestDistSq = distSq;
+        nearBigNodeId = core.id;
+      }
+    }
+    return {
+      id: `${DENSITY_PREFIX}${category}-${seq++}`,
+      category,
+      memberIds,
+      summary: summarise(memberIds, byId),
+      size: Math.min(48, 20 + Math.sqrt(memberIds.length) * 4),
+      nearBigNodeId,
+    };
+  });
 }

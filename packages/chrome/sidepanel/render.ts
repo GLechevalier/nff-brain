@@ -738,9 +738,11 @@ export function renderGraph(
   const openPopover = (c: DensityCluster, cx: number, cy: number): void => {
     closePopover();
     expandedClusterId = c.id;
+    const bigNode = c.nearBigNodeId ? byId.get(c.nearBigNodeId) : undefined;
+    const renderSize = bigNode ? Math.max(c.size, bigNode.size) : c.size;
     const fo = svgEl('foreignObject');
-    fo.setAttribute('x', String(cx + c.size + 8));
-    fo.setAttribute('y', String(cy - c.size));
+    fo.setAttribute('x', String(cx + renderSize + 8));
+    fo.setAttribute('y', String(cy - renderSize));
     fo.setAttribute('width', '220');
     fo.setAttribute('height', String(Math.min(300, c.memberIds.length * 20 + 36)));
     const div = document.createElement('div');
@@ -767,21 +769,33 @@ export function renderGraph(
   for (const c of densityClusters) {
     const p = clusterPos.get(c.id);
     if (!p) continue;
-    const rect = svgEl('rect');
-    rect.setAttribute('class', 'graph-node-cluster');
-    rect.setAttribute('x', String(p.x - c.size));
-    rect.setAttribute('y', String(p.y - c.size));
-    rect.setAttribute('width', String(c.size * 2));
-    rect.setAttribute('height', String(c.size * 2));
-    rect.addEventListener('dblclick', (e) => {
+    // Landed next to a core/hub node — draw it in that node's own shape
+    // (a circle, like every real node) at hub scale, so it reads as
+    // belonging to the hub rather than an unrelated square overlapping it.
+    // Fill/glyph/label stay the cluster's own.
+    const bigNode = c.nearBigNodeId ? byId.get(c.nearBigNodeId) : undefined;
+    const renderSize = bigNode ? Math.max(c.size, bigNode.size) : c.size;
+    const shape = svgEl(bigNode ? 'circle' : 'rect');
+    shape.setAttribute('class', 'graph-node-cluster');
+    if (bigNode) {
+      shape.setAttribute('cx', String(p.x));
+      shape.setAttribute('cy', String(p.y));
+      shape.setAttribute('r', String(renderSize));
+    } else {
+      shape.setAttribute('x', String(p.x - renderSize));
+      shape.setAttribute('y', String(p.y - renderSize));
+      shape.setAttribute('width', String(renderSize * 2));
+      shape.setAttribute('height', String(renderSize * 2));
+    }
+    shape.addEventListener('dblclick', (e) => {
       e.stopPropagation();
       if (expandedClusterId === c.id) closePopover();
       else openPopover(c, p.x, p.y);
     });
     const title = svgEl('title');
     title.textContent = `${c.summary}\n\n(density cluster — double-click for details)`;
-    rect.append(title);
-    clusterGroup.append(rect);
+    shape.append(title);
+    clusterGroup.append(shape);
 
     const label = svgEl('text');
     label.setAttribute('class', 'graph-label graph-cluster-label');
@@ -794,7 +808,7 @@ export function renderGraph(
     const caption = svgEl('text');
     caption.setAttribute('class', 'graph-label');
     caption.setAttribute('x', String(p.x));
-    caption.setAttribute('y', String(p.y + c.size + 7));
+    caption.setAttribute('y', String(p.y + renderSize + 7));
     caption.setAttribute('text-anchor', 'middle');
     caption.textContent = c.category;
     clusterGroup.append(caption);

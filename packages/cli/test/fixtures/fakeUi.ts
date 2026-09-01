@@ -9,6 +9,7 @@ import type { WizardUi } from '../../src/commands/importWizard.js';
 export type Answer =
   | { select: string | null } // matched against String(option.value)
   | { text: string | null }
+  | { confirm: boolean | null }
   | { checklist: 'defaults' | 'all' | 'none' | null };
 
 export interface FakeUi extends WizardUi {
@@ -61,6 +62,12 @@ export function fakeUi(script: Answer[]): FakeUi {
       const a = next();
       if (!('text' in a)) throw new Error(`fakeUi: expected a text answer for "${question}"`);
       return a.text;
+    },
+    async confirm(question) {
+      asked.push(question);
+      const a = next();
+      if (!('confirm' in a)) throw new Error(`fakeUi: expected a confirm answer for "${question}"`);
+      return a.confirm;
     },
     async checklist(question, sections: ChecklistSection[]) {
       asked.push(question);

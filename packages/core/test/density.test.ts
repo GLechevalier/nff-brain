@@ -3,7 +3,7 @@ import type { LayoutEdge } from '../src/layout.js';
 import { buildDensityClusters, isDensityClusterId, type DensityInputNode } from '../src/density.js';
 
 function node(id: string, extra: Partial<DensityInputNode> = {}): DensityInputNode {
-  return { id, title: id, category: 'strategy', x: 0, y: 0, ...extra };
+  return { id, title: id, category: 'strategy', x: 0, y: 0, size: 16, ...extra };
 }
 
 function edge(from: string, to: string, strength = 0.6): LayoutEdge {
@@ -114,5 +114,23 @@ describe('buildDensityClusters', () => {
     const clusters = buildDensityClusters(blob.nodes, blob.edges, { minClusterSize: 3 });
     expect(clusters).toHaveLength(1);
     expect(clusters[0].memberIds).toHaveLength(3);
+  });
+
+  it('tags nearBigNodeId when a cluster centroid lands within radius of a core node', () => {
+    const blob = chain('blob', 20, 'strategy', 5); // centroid near x=47.5, y=0
+    const core = node('hub', { category: 'core', x: 50, y: 0, size: 32 });
+    const clusters = buildDensityClusters([...blob.nodes, core], blob.edges);
+
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].nearBigNodeId).toBe('hub');
+  });
+
+  it('leaves nearBigNodeId null when no core node is within radius', () => {
+    const blob = chain('blob', 20, 'strategy', 5);
+    const farCore = node('hub', { category: 'core', x: 10_000, y: 0, size: 32 });
+    const clusters = buildDensityClusters([...blob.nodes, farCore], blob.edges);
+
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].nearBigNodeId).toBeNull();
   });
 });
