@@ -22,6 +22,7 @@
 //     documented there and is harmless to lose.
 
 import { createMenus, onMenuClicked } from './capture.js';
+import { onCrmMenuClicked } from './crmMenu.js';
 import { paintBadge } from './badge.js';
 import {
   approveAgentPlan,
@@ -43,7 +44,7 @@ import {
   submitAgentGoal,
 } from './client.js';
 import { HEALTH_ALARM, currentPhase, ensureAlarm, pairWithServer, probe, unpair } from './connection.js';
-import { clearActivity, removableNodeCount } from './activity.js';
+import { clearActivity, logVisit, removableNodeCount } from './activity.js';
 import { parseRuleInput, ruleLabel } from './gate.js';
 import { derivePhase } from './health.js';
 import { ensureRecorderScripts, onLinkedinInviteRequest, onLinkedinNet, onRecorderEvent, recorderPublicState, setRecorderEnabled } from './recorder.js';
@@ -81,7 +82,7 @@ import {
   setCrmSync,
   setProviderSettings,
 } from './storage.js';
-import { CRM_ORIGIN_PATTERN } from './protocol.js';
+import { ACTIVITY_PREVIEW, CRM_ORIGIN_PATTERN } from './protocol.js';
 import { deriveBrainMode, resolveBrainMode } from './mode.js';
 import { byokChatAsk } from './byokChat.js';
 import { listLocalWorkflows, syncWorkflowsFromServer } from './workflowStore.js';
@@ -92,19 +93,20 @@ import { setNodeFlags as setNodeFlagsOnServer } from './client.js';
 import { testProviderKey } from './providerClient.js';
 import { answerPendingGrant, endActionRun, setCodeAutoApprove, startActionRun, stopActionRun } from './actRun.js';
 import { clearProjectHandle, queryProjectPermission } from './fsHandles.js';
-import { getCodeProject, setCodeProject } from './storage.js';
+import { getCodeProject, getLogVisits, setCodeProject, setLogVisits } from './storage.js';
 import { attentionHide, cursorHide } from './actEngine.js';
 import { cancelTraceRecording, onTraceEvent, startTraceRecording, stopTraceRecording } from './traceCapture.js';
 import { dumpNetCapture, startNetCapture } from './netCapture.js';
 import { distillPairedTrace } from './pairedTraceDistill.js';
-import { syncBrainToCompany } from './companySync.js';
+import { syncBrainToCompany, testBrainSync } from './companySync.js';
+import { testCrmSync } from './crmSync.js';
 import { getActHostAllow, getActRun, getTraceActive, getTracePending, setActHostAllow } from './storage.js';
 import { mutateActRun } from './actStore.js';
 import { PROVIDERS } from '@nff-brain/core/provider';
 import type { PopupToSw, PublicState, SwToPopup } from './protocol.js';
 
 async function publicState(): Promise<PublicState> {
-  const [pairing, health, capture, allowlist, activity, provider, legacyBrain, brainModePref, crmSync, brainSync] = await Promise.all([
+  const [pairing, health, capture, allowlist, activity, provider, legacyBrain, brainModePref, crmSync, brainSync, logVisits] = await Promise.all([
     getPairing(),
     getHealth(),
     getCapture(),
@@ -118,6 +120,7 @@ async function publicState(): Promise<PublicState> {
     getBrainModePref(),
     getCrmSync(),
     getBrainSync(),
+    getLogVisits(),
   ]);
   const { nextProbeAtMs, ...rest } = health;
   void nextProbeAtMs; // internal scheduling; the UI has no use for it
@@ -126,8 +129,10 @@ async function publicState(): Promise<PublicState> {
     port: pairing?.port ?? null,
     health: rest,
     capture,
+    logVisits,
     rules: allowlist.rules,
     activityCount: activity.length,
+    activity: activity.slice(0, ACTIVITY_PREVIEW).map(({ id, at, title, url, delivery }) => ({ id, at, title, url, delivery })),
     removableNodeCount: removableNodeCount(activity),
     recorders: await recorderPublicState(),
     agentAdapters: await agentAdapterPublicState(),
@@ -176,6 +181,10 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       await paintBadge(await currentPhase(), capture.enabled);
       break;
     }
+
+    case 'setLogVisits':
+      await setLogVisits(msg.enabled);
+      break;
 
     case 'addRule': {
       const parsed = parseRuleInput(msg.input);
@@ -521,6 +530,9 @@ async function handleMessage(msg: PopupToSw): Promise<SwToPopup> {
       return { type: 'brainSyncResult', ok: result.ok, message: result.message };
     }
 
+    case 'testAdminSync':
+      return { type: 'adminSyncTest', ...(await (msg.which === 'crm' ? testCrmSync() : testBrainSync())) };
+
     // Per-node company-sync flags. Written where the synced brain lives —
     // the paired server's files when paired (companySync pushes its export),
     // else the local BYOK brain.
@@ -799,8 +811,14 @@ async function onAlarm(alarm: chrome.alarms.Alarm): Promise<void> {
 chrome.runtime.onInstalled.addListener(() => void onInstalled());
 chrome.runtime.onStartup.addListener(() => void onStartup());
 chrome.alarms.onAlarm.addListener((alarm) => void onAlarm(alarm));
-chrome.contextMenus.onClicked.addListener((info, tab) => void onMenuClicked(info, tab));
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  void onMenuClicked(info, tab);
+  void onCrmMenuClicked(info, tab);
+});
 chrome.permissions.onAdded.addListener(() => void probe({ force: true }));
+// Page-visit log → activity history ("Navigated to LinkedIn — …"). Needs only
+// the `tabs` permission already declared; the handler re-checks nb.logVisits.
+chrome.tabs.onUpdated.addListener((_tabId, info, tab) => void logVisit(info, tab));
 // Guarded: chrome.debugger is present only while the optional `debugger`
 // permission is granted. Registered here (top level) so an infobar Cancel is
 // heard whenever the permission was already granted at worker start.

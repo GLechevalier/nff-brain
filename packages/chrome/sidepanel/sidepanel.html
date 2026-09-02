@@ -177,6 +177,18 @@
 
       <div class="panel">
         <div class="row">
+          <span class="strong">Log visited pages</span>
+          <button id="setup-visits-toggle" class="toggle push" role="switch" aria-checked="true">
+            <span class="toggle-on">ON</span><span class="toggle-off">OFF</span>
+          </button>
+        </div>
+        <p id="setup-visits-hint" class="muted small">
+          Every page you open is added to the activity history below. Stays on this machine — nothing is sent to the brain.
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="row">
           <span class="label">Allowed domains</span>
           <span id="setup-rule-count" class="muted push"></span>
         </div>
@@ -222,6 +234,7 @@
         </div>
         <div class="row gap">
           <button id="crm-sync-toggle" class="btn hidden"></button>
+          <button id="crm-sync-test" class="btn hidden">Test</button>
           <button id="crm-sync-clear" class="btn hidden">Forget secret</button>
         </div>
         <div id="crm-sync-error" class="small error hidden"></div>
@@ -270,6 +283,7 @@
           <button id="brain-sync-toggle" class="btn hidden"></button>
           <button id="brain-sync-auto" class="btn hidden"></button>
           <button id="brain-sync-now" class="btn hidden">Sync now</button>
+          <button id="brain-sync-test" class="btn hidden">Test</button>
           <button id="brain-sync-clear" class="btn hidden">Forget token</button>
         </div>
         <div id="brain-sync-error" class="small error hidden"></div>
@@ -295,6 +309,7 @@
           <span class="label">Activity</span>
           <span id="setup-activity-count" class="muted push"></span>
         </div>
+        <ul id="setup-activity-list" class="list activity"></ul>
         <button id="setup-clear" class="btn wide" disabled>Nothing captured yet</button>
         <div id="setup-clear-confirm" class="hidden">
           <p id="setup-clear-question" class="small"></p>

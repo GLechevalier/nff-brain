@@ -4,6 +4,7 @@
 //   2. extension → nff-brain serve (the /v1 HTTP surface)
 
 import type {
+  ActivityRecord,
   ActRunState,
   AllowRule,
   BrainMode,
@@ -625,6 +626,7 @@ export type PopupToSw =
   | { type: 'pair'; port: number; code: string }
   | { type: 'unpair' }
   | { type: 'setCaptureEnabled'; enabled: boolean }
+  | { type: 'setLogVisits'; enabled: boolean }
   | { type: 'addRule'; input: string }
   | { type: 'removeRule'; host: string }
   | { type: 'clearActivity'; alsoRemoveNodes: boolean }
@@ -698,6 +700,8 @@ export type PopupToSw =
   | { type: 'setBrainSyncAuto'; auto: boolean }
   | { type: 'clearBrainSync' }
   | { type: 'brainSyncNow' }
+  // "Test" buttons of the two admin blocks — an authenticated GET …/ping.
+  | { type: 'testAdminSync'; which: 'crm' | 'brain' }
   // Per-node company-sync controls (Graph tab detail strip). Routed to the
   // paired server's brain when paired, else the local BYOK brain.
   | { type: 'setNodeFlags'; id: string; private?: boolean; shared?: boolean }
@@ -766,13 +770,21 @@ export interface AgentAdapterRow {
   granted: boolean;
 }
 
+export type ActivityPreview = Pick<ActivityRecord, 'id' | 'at' | 'title' | 'url' | 'delivery'>;
+/** How many activity rows ride along in PublicState — the panel lists these; the buffer keeps ACTIVITY_MAX. */
+export const ACTIVITY_PREVIEW = 30;
+
 export interface PublicState {
   phase: ConnectionPhase;
   port: number | null;
   health: Omit<Health, 'nextProbeAtMs'>;
   capture: Capture;
+  /** Page-visit log on/off (nb.logVisits, default on). */
+  logVisits: boolean;
   rules: AllowRule[];
   activityCount: number;
+  /** Newest-first preview of the activity buffer (ACTIVITY_PREVIEW rows, no clip text). */
+  activity: ActivityPreview[];
   /** Σ nodeIds.length — drives whether the clear-history checkbox renders. */
   removableNodeCount: number;
   recorders: RecorderRow[];
@@ -826,6 +838,7 @@ export type SwToPopup =
   | { type: 'workflows'; items: WorkflowSummary[] }
   | { type: 'brainImported'; imported: number; total: number }
   | { type: 'brainSyncResult'; ok: boolean; message: string }
+  | { type: 'adminSyncTest'; ok: boolean; message: string }
   // Support capture: the recorded voyager calls, handed back for the panel to
   // save as a file. `started` distinguishes the start ack (empty) from a dump.
   | { type: 'netCapture'; started: boolean; entries: NetCaptureEntry[] };

@@ -95,6 +95,14 @@ export async function setActivity(records: ActivityRecord[]): Promise<void> {
   await chrome.storage.local.set({ [KEYS.activity]: records });
 }
 
+export function getLogVisits(): Promise<boolean> {
+  return raw<boolean>(KEYS.logVisits, true, (v) => typeof v === 'boolean');
+}
+
+export async function setLogVisits(enabled: boolean): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.logVisits]: enabled });
+}
+
 export function getRecent(): Promise<RecentClip[]> {
   return raw<RecentClip[]>(KEYS.recent, [], (v) => Array.isArray(v));
 }

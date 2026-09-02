@@ -11,7 +11,7 @@ const { getCrmSync, appendActivity } = vi.hoisted(() => ({
 vi.mock('../src/storage.js', () => ({ getCrmSync }));
 vi.mock('../src/activity.js', () => ({ appendActivity }));
 
-import { CRM_EVENTS_URL, CRM_INGEST_URL, maybeSyncCrmContact } from '../src/crmSync.js';
+import { CRM_EVENTS_URL, CRM_INGEST_URL, CRM_PING_URL, maybeSyncCrmContact, testCrmSync } from '../src/crmSync.js';
 
 const invite = (fields: Record<string, string>): RecorderEventMsg => ({
   type: 'recorderEvent',
@@ -176,5 +176,38 @@ describe('maybeSyncCrmContact', () => {
       expect(row.title).toBe('CRM: failed to add Ada');
       expect(row.delivery).toBe('failed');
     }
+  });
+});
+
+describe('testCrmSync', () => {
+  it('reports no secret without touching the network', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    getCrmSync.mockResolvedValue(null);
+    expect(await testCrmSync()).toEqual({ ok: false, message: 'no ingest secret saved' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('GETs the ping route with the secret and reports ok on 200', async () => {
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    getCrmSync.mockResolvedValue(cfg);
+    expect(await testCrmSync()).toEqual({ ok: true, message: 'connected' });
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(CRM_PING_URL);
+    expect(init.method).toBe('GET');
+    expect((init.headers as Record<string, string>)['x-crm-ingest-token']).toBe('s3cret');
+  });
+
+  it("surfaces admin's error message on a non-2xx", async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'invalid ingest token' }), { status: 401 })));
+    getCrmSync.mockResolvedValue(cfg);
+    expect(await testCrmSync()).toEqual({ ok: false, message: 'HTTP 401 — invalid ingest token' });
+  });
+
+  it('reports a network failure without throwing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    getCrmSync.mockResolvedValue(cfg);
+    expect(await testCrmSync()).toEqual({ ok: false, message: 'Failed to fetch' });
   });
 });

@@ -172,8 +172,9 @@ The CDP web agent's loop is a held-open async chain in the SW; UI surfaces poll
 | Path | What |
 |---|---|
 | `src/capture.ts` | Context-menu "Remember this" verbs. |
+| `src/crmMenu.ts` | Context-menu "Add to CRM" (linkedin.com only): explicit on-demand contact add, same scrape + `addCrmContact` as the passive invite path but NOT behind the recorder toggle / allowlist / dedupe ring. |
 | `src/gate.ts` | `shouldCapture(url, state)` — THE capture choke point (allowlist). |
-| `src/activity.ts` | The local activity buffer (`nb.activity`) + clip→node feedback. |
+| `src/activity.ts` | The local activity buffer (`nb.activity`) + clip→node feedback + the page-visit log (`logVisit`, `chrome.tabs.onUpdated`, toggle `nb.logVisits`, local only). |
 | `src/recorder.ts` | Dynamic content-script (un)registration, clip delivery (`deliverRecorderClip`). |
 | `src/recorderRegistry.ts` / `recorderTypes.ts` / `recorderFormat.ts` | Adapter metadata, contracts, event→clip formatting. |
 | `content/github.ts` + `githubClassify.ts`, `content/linkedin.ts` + `linkedinClassify.ts` | Per-site passive observers (capture-phase listeners). |

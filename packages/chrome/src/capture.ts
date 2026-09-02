@@ -17,6 +17,7 @@ import { shouldCapture } from './gate.js';
 import { resolveBrainMode } from './mode.js';
 import { enqueueStandaloneClip } from './standaloneDrain.js';
 import { getAllowlist, getCapture, getPairing, getRecent, setRecent } from './storage.js';
+import { CRM_MENU_ITEM } from './crmMenu.js';
 
 export const MENU_ID = 'nb.remember';
 export const MENU_ID_LINK = 'nb.remember.link';
@@ -28,10 +29,14 @@ export const MENU_ID_PAGE = 'nb.remember.page';
  * swallow the duplicate defensively in case the two ever race.
  */
 export function createMenus(): void {
-  const items: Array<{ id: string; title: string; contexts: chrome.contextMenus.ContextType[] }> = [
+  const items: chrome.contextMenus.CreateProperties[] = [
     { id: MENU_ID, title: 'Remember this', contexts: ['selection'] },
     { id: MENU_ID_LINK, title: 'Remember this link', contexts: ['link'] },
     { id: MENU_ID_PAGE, title: 'Remember this page', contexts: ['page'] },
+    // "Add to CRM" — linkedin.com only (documentUrlPatterns). Handled by
+    // crmMenu.ts, NOT by onMenuClicked below: it must not sit behind the
+    // brain capture allowlist.
+    CRM_MENU_ITEM,
   ];
   for (const item of items) {
     try {

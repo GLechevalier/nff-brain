@@ -364,6 +364,25 @@ async function saveBrainSyncToken(): Promise<void> {
   await refreshState();
 }
 
+/** Settings "Test" for either admin block: one authenticated ping, result inline. */
+async function testAdminSync(which: 'crm' | 'brain'): Promise<void> {
+  const btn = $(`${which}-sync-test`) as HTMLButtonElement;
+  btn.disabled = true;
+  btn.textContent = 'Testing…';
+  try {
+    const reply = await send({ type: 'testAdminSync', which });
+    if (reply.type === 'adminSyncTest') {
+      showFieldError(`${which}-sync-error`, reply.ok ? null : reply.message);
+      $(`${which}-sync-status`).textContent = reply.ok ? 'Connected ✓' : 'Connection failed';
+    } else if (reply.type === 'error') {
+      showFieldError(`${which}-sync-error`, reply.message);
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Test';
+  }
+}
+
 async function brainSyncNow(): Promise<void> {
   const btn = $('brain-sync-now') as HTMLButtonElement;
   btn.disabled = true;
@@ -1362,6 +1381,9 @@ function wire(): void {
   $('setup-capture-toggle').addEventListener('click', () => {
     void dispatchSetup({ type: 'setCaptureEnabled', enabled: !(latestState?.capture.enabled ?? false) });
   });
+  $('setup-visits-toggle').addEventListener('click', () => {
+    void dispatchSetup({ type: 'setLogVisits', enabled: !(latestState?.logVisits ?? true) });
+  });
   const addSetupRule = () => {
     const input = $('setup-rule-input') as HTMLInputElement;
     void dispatchSetup({ type: 'addRule', input: input.value }, 'setup-rule-error').then((ok) => {
@@ -1394,6 +1416,7 @@ function wire(): void {
     void dispatchSetup({ type: 'setCrmSyncEnabled', enabled: !(latestState?.crmSyncEnabled ?? false) }, 'crm-sync-error')
       .then(() => refreshState());
   });
+  $('crm-sync-test').addEventListener('click', () => void testAdminSync('crm'));
   $('crm-sync-clear').addEventListener('click', () => {
     void dispatchSetup({ type: 'clearCrmSync' }, 'crm-sync-error').then(() => refreshState());
   });
@@ -1416,6 +1439,7 @@ function wire(): void {
       .then(() => refreshState());
   });
   $('brain-sync-now').addEventListener('click', () => void brainSyncNow());
+  $('brain-sync-test').addEventListener('click', () => void testAdminSync('brain'));
   $('brain-sync-clear').addEventListener('click', () => {
     void dispatchSetup({ type: 'clearBrainSync' }, 'brain-sync-error').then(() => refreshState());
   });

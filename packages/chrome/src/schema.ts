@@ -28,6 +28,8 @@ export const KEYS = {
   capture: 'nb.capture',
   allowlist: 'nb.allowlist',
   activity: 'nb.activity',
+  // Page-visit log (activity.ts logVisit): plain boolean, absent = on.
+  logVisits: 'nb.logVisits',
   recent: 'nb.recent',
   recorders: 'nb.recorders',
   recorderSeen: 'nb.recorderSeen',

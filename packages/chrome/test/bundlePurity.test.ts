@@ -312,6 +312,7 @@ describe('MV3 service-worker discipline', () => {
       'chrome.contextMenus.onClicked.addListener',
       'chrome.runtime.onMessage.addListener',
       'chrome.webRequest.onCompleted.addListener',
+      'chrome.tabs.onUpdated.addListener',
     ]) {
       expect(sw, `${listener} must be registered in sw.ts`).toContain(listener);
       // At column 0 — i.e. not nested inside a function or a .then().

@@ -981,6 +981,7 @@ function paintBrainSync(state: PublicState): void {
   const toggle = $('brain-sync-toggle') as HTMLButtonElement;
   const auto = $('brain-sync-auto') as HTMLButtonElement;
   const now = $('brain-sync-now') as HTMLButtonElement;
+  const test = $('brain-sync-test') as HTMLButtonElement;
   const clear = $('brain-sync-clear') as HTMLButtonElement;
   if (state.brainSyncConfigured) {
     const last = state.brainSyncLastAt ? ` · last synced ${new Date(state.brainSyncLastAt).toLocaleString()}` : ' · never synced';
@@ -992,12 +993,14 @@ function paintBrainSync(state: PublicState): void {
     toggle.classList.remove('hidden');
     auto.classList.remove('hidden');
     now.classList.toggle('hidden', !state.brainSyncEnabled);
+    test.classList.remove('hidden');
     clear.classList.remove('hidden');
   } else {
     status.textContent = 'Not configured';
     toggle.classList.add('hidden');
     auto.classList.add('hidden');
     now.classList.add('hidden');
+    test.classList.add('hidden');
     clear.classList.add('hidden');
   }
 }
@@ -1006,15 +1009,18 @@ function paintBrainSync(state: PublicState): void {
 function paintCrmSync(state: PublicState): void {
   const status = $('crm-sync-status');
   const toggle = $('crm-sync-toggle') as HTMLButtonElement;
+  const test = $('crm-sync-test') as HTMLButtonElement;
   const clear = $('crm-sync-clear') as HTMLButtonElement;
   if (state.crmSyncConfigured) {
     status.textContent = state.crmSyncEnabled ? 'On — invites sync to your CRM' : 'Off';
     toggle.textContent = state.crmSyncEnabled ? 'Disable' : 'Enable';
     toggle.classList.remove('hidden');
+    test.classList.remove('hidden');
     clear.classList.remove('hidden');
   } else {
     status.textContent = 'Not configured';
     toggle.classList.add('hidden');
+    test.classList.add('hidden');
     clear.classList.add('hidden');
   }
 }
@@ -1131,6 +1137,7 @@ export function paintSetup(state: PublicState, deps: SetupDeps, nowMs = Date.now
   $('setup-capture-hint').textContent = state.capture.enabled
     ? 'Right-click any selected text → “Remember this”.'
     : 'Capture is paused. Nothing is recorded, on any domain.';
+  $('setup-visits-toggle').setAttribute('aria-checked', String(state.logVisits));
 
   // ── allowlist ───────────────────────────────────────────────────────────
   const list = $('setup-rules');
@@ -1183,10 +1190,39 @@ export function paintSetup(state: PublicState, deps: SetupDeps, nowMs = Date.now
 
   // ── activity ────────────────────────────────────────────────────────────
   const n = state.activityCount;
-  $('setup-activity-count').textContent = n ? `${n} item${n === 1 ? '' : 's'}` : '';
+  const shown = state.activity.length;
+  $('setup-activity-count').textContent = n ? (shown < n ? `latest ${shown} of ${n}` : `${n} item${n === 1 ? '' : 's'}`) : '';
+  $('setup-activity-list').replaceChildren(
+    ...state.activity.map((row) => {
+      const li = document.createElement('li');
+      li.className = 'row';
+      const status = document.createElement('span');
+      status.className = `activity-dot ${row.delivery}`;
+      status.title = row.delivery;
+      const title = document.createElement('span');
+      title.className = 'activity-title';
+      title.textContent = row.title || row.url;
+      title.title = row.url;
+      const when = document.createElement('span');
+      when.className = 'muted small push';
+      when.textContent = activityWhen(row.at);
+      li.append(status, title, when);
+      return li;
+    }),
+  );
   const clear = $('setup-clear') as HTMLButtonElement;
   clear.disabled = n === 0;
   clear.textContent = n === 0 ? 'Nothing captured yet' : 'Clear activity history…';
+}
+
+/** "14:02" today, "Sep 1" otherwise — the list is newest-first, so that's enough. */
+export function activityWhen(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const sameDay = d.toDateString() === now.toDateString();
+  return sameDay
+    ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 /** The confirm step, rendered only with numbers it can actually stand behind. */

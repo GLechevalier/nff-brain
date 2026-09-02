@@ -399,3 +399,11 @@ label.small { min-width: 84px; }
 .graph-cluster-popover-row:hover {
   color: #7ecbff;
 }
+
+/* ── Settings › Activity list ─────────────────────────────────────────────── */
+.list.activity { max-height: 240px; overflow-y: auto; margin-bottom: 8px; }
+.list.activity:empty { display: none; }
+.activity-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.activity-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: #8a8a8a; }
+.activity-dot.delivered { background: #4ade80; }
+.activity-dot.failed { background: #fca5a5; }

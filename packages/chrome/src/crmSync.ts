@@ -19,6 +19,33 @@ export const CRM_INGEST_URL = 'https://admin.nanoforgeflow.com/api/crm/contacts'
 // Event ingest (invite accepted, message sent) — logs a crm_interactions row on
 // the contact, creating them first-touch if unknown. See nff-admin ingestEvent.
 export const CRM_EVENTS_URL = 'https://admin.nanoforgeflow.com/api/crm/events';
+// Auth-only probe for the Settings "Test" button — token + permission verified
+// server-side, nothing written.
+export const CRM_PING_URL = 'https://admin.nanoforgeflow.com/api/crm/ping';
+
+/**
+ * One authenticated GET against an admin ping route. Shared by the CRM and
+ * company-brain "Test" buttons. Never throws; the message is what the panel
+ * shows verbatim (admin's `error` field when it sent one).
+ */
+export async function pingAdmin(url: string, header: string, value: string): Promise<{ ok: boolean; message: string }> {
+  try {
+    const res = await fetch(url, { method: 'GET', headers: { [header]: value } });
+    if (res.ok) return { ok: true, message: 'connected' };
+    const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+    const detail = typeof body?.error === 'string' ? body.error : '';
+    return { ok: false, message: `HTTP ${res.status}${detail ? ` — ${detail}` : ''}` };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Settings "Test" for CRM sync: does the saved ingest secret get a 200? */
+export async function testCrmSync(): Promise<{ ok: boolean; message: string }> {
+  const cfg = await getCrmSync();
+  if (!cfg?.secret) return { ok: false, message: 'no ingest secret saved' };
+  return pingAdmin(CRM_PING_URL, 'x-crm-ingest-token', cfg.secret);
+}
 
 /** kind + interaction body for the two body-carrying LinkedIn events. */
 const EVENT_KIND: Record<string, { kind: string; body: (f: Record<string, string>) => string }> = {
@@ -48,23 +75,40 @@ export async function maybeSyncCrmContact(msg: RecorderEventMsg): Promise<void> 
   // interaction note, since crm_contacts has no location column. An invite
   // note leads the note slot, with the profile snapshot kept beneath it — the
   // subtitle is recorded either way.
-  const f = msg.fields;
+  await addCrmContact(msg.fields, msg.at, 'LinkedIn connection request', cfg.secret, `crm-sync ${msg.action}`);
+}
+
+/**
+ * Create/upsert one CRM contact from recorder-shaped fields (name, linkedin,
+ * role, company, headline, location, note). Shared by the passive invite path
+ * above and the explicit right-click "Add to CRM" (crmMenu.ts). Never throws;
+ * the outcome is an activity row + the boolean the caller flashes.
+ */
+export async function addCrmContact(
+  f: Record<string, string>,
+  at: string,
+  howWeMet: string,
+  secret: string,
+  source: string,
+): Promise<boolean> {
+  const name = f.name;
+  if (!name) return false;
   const snapshot = [f.headline, f.location].filter(Boolean).join(' · ');
   const noteBody = [f.note, snapshot].filter(Boolean).join('\n');
   const id = crypto.randomUUID();
   try {
     const res = await fetch(CRM_INGEST_URL, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-crm-ingest-token': cfg.secret },
+      headers: { 'content-type': 'application/json', 'x-crm-ingest-token': secret },
       body: JSON.stringify({
         name,
         linkedin: f.linkedin || undefined,
         role: f.role || f.headline || undefined,
         company_name: f.company || undefined,
-        how_we_met: 'LinkedIn connection request',
+        how_we_met: howWeMet,
         note_body: noteBody || undefined,
         note_type: 'note',
-        note_date: msg.at,
+        note_date: at,
       }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -73,9 +117,10 @@ export async function maybeSyncCrmContact(msg: RecorderEventMsg): Promise<void> 
       id,
       url: CRM_INGEST_URL,
       title: out.created ? `CRM: added ${name}` : `CRM: already tracking ${name}`,
-      text: `crm-sync ${msg.action}\nname: ${name}`,
+      text: `${source}\nname: ${name}`,
       delivery: 'delivered',
     });
+    return true;
   } catch (err) {
     await appendActivity({
       id,
@@ -84,6 +129,7 @@ export async function maybeSyncCrmContact(msg: RecorderEventMsg): Promise<void> 
       text: `crm-sync error: ${err instanceof Error ? err.message : String(err)}`,
       delivery: 'failed',
     });
+    return false;
   }
 }
 

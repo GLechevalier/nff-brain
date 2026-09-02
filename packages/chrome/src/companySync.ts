@@ -19,11 +19,20 @@ import type { BrainEdge, BrainNode } from '@nff-brain/core/types';
 import { appendActivity } from './activity.js';
 import { readLocalBrain } from './brainStore.js';
 import { getExport } from './client.js';
+import { pingAdmin } from './crmSync.js';
 import { getBrainSync, getPairing, setBrainSync } from './storage.js';
 
 // The origin pattern for the permission grant is protocol.ts's
 // CRM_ORIGIN_PATTERN — same host, one grant covers both syncs.
 export const BRAIN_INGEST_URL = 'https://admin.nanoforgeflow.com/api/tables/brain/ingest';
+export const BRAIN_PING_URL = 'https://admin.nanoforgeflow.com/api/tables/brain/ping';
+
+/** Settings "Test" for company sync: does the saved token get a 200? */
+export async function testBrainSync(): Promise<{ ok: boolean; message: string }> {
+  const cfg = await getBrainSync();
+  if (!cfg?.token) return { ok: false, message: 'no sync token saved' };
+  return pingAdmin(BRAIN_PING_URL, 'x-brain-sync-token', cfg.token);
+}
 
 /**
  * Push the brain now. Returns a human-readable outcome for the panel; never
