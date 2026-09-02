@@ -47,7 +47,9 @@ export function serializeNodeMd(
             ? 'imported from history'
             : node.origin === 'clip'
               ? 'clipped from the web'
-              : 'learned',
+              : node.origin === 'pagevisit'
+                ? 'visited on the web'
+                : 'learned',
     ...(typeof node.confidence === 'number' ? [`confidence ${node.confidence.toFixed(2)}`] : []),
     // Skill membership, so an editor can see which tree a step belongs to. The
     // token holds no "category:" substring, so META_CATEGORY cannot match it.

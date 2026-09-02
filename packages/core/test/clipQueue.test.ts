@@ -49,6 +49,11 @@ describe('normalizeClip', () => {
     expect(r.text).toHaveLength(MAX_CLIP_TEXT);
   });
 
+  it('accepts kind pagevisit', () => {
+    const r = normalizeClip(clip({ kind: 'pagevisit' }), ctx)!;
+    expect(r.kind).toBe('pagevisit');
+  });
+
   it.each([
     ['javascript:alert(1)'],
     ['file:///c:/secrets.txt'],

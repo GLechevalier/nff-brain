@@ -49,7 +49,7 @@ export interface ParsedClipResponse {
 
 export interface ClipPromptParams {
   clips: readonly ClipRecord[];
-  /** Existing origin:'clip' nodes, so the model can flag re-captures. */
+  /** Existing origin:'clip'/'pagevisit' nodes, so the model can flag re-captures. */
   knownClipNodes: readonly Pick<BrainNode, 'id' | 'title' | 'sourceUrl'>[];
 }
 
@@ -69,12 +69,23 @@ export function buildClipPrompt(p: ClipPromptParams): string {
     : '(none yet)';
 
   const arrays = CLIP_CATEGORIES.map((c) => `"${c}":[…]`).join(',');
+  const hasPageVisits = p.clips.some((c) => c.kind === 'pagevisit');
 
   return [
     `${NFF_PROMPT_MARKERS.clipper} for a coding agent's knowledge brain.`,
-    `Below are snippets the user explicitly captured while browsing — a selection,`,
-    `a link, or a whole page they right-clicked "Remember this" on. Turn them into`,
-    `durable notes the agent can recall in future coding sessions.`,
+    `Below are snippets from browsing — most were explicitly captured (a selection,`,
+    `a link, or a whole page the user right-clicked "Remember this" on)` +
+      (hasPageVisits ? `, some are [pagevisit]` : '') +
+      `.`,
+    ...(hasPageVisits
+      ? [
+          `A [pagevisit] entry is a page the user merely visited, not something they`,
+          `chose to save — treat it as lower signal. Only propose a note from one when`,
+          `the content is genuinely new, non-obvious, and durable; when in doubt, omit it.`,
+        ]
+      : []),
+    `Turn what's worth keeping into durable notes the agent can recall in future`,
+    `coding sessions.`,
     ``,
     `Return STRICT JSON only (no prose, no code fence):`,
     `{${arrays},"duplicate":[{"i":0,"of":"<known clip id>"}]}`,

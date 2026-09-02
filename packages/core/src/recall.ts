@@ -6,7 +6,7 @@
 
 import { groupSkillNodes, renderSkillBlock, SKILL_SECTION_HEADER } from './chatPrompt.js';
 import { scoreNode, tokenize } from './score.js';
-import { isSkillNode, type BrainEdge, type BrainNode } from './types.js';
+import { isClipTierNode, isSkillNode, type BrainEdge, type BrainNode } from './types.js';
 
 export interface RecallOptions {
   k?: number; // seed nodes
@@ -14,7 +14,7 @@ export interface RecallOptions {
   maxContentChars?: number; // per-node content trim in the preamble
   wholeGraphMax?: number; // graphs at/below this size are injected whole
   minScore?: number;
-  clipBudget?: number; // origin:'clip' nodes get their own slots (see recallBrain)
+  clipBudget?: number; // origin:'clip'/'pagevisit' nodes get their own slots (see recallBrain)
   skillBudget?: number; // BRAIN-NODE.json skill nodes get their own slots too
   skillTreeMax?: number; // no single tree may take the whole skill budget
 }
@@ -149,11 +149,13 @@ function renderPreamble(included: BrainNode[], edges: BrainEdge[], maxContentCha
     const rel = related.length ? `\n  ↳ related: ${related.join(', ')}` : '';
     // Codebase-map nodes advertise their drill-down so agents know the next hop.
     const expand = n.origin === 'graphify' ? ` (expand: nff-brain expand ${n.id})` : '';
-    // Browser captures tag as [clip] — the reader cares that it came from a web
-    // page (with its source), more than which category steered its edges.
-    if (n.origin === 'clip') {
+    // Browser captures tag as [clip]/[pagevisit] — the reader cares that it
+    // came from a web page (with its source, and whether it was explicitly
+    // saved or just visited), more than which category steered its edges.
+    if (isClipTierNode(n)) {
       const from = hostOf(n.sourceUrl);
-      return `- [clip] ${n.title}: ${trim(n.content, maxContentChars)}${from ? ` (from ${from})` : ''}${rel}`;
+      const tag = n.origin === 'pagevisit' ? 'pagevisit' : 'clip';
+      return `- [${tag}] ${n.title}: ${trim(n.content, maxContentChars)}${from ? ` (from ${from})` : ''}${rel}`;
     }
     return `- [${n.category}] ${n.title}${expand}: ${trim(n.content, maxContentChars)}${rel}`;
   });
@@ -196,7 +198,7 @@ export function recallBrain(
   // seed/expand pipeline (and before the whole-graph bypass — 60 buffered
   // clippings must never be injected wholesale into a small brain), then the
   // best few are appended after the agent slots are filled.
-  const clips = graph.nodes.filter((n) => n.origin === 'clip');
+  const clips = graph.nodes.filter(isClipTierNode);
   // Skill-tree nodes are partitioned out for the same reason and one sharper
   // one: a skill is spread over ~10 nodes, so inside the shared pool it
   // competes with ITSELF and one match would evict the rest of the brain. It is
@@ -205,7 +207,7 @@ export function recallBrain(
   // about. Admission happens per tree, below.
   const skills = graph.nodes.filter(isSkillNode);
   const held = clips.length || skills.length;
-  const nodes = held ? graph.nodes.filter((n) => n.origin !== 'clip' && !isSkillNode(n)) : graph.nodes;
+  const nodes = held ? graph.nodes.filter((n) => !isClipTierNode(n) && !isSkillNode(n)) : graph.nodes;
   const heldIds = new Set([...clips, ...skills].map((n) => n.id));
   const edges = held ? graph.edges.filter((e) => !heldIds.has(e.from) && !heldIds.has(e.to)) : graph.edges;
 

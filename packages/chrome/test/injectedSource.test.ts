@@ -71,6 +71,8 @@ type Builders = {
   // The support-capture programs (netCaptureScript.ts), same executeScript path.
   captureInstall(): void;
   captureDump(): unknown;
+  // The passive page-visit reader (pageExtractScript.ts), same executeScript path.
+  extractPageText(): unknown;
 };
 
 // Mirrors build.mjs's `common` — same resolution conditions and syntax floor,
@@ -84,6 +86,7 @@ async function loadMinifiedBuilders(): Promise<Builders> {
         "export { buildAttentionInstallerSource } from './src/attentionScript.js';",
         "export { scrapeProfileTopCard } from './src/profileScrapeScript.js';",
         "export { captureInstall, captureDump } from './src/netCaptureScript.js';",
+        "export { extractPageText } from './src/pageExtractScript.js';",
       ].join('\n'),
       resolveDir: ROOT,
       sourcefile: 'injectedSource.entry.ts',
@@ -257,6 +260,7 @@ describe('injected CDP programs (minified, as shipped)', () => {
       ['scrapeProfileTopCard (invitee-slug arg)', `(${String(b.scrapeProfileTopCard)})("ada-lovelace")`],
       ['captureInstall (executeScript func)', `(${String(b.captureInstall)})()`],
       ['captureDump (executeScript func)', `(${String(b.captureDump)})()`],
+      ['extractPageText (executeScript func)', `(${String(b.extractPageText)})()`],
     ];
     for (const [name, src] of programs) {
       expect(

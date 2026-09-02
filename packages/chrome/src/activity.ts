@@ -185,11 +185,22 @@ export function recentKey(kind: string, url: string | undefined, text: string): 
   return `${kind}|${url ?? ''}|${text.slice(0, 200)}`;
 }
 
-export function seenRecently(ring: readonly RecentClip[], key: string, nowMs: number): boolean {
-  return ring.some((r) => r.key === key && nowMs - r.atMs < RECENT_WINDOW_MS);
+export function seenRecently(
+  ring: readonly RecentClip[],
+  key: string,
+  nowMs: number,
+  windowMs: number = RECENT_WINDOW_MS,
+): boolean {
+  return ring.some((r) => r.key === key && nowMs - r.atMs < windowMs);
 }
 
-export function pushRecent(ring: readonly RecentClip[], key: string, nowMs: number): RecentClip[] {
-  const fresh = ring.filter((r) => nowMs - r.atMs < RECENT_WINDOW_MS && r.key !== key);
-  return [{ key, atMs: nowMs }, ...fresh].slice(0, RECENT_MAX);
+export function pushRecent(
+  ring: readonly RecentClip[],
+  key: string,
+  nowMs: number,
+  windowMs: number = RECENT_WINDOW_MS,
+  max: number = RECENT_MAX,
+): RecentClip[] {
+  const fresh = ring.filter((r) => nowMs - r.atMs < windowMs && r.key !== key);
+  return [{ key, atMs: nowMs }, ...fresh].slice(0, max);
 }

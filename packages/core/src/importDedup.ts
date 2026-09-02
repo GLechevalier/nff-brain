@@ -15,7 +15,7 @@
 
 import { uniqueId } from './ingestGraphify.js';
 import { trigramSim } from './score.js';
-import { slug, type BrainFile, type BrainNode, type Category } from './types.js';
+import { isClipTierNode, slug, type BrainFile, type BrainNode, type Category } from './types.js';
 import type { ImportKind, Proposal, SessionRef } from './importExtract.js';
 
 /** Same gate as runMergePass — two texts this close say the same thing. */
@@ -157,11 +157,11 @@ export function reconcileWithBrain(
   const seen = opts.seenHashes ?? new Set<string>();
 
   // graphify/supabase nodes are replaced wholesale on re-ingest, so refining one
-  // would silently lose the edit at the next ingest. Clip nodes must stay pure
-  // clip content (retraction deletes by origin), so imports may not refine them
-  // either.
+  // would silently lose the edit at the next ingest. Clip/pagevisit nodes must
+  // stay pure to their own origin (retraction deletes by origin), so imports
+  // may not refine them either.
   const pool: BrainNode[] = brain.nodes.filter(
-    (n) => n.origin !== 'graphify' && n.origin !== 'supabase' && n.origin !== 'tool' && n.origin !== 'clip',
+    (n) => n.origin !== 'graphify' && n.origin !== 'supabase' && n.origin !== 'tool' && !isClipTierNode(n),
   );
   const byId = new Map(pool.map((n) => [n.id, n]));
   const taken = new Set(brain.nodes.map((n) => n.id));

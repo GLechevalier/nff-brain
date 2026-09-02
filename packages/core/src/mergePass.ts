@@ -14,7 +14,7 @@ import type { OneShot } from './claude.js';
 import { extractJson } from './jsonExtract.js';
 import { NFF_PROMPT_MARKERS } from './promptMarkers.js';
 import { trigramSim } from './score.js';
-import { isSkillNode, type BrainFile, type BrainNode } from './types.js';
+import { isClipTierNode, isSkillNode, type BrainFile, type BrainNode } from './types.js';
 
 interface RawMerge {
   merge?: unknown;
@@ -35,8 +35,9 @@ export function chooseSurvivor(
 ): [BrainNode, BrainNode] | null {
   // graphify nodes are replaced wholesale on re-ingest — anything folded into
   // (or out of) one would be silently lost, so they never take part in merges.
-  // Clip nodes must contain ONLY clip content: /v1/retract deletes by origin,
-  // so folding agent knowledge into one would make retraction destroy it.
+  // Clip/pagevisit nodes must contain ONLY that origin's content: /v1/retract
+  // deletes by origin, so folding agent knowledge into one would make
+  // retraction destroy it.
   // Skill-tree nodes are one step of a procedure whose text is a prompt
   // fragment; merging rewrites title and content (see mergeNodes below) and
   // would silently corrupt the step. The seed check further down does NOT cover
@@ -48,7 +49,7 @@ export function chooseSurvivor(
   if (a.origin === 'graphify' || b.origin === 'graphify') return null;
   if (a.origin === 'supabase' || b.origin === 'supabase') return null;
   if (a.origin === 'tool' || b.origin === 'tool') return null;
-  if (a.origin === 'clip' || b.origin === 'clip') return null;
+  if (isClipTierNode(a) || isClipTierNode(b)) return null;
   const aSeed = a.origin === 'seed';
   const bSeed = b.origin === 'seed';
   if (aSeed && bSeed) return null; // never fold one curated node into another
@@ -200,7 +201,7 @@ export function foldLeastUsed(brain: BrainFile, fraction = 0.25, now = new Date(
       n.origin !== 'graphify' &&
       n.origin !== 'supabase' &&
       n.origin !== 'tool' &&
-      n.origin !== 'clip' &&
+      !isClipTierNode(n) &&
       n.category !== 'core',
   );
   const budget = Math.min(
@@ -222,9 +223,9 @@ export function foldLeastUsed(brain: BrainFile, fraction = 0.25, now = new Date(
   let folded = 0;
   for (const victim of victims) {
     // graphify nodes may not absorb folded content either — it would vanish on
-    // re-ingest. Clip nodes may not absorb either: retraction deletes them by
-    // origin, taking anything folded in with them. Skill-tree steps may not
-    // absorb: mergeNodes appends the victim's text and clips at 1200, which
+    // re-ingest. Clip/pagevisit nodes may not absorb either: retraction deletes
+    // them by origin, taking anything folded in with them. Skill-tree steps may
+    // not absorb: mergeNodes appends the victim's text and clips at 1200, which
     // would corrupt a step's prompt fragment (and silently truncate it).
     const keepers = brain.nodes.filter(
       (n) =>
@@ -233,7 +234,7 @@ export function foldLeastUsed(brain: BrainFile, fraction = 0.25, now = new Date(
         n.origin !== 'graphify' &&
         n.origin !== 'supabase' &&
         n.origin !== 'tool' &&
-        n.origin !== 'clip' &&
+        !isClipTierNode(n) &&
         !isSkillNode(n),
     );
     if (keepers.length === 0) break;

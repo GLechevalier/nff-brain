@@ -64,7 +64,8 @@ export function rediscoveryTokens(node: BrainNode): number {
       return Math.min(children * SAVINGS_MODEL.graphifyPerChildTokens, SAVINGS_MODEL.graphifyMaxTokens);
     }
   }
-  if (node.origin === 'clip') return SAVINGS_MODEL.rediscoverClipTokens;
+  // pagevisit shares clip's rediscovery cost — same "re-find the page" shape.
+  if (node.origin === 'clip' || node.origin === 'pagevisit') return SAVINGS_MODEL.rediscoverClipTokens;
   // A tool-master node stands in for reading that tool's docs/config to
   // rediscover it's connected — closer to a curated fact than a re-derived one.
   if (node.origin === 'tool') return SAVINGS_MODEL.rediscoverSeedTokens;
@@ -94,6 +95,7 @@ export function brainSavings(nodes: readonly BrainNode[]): BrainSavings {
     graphify: 0,
     import: 0,
     clip: 0,
+    pagevisit: 0,
     workflow: 0,
     supabase: 0,
     tool: 0,

@@ -57,6 +57,13 @@ export const KEYS = {
   clipQueue: 'nb.clipQueue',
   clipSeen: 'nb.clipSeen',
   drain: 'nb.drain',
+  // Passive page-visit capture (src/pageVisitCapture.ts → src/standaloneDrain.ts):
+  // a queue parallel to clipQueue (ring-drops instead of refusing — visits are
+  // frequent and not an explicit user action), its own 24h dedupe ring, and the
+  // daily LLM-call budget that keeps a chatty browsing day from being expensive.
+  pageVisitQueue: 'nb.pageVisitQueue',
+  pageVisitSeen: 'nb.pageVisitSeen',
+  pageVisitBudget: 'nb.pageVisitBudget',
   migrationBackup: 'nb.migrationBackup',
   // Web-agent action engine (CDP): the single active run + per-origin grants.
   actRun: 'nb.actRun',
@@ -296,6 +303,32 @@ export interface DrainState {
 }
 
 export const DEFAULT_DRAIN: DrainState = { nextDrainAtMs: 0, consecutiveFailures: 0 };
+
+// ── passive page-visit capture ──────────────────────────────────────────────
+
+/**
+ * A full queue never refuses (unlike CLIP_QUEUE_MAX) — visits are passive and
+ * frequent, so the oldest entry rotates out instead. Separate from the clip
+ * queue for exactly this reason: sharing one queue would let a heavy browsing
+ * day start rejecting real "Remember this" clicks.
+ */
+export const PAGEVISIT_QUEUE_MAX = 300;
+/** At-least-once dedupe ring for drained page-visit clip ids. */
+export const PAGEVISIT_SEEN_MAX = 500;
+/** Per-URL capture dedupe window — a day, not RECENT_WINDOW_MS's 10 minutes:
+ *  re-visiting the same page later the same day should not re-queue it. */
+export const PAGEVISIT_WINDOW_MS = 24 * 60 * 60_000;
+/** The cost gate: at most this many page-visit clips get distilled (i.e. cost
+ *  an LLM call) per calendar day. Excess clips simply wait for tomorrow. */
+export const PAGEVISIT_DAILY_DRAIN_CAP = 100;
+
+/** Calendar-day key (UTC) the budget resets on. */
+export interface PageVisitBudget {
+  day: string; // 'YYYY-MM-DD'
+  drained: number;
+}
+
+export const DEFAULT_PAGEVISIT_BUDGET: PageVisitBudget = { day: '', drained: 0 };
 
 /**
  * Snapshot taken immediately before a migration pushes the standalone brain

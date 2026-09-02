@@ -10,7 +10,7 @@
 import { nodeDegree, removeNode, upsertEdge, upsertNode } from './brainGraph.js';
 import { trigramSim } from './score.js';
 import { resolveRoot } from './spine.js';
-import { placeNode, slug, type BrainFile, type BrainNode } from './types.js';
+import { isClipTierNode, placeNode, slug, type BrainFile, type BrainNode } from './types.js';
 import type { ClipRecord } from './clip.js';
 import type { ClipDuplicate, ClipProposal } from './clipDistill.js';
 
@@ -22,6 +22,22 @@ import type { ClipDuplicate, ClipProposal } from './clipDistill.js';
  * paired brains: no reachable state exceeds 60 — the old cap enforced that.
  */
 export const MAX_CLIP_NODES = 200;
+
+/**
+ * Own budget for passively-visited pages, separate from MAX_CLIP_NODES so a
+ * chatty browsing day can never crowd out nodes the user explicitly asked to
+ * remember.
+ */
+export const MAX_PAGEVISIT_NODES = 150;
+
+/** A proposal's origin is whatever kind folded into it — 'clip' unless every
+ * source clip was a passive page visit. Mixed folds default to 'clip' (the
+ * safer, more-protected tier) rather than silently downgrading. */
+function originOf(p: ClipProposal, clipsById: ReadonlyMap<string, ClipRecord>): BrainNode['origin'] {
+  return p.clipIds.length > 0 && p.clipIds.every((id) => clipsById.get(id)?.kind === 'pagevisit')
+    ? 'pagevisit'
+    : 'clip';
+}
 
 const CLIP_SAME_PAGE_STRENGTH = 0.5;
 const CLIP_SIMILARITY_MIN = 0.4;
@@ -89,8 +105,9 @@ export function applyClips(
     const base = slug(p.title);
     if (!base) continue;
 
+    const origin = originOf(p, clipsById);
     const existing = brain.nodes.find((n) => n.id === base);
-    const isClipRefine = existing?.origin === 'clip';
+    const isClipRefine = existing?.origin === origin;
     const id = isClipRefine ? base : clipNodeId(base, taken);
     const sourceUrl = firstUrlOf(p.clipIds, clipsById);
 
@@ -104,7 +121,7 @@ export function applyClips(
       ...(prior
         ? { color: prior.color, x: prior.x, y: prior.y, size: prior.size }
         : placeNode(p.category)),
-      origin: 'clip',
+      origin,
       lastUpdated: now.toISOString(),
       recallCount: prior?.recallCount ?? 0,
       lastRecalledAt: prior?.lastRecalledAt,
@@ -158,19 +175,26 @@ export function applyClips(
   // attribute (and later retract) a non-clip node.
   for (const d of duplicates) {
     const target = brain.nodes.find((n) => n.id === d.of);
-    if (target?.origin === 'clip') mapClip(d.clipId, target.id);
+    if (target && isClipTierNode(target)) mapClip(d.clipId, target.id);
   }
 
   return result;
 }
 
 /**
- * The clip pool's own budget, mirroring pruneBrain's comparator. Clip nodes are
- * exempt from the 400 cap, so THIS is the only thing bounding them. Returns the
- * evicted ids so the drain can compact the clip-map ledger.
+ * One origin's own budget, mirroring pruneBrain's comparator. Clip and
+ * pagevisit nodes are both exempt from the 400 cap, so THIS is the only thing
+ * bounding either pool — call it once per origin with its own cap (MAX_CLIP_
+ * NODES / MAX_PAGEVISIT_NODES) so a chatty browsing day can't crowd out
+ * explicit clips. Returns the evicted ids so the drain can compact the
+ * clip-map ledger.
  */
-export function pruneClips(brain: BrainFile, maxClipNodes = MAX_CLIP_NODES): string[] {
-  const clips = brain.nodes.filter((n) => n.origin === 'clip');
+export function pruneClips(
+  brain: BrainFile,
+  maxClipNodes = MAX_CLIP_NODES,
+  origin: BrainNode['origin'] = 'clip',
+): string[] {
+  const clips = brain.nodes.filter((n) => n.origin === origin);
   if (maxClipNodes <= 0 || clips.length <= maxClipNodes) return [];
   const victims = clips
     .sort((a, b) => {

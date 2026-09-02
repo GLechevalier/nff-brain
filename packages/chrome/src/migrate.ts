@@ -116,6 +116,11 @@ export async function migrateIfNeeded(pairing: Pairing): Promise<void> {
     if (queue.length === 0) return;
     const activity = await getActivity();
     for (const r of queue) {
+      // pagevisit clips never reach nb.clipQueue by construction (they queue
+      // separately in nb.pageVisitQueue, BYOK-only) — this guard is defensive
+      // narrowing, not a reachable branch: the paired server's /v1/clip route
+      // has no concept of a passive page-visit capture to post it as.
+      if (r.kind === 'pagevisit') continue;
       const res = await client.postClip(pairing.port, pairing.token, {
         kind: r.kind,
         text: r.text ?? '',

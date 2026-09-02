@@ -7,10 +7,10 @@
 // distiller to turn it into one. Nothing here calls an LLM: right-clicking must
 // be instant and free, which is the whole reason a queue exists at all.
 
-export type ClipKind = 'selection' | 'link' | 'page' | 'note';
+export type ClipKind = 'selection' | 'link' | 'page' | 'note' | 'pagevisit';
 export type ClipTarget = 'global' | 'project';
 
-const KINDS: ReadonlySet<string> = new Set(['selection', 'link', 'page', 'note']);
+const KINDS: ReadonlySet<string> = new Set(['selection', 'link', 'page', 'note', 'pagevisit']);
 
 export const MAX_CLIP_TEXT = 4000;
 export const MAX_CLIP_URL = 2000;

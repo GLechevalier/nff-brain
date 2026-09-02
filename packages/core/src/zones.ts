@@ -60,14 +60,14 @@ export interface ZoneInputNode {
  *     SkillRef.outcome, written only from real results).
  *  2. procedural — a skill-tree node, a recorded workflow, a tool connection,
  *     or a distilled playbook (category 'strategy').
- *  3. episodic — captured from the browser recorder (clip) or mined from past
- *     sessions (import): records of what happened.
+ *  3. episodic — captured from the browser recorder (clip/pagevisit) or mined
+ *     from past sessions (import): records of what happened.
  *  4. semantic — everything else: facts and context (agent/seed/graphify/supabase).
  */
 export function zoneOf(n: ZoneInputNode): Zone {
   if ((n.skill?.outcome?.tried ?? 0) > 0) return 'conditioning';
   if (n.skill || n.origin === 'workflow' || n.origin === 'tool' || n.category === 'strategy') return 'procedural';
-  if (n.origin === 'clip' || n.origin === 'import') return 'episodic';
+  if (n.origin === 'clip' || n.origin === 'pagevisit' || n.origin === 'import') return 'episodic';
   return 'semantic';
 }
 

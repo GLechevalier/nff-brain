@@ -32,6 +32,17 @@ describe('buildClipPrompt', () => {
     expect(p).not.toContain('clp_1_aaaaaa');
     // No 'core' array: a clip can never become a hub node.
     expect(p).not.toMatch(/"core":\[/);
+    // No pagevisit clips in this batch — no novelty-bar instruction added.
+    expect(p).not.toContain('[pagevisit]');
+  });
+
+  it('adds the novelty-bar instruction and tags [pagevisit] when the batch has one', () => {
+    const p = buildClipPrompt({
+      clips: [clip('clp_1', { kind: 'pagevisit', url: 'https://docs.example.com/x', text: 'passively read' })],
+      knownClipNodes: [],
+    });
+    expect(p).toContain('#0 [pagevisit]');
+    expect(p).toContain('lower signal');
   });
 });
 

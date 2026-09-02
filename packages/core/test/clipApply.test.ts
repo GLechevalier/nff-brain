@@ -114,6 +114,52 @@ describe('applyClips', () => {
     );
     expect(result.byClip.get('clp_1')).toEqual(['old-clip']);
   });
+
+  it('mints origin pagevisit when every folded clip is a page visit', () => {
+    const brain = emptyBrain();
+    const c = clip('clp_1', { kind: 'pagevisit', url: 'https://docs.example.com/read' });
+    const result = applyClips(brain, [proposal('Read Later', ['clp_1'])], [], new Map([['clp_1', c]]));
+
+    expect(result.created).toEqual(['read-later']);
+    expect(brain.nodes[0].origin).toBe('pagevisit');
+  });
+
+  it('defaults a mixed clip+pagevisit fold to origin clip (the more-protected tier)', () => {
+    const brain = emptyBrain();
+    const c1 = clip('clp_1', { kind: 'selection' });
+    const c2 = clip('clp_2', { kind: 'pagevisit' });
+    const clipsById = new Map([
+      ['clp_1', c1],
+      ['clp_2', c2],
+    ]);
+    const result = applyClips(brain, [proposal('Mixed Fold', ['clp_1', 'clp_2'])], [], clipsById);
+    expect(brain.nodes.find((n) => n.id === result.created[0])!.origin).toBe('clip');
+  });
+
+  it('does not refine an existing clip-origin node from a pagevisit proposal at the same slug', () => {
+    const brain = emptyBrain();
+    upsertNode(brain, node('same-slug', { origin: 'clip', recallCount: 5 }));
+    const c = clip('clp_1', { kind: 'pagevisit' });
+    const result = applyClips(brain, [proposal('Same Slug', ['clp_1'])], [], new Map([['clp_1', c]]));
+
+    expect(result.created).toEqual(['same-slug-clip']);
+    expect(result.refined).toHaveLength(0);
+    expect(brain.nodes.find((n) => n.id === 'same-slug')!.recallCount).toBe(5); // untouched
+    expect(brain.nodes.find((n) => n.id === 'same-slug-clip')!.origin).toBe('pagevisit');
+  });
+
+  it('maps duplicates onto an existing pagevisit node too', () => {
+    const brain = emptyBrain();
+    upsertNode(brain, node('old-visit', { origin: 'pagevisit' }));
+    const c = clip('clp_1', { kind: 'pagevisit' });
+    const result = applyClips(
+      brain,
+      [],
+      [{ clipId: 'clp_1', of: 'old-visit' }],
+      new Map([['clp_1', c]]),
+    );
+    expect(result.byClip.get('clp_1')).toEqual(['old-visit']);
+  });
 });
 
 describe('pruneClips', () => {
@@ -138,5 +184,17 @@ describe('pruneClips', () => {
     // 200, not 60: standalone mode's whole brain is clip-origin, and a migrated
     // standalone brain must survive /v1/import without immediate eviction.
     expect(MAX_CLIP_NODES).toBe(200);
+  });
+
+  it('prunes only the given origin, leaving the other pool untouched', () => {
+    const brain = emptyBrain();
+    upsertNode(brain, node('clip-cold', { origin: 'clip', recallCount: 0 }));
+    upsertNode(brain, node('visit-cold', { origin: 'pagevisit', recallCount: 0 }));
+    upsertNode(brain, node('visit-warm', { origin: 'pagevisit', recallCount: 5 }));
+
+    const evicted = pruneClips(brain, 1, 'pagevisit');
+    expect(evicted).toEqual(['visit-cold']);
+    expect(brain.nodes.some((n) => n.id === 'clip-cold')).toBe(true); // untouched — different origin
+    expect(brain.nodes.some((n) => n.id === 'visit-warm')).toBe(true);
   });
 });

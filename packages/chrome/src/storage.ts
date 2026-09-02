@@ -9,7 +9,7 @@
 // other; and a storage.local.get is sub-millisecond while this extension does
 // perhaps ten a minute.
 
-import { DEFAULT_DRAIN, DEFAULTS, KEYS } from './schema.js';
+import { DEFAULT_DRAIN, DEFAULT_PAGEVISIT_BUDGET, DEFAULTS, KEYS } from './schema.js';
 import type {
   ActHostAllow,
   ActivityRecord,
@@ -26,6 +26,7 @@ import type {
   MigrationBackup,
   Pairing,
   CrmSyncSettings,
+  PageVisitBudget,
   ProviderSettings,
   RecentClip,
   StandaloneBrain,
@@ -282,6 +283,36 @@ export async function setDrainState(state: DrainState): Promise<void> {
   await chrome.storage.local.set({ [KEYS.drain]: state });
 }
 
+// ── passive page-visit capture ──────────────────────────────────────────────
+
+export function getPageVisitQueue(): Promise<StandaloneClip[]> {
+  return raw<StandaloneClip[]>(KEYS.pageVisitQueue, [], (v) => Array.isArray(v));
+}
+
+export async function setPageVisitQueue(queue: StandaloneClip[]): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.pageVisitQueue]: queue });
+}
+
+export function getPageVisitSeen(): Promise<RecentClip[]> {
+  return raw<RecentClip[]>(KEYS.pageVisitSeen, [], (v) => Array.isArray(v));
+}
+
+export async function setPageVisitSeen(ring: RecentClip[]): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.pageVisitSeen]: ring });
+}
+
+export function getPageVisitBudget(): Promise<PageVisitBudget> {
+  return raw<PageVisitBudget>(
+    KEYS.pageVisitBudget,
+    DEFAULT_PAGEVISIT_BUDGET,
+    (v) => isObj(v) && typeof v.day === 'string' && typeof v.drained === 'number',
+  );
+}
+
+export async function setPageVisitBudget(budget: PageVisitBudget): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.pageVisitBudget]: budget });
+}
+
 /**
  * The drain's single multi-key commit — one storage.set so a worker kill
  * loses the entire drain result or none of it (clips redeliver, deduped by
@@ -293,6 +324,8 @@ export async function commitDrain(w: {
   seen: string[];
   activity: ActivityRecord[];
   drain: DrainState;
+  pageVisitQueue: StandaloneClip[];
+  pageVisitBudget: PageVisitBudget;
 }): Promise<void> {
   await chrome.storage.local.set({
     [KEYS.brain]: w.brain,
@@ -300,6 +333,8 @@ export async function commitDrain(w: {
     [KEYS.clipSeen]: w.seen,
     [KEYS.activity]: w.activity,
     [KEYS.drain]: w.drain,
+    [KEYS.pageVisitQueue]: w.pageVisitQueue,
+    [KEYS.pageVisitBudget]: w.pageVisitBudget,
   });
 }
 

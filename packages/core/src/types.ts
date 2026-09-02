@@ -138,6 +138,9 @@ export interface BrainNode {
   // import = mined from past Claude Code sessions (evictable and mergeable like agent)
   // clip = distilled from a browser capture (own cap MAX_CLIP_NODES, own recall
   //        budget, never merged/folded — must stay retractable from the extension)
+  // pagevisit = distilled from a page the user passively visited (allowlisted
+  //        sites only, own cap MAX_PAGEVISIT_NODES, same trust tier as clip —
+  //        never merged/folded, must stay retractable from the extension)
   // workflow = a recorded, generalized browser task (own cap MAX_WORKFLOW_NODES,
   //        never merged/folded — the `workflow` payload is the truth; must stay
   //        retractable from the extension, same trust tier as clip)
@@ -145,10 +148,10 @@ export interface BrainNode {
   //        re-ingest, never folded — see ingestSupabase.ts, same contract as graphify)
   // tool = a connected external tool/service (replaced wholesale on re-ingest,
   //        never folded — see ingestTool.ts, same contract as supabase)
-  origin: 'seed' | 'agent' | 'graphify' | 'import' | 'clip' | 'workflow' | 'supabase' | 'tool';
+  origin: 'seed' | 'agent' | 'graphify' | 'import' | 'clip' | 'pagevisit' | 'workflow' | 'supabase' | 'tool';
   sourceSession?: string;
-  // http(s) page the clip was captured from (origin 'clip'), or the workflow's
-  // start url (origin 'workflow').
+  // http(s) page the clip was captured from (origin 'clip'/'pagevisit'), or the
+  // workflow's start url (origin 'workflow').
   sourceUrl?: string;
   lastUpdated: string; // ISO
   recallCount: number;
@@ -215,6 +218,18 @@ export const SKILL_ONFAIL_MAX = 4;
  */
 export function isSkillNode(n: { skill?: SkillRef }): boolean {
   return !!n.skill?.tree;
+}
+
+/**
+ * The ONE predicate for "browser-capture trust tier" — clip and pagevisit
+ * nodes share every protection clip nodes already have (never merged/folded,
+ * own recall budget, own eviction cap, excluded from generic dedup). Use this
+ * instead of `origin === 'clip'` anywhere that tier, not the literal kind, is
+ * what's being checked — so pagevisit never has to be added to N call sites
+ * by hand.
+ */
+export function isClipTierNode(n: { origin: BrainNode['origin'] }): boolean {
+  return n.origin === 'clip' || n.origin === 'pagevisit';
 }
 
 export function asCategory(v: unknown): Category {
