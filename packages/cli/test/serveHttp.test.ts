@@ -10,6 +10,7 @@ import {
   compactClipMap,
   formatPairingCode,
   loadServeConfig,
+  MAX_CLIPS_BYTES,
   readClipMap,
   saveServeConfig,
 } from '@nff-brain/core';
@@ -353,6 +354,43 @@ describe('POST /v1/clip', () => {
     expect(res.status).toBe(400);
   });
 
+  it('accepts a pagevisit clip like any other kind', async () => {
+    const token = await pair();
+    const res = await request(port, {
+      path: '/v1/clip',
+      method: 'POST',
+      headers: auth(token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ kind: 'pagevisit', text: 'excerpt of a page', url: 'https://example.com/read' }),
+    });
+    expect(res.status).toBe(201);
+    expect(clipQueueStats(globalBrain).pending).toBe(1);
+  });
+
+  it('reserves headroom for explicit clips once the queue nears its cap', async () => {
+    const token = await pair();
+    const file = path.join(path.dirname(globalBrain), 'clips.jsonl');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'x'.repeat(Math.ceil(MAX_CLIPS_BYTES * 0.85)));
+
+    const visitRes = await request(port, {
+      path: '/v1/clip',
+      method: 'POST',
+      headers: auth(token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ kind: 'pagevisit', text: 'a page', url: 'https://example.com/a' }),
+    });
+    expect(visitRes.status).toBe(429);
+    expect(visitRes.json<{ error: string }>().error).toBe('queue_reserved');
+
+    // An explicit capture still lands — only passive volume is reserved against.
+    const explicitRes = await request(port, {
+      path: '/v1/clip',
+      method: 'POST',
+      headers: auth(token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ kind: 'selection', text: 'a fact', url: 'https://example.com/a' }),
+    });
+    expect(explicitRes.status).toBe(201);
+  });
+
   it('keeps concurrent posts from tearing each other', async () => {
     const token = await pair();
     await Promise.all(
@@ -623,6 +661,26 @@ describe('clip→node feedback loop (/v1/clips/map + /v1/retract)', () => {
     expect(brain.edges.some((e: any) => e.from === 'clip-one' || e.to === 'clip-one')).toBe(false);
     const ledger = readClipMap(globalBrain);
     expect(ledger.flatMap((e) => e.nodeIds)).not.toContain('clip-one');
+  });
+
+  it('retract also deletes origin-pagevisit nodes attributed to the caller', async () => {
+    const token = await pair();
+    const clientId = loadServeConfig(configFile)!.clients[0]!.id;
+    writeRichBrain(globalBrain, [
+      { id: 'visit-one', origin: 'pagevisit' },
+      { id: 'agent-node', origin: 'agent' },
+    ]);
+    appendClipMap(globalBrain, [{ clipId: 'clp_visit_1', clientId, nodeIds: ['visit-one'] }]);
+
+    const res = await request(port, {
+      path: '/v1/retract',
+      method: 'POST',
+      headers: auth(token, { 'content-type': 'application/json' }),
+      body: JSON.stringify({ nodeIds: ['visit-one'] }),
+    });
+    expect(res.json<{ removed: string[] }>().removed).toEqual(['visit-one']);
+    const brain = JSON.parse(fs.readFileSync(globalBrain, 'utf8'));
+    expect(brain.nodes.some((n: any) => n.id === 'visit-one')).toBe(false);
   });
 
   it('a client cannot retract nodes another client’s clips created', async () => {

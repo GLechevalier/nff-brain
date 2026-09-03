@@ -173,10 +173,11 @@ describe('the capture choke point', () => {
 
   it('routes every capture decision through shouldCapture()', () => {
     // Every entry point must call the same function; a second copy of the
-    // matching logic is the bug this catches. Exactly two registered callers:
-    // the context menu (capture.ts) and the recorder event sink (recorder.ts).
+    // matching logic is the bug this catches. Exactly three registered
+    // callers: the context menu (capture.ts), the recorder event sink
+    // (recorder.ts), and the passive page-visit reader (pageVisitCapture.ts).
     const callers = FILES.filter((f) => f.rel !== 'src/gate.ts' && /\bshouldCapture\(/.test(code(f.text)));
-    expect(callers.map((c) => c.rel).sort()).toEqual(['src/capture.ts', 'src/recorder.ts']);
+    expect(callers.map((c) => c.rel).sort()).toEqual(['src/capture.ts', 'src/pageVisitCapture.ts', 'src/recorder.ts']);
   });
 
   it('implements host MATCHING in exactly one file', () => {
@@ -245,6 +246,8 @@ describe('MV3 service-worker discipline', () => {
     'src/inviteNet.ts',
     'src/crmSync.ts',
     'src/profileScrapeScript.ts',
+    'src/pageExtractScript.ts',
+    'src/pageVisitCapture.ts',
     'src/agentRunner.ts',
     'src/agentRegistry.ts',
     'src/agentGate.ts',

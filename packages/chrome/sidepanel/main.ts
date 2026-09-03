@@ -36,6 +36,7 @@ import type {
   WebAgentRun,
 } from '../src/protocol.js';
 import { adapterById } from '../src/recorderRegistry.js';
+import { parseRuleInput } from '../src/gate.js';
 import { getProjectHandle, putProjectHandle } from '../src/fsHandles.js';
 import type { ActRunState } from '../src/schema.js';
 import type { ProviderId } from '@nff-brain/core/provider';
@@ -254,7 +255,10 @@ async function dispatchSetup(msg: PopupToSw, errorField?: string): Promise<boole
     latestState = reply.state;
     paintSetup(reply.state, {
       currentHost,
-      onRemoveRule: (host) => void dispatchSetup({ type: 'removeRule', host }),
+      onRemoveRule: (host) => {
+        void releaseRuleHostPermission(host);
+        void dispatchSetup({ type: 'removeRule', host });
+      },
       onToggleRecorder: (id, enable) => void toggleRecorder(id, enable),
     });
   }
@@ -308,6 +312,44 @@ async function toggleRecorder(id: string, enable: boolean): Promise<void> {
     return;
   }
   await dispatchSetup({ type: 'setRecorderEnabled', id, enabled: true }, 'setup-recorder-error');
+}
+
+/** Both schemes, plus the subdomain wildcard when the rule wants it. */
+function permissionOriginsForHost(host: string, includeSubdomains: boolean): string[] {
+  return includeSubdomains
+    ? [`http://${host}/*`, `https://${host}/*`, `http://*.${host}/*`, `https://*.${host}/*`]
+    : [`http://${host}/*`, `https://${host}/*`];
+}
+
+/**
+ * Passive page-visit capture (pageVisitCapture.ts) needs a STANDING host
+ * permission per allowlisted domain: chrome.scripting.executeScript at
+ * tabs.onUpdated time has no user gesture to ride activeTab on. Requested in
+ * the SAME click that adds the rule, mirroring toggleRecorder — but unlike a
+ * recorder, the allowlist itself still works at zero host permission
+ * (explicit "Remember this" needs none), so a decline is best-effort and
+ * never blocks addRule: passive capture on that domain just silently no-ops
+ * afterward (see pageVisitCapture.ts's own executeScript try/catch).
+ */
+async function requestRuleHostPermission(rawInput: string): Promise<void> {
+  const parsed = parseRuleInput(rawInput);
+  if (!('rule' in parsed)) return;
+  try {
+    await chrome.permissions.request({ origins: permissionOriginsForHost(parsed.rule.host, parsed.rule.includeSubdomains) });
+  } catch {
+    /* best effort — addRule proceeds either way */
+  }
+}
+
+/** Symmetric release on remove. Over-releasing (a pattern never granted for
+ *  this host) is a harmless no-op, so this skips tracking which variant was
+ *  actually requested and just releases the maximal set. */
+async function releaseRuleHostPermission(host: string): Promise<void> {
+  try {
+    await chrome.permissions.remove({ origins: permissionOriginsForHost(host, true) });
+  } catch {
+    /* best effort */
+  }
 }
 
 /**
@@ -1386,16 +1428,21 @@ function wire(): void {
   });
   const addSetupRule = () => {
     const input = $('setup-rule-input') as HTMLInputElement;
-    void dispatchSetup({ type: 'addRule', input: input.value }, 'setup-rule-error').then((ok) => {
-      if (ok) input.value = '';
-    });
+    const value = input.value;
+    void requestRuleHostPermission(value).then(() =>
+      dispatchSetup({ type: 'addRule', input: value }, 'setup-rule-error').then((ok) => {
+        if (ok) input.value = '';
+      }),
+    );
   };
   $('setup-rule-add').addEventListener('click', addSetupRule);
   $('setup-rule-input').addEventListener('keydown', (e) => {
     if ((e as KeyboardEvent).key === 'Enter') addSetupRule();
   });
   $('setup-allow-current').addEventListener('click', () => {
-    if (currentHost) void dispatchSetup({ type: 'addRule', input: currentHost }, 'setup-rule-error');
+    if (!currentHost) return;
+    const host = currentHost;
+    void requestRuleHostPermission(host).then(() => dispatchSetup({ type: 'addRule', input: host }, 'setup-rule-error'));
   });
   $('setup-clear').addEventListener('click', () => {
     if (latestState) paintClearConfirm(latestState);

@@ -84,13 +84,22 @@ describe('manifest.json', () => {
     // github/linkedin: one per recorder adapter, requested only when the user
     // flips that recorder on and RELEASED again on disable. admin.nanoforgeflow.com:
     // CRM sync, requested only when the user saves an ingest secret and released
-    // on "Forget secret". Declared, never requested at install, so the install
-    // dialog stays warning-free.
+    // on "Forget secret". The two wildcard entries back passive page-visit
+    // capture (pageVisitCapture.ts): chrome.scripting.executeScript at
+    // tabs.onUpdated time has no user gesture to ride activeTab on, so it needs
+    // a STANDING host permission per allowlisted domain — Chrome only allows
+    // requesting a runtime origin that is a subset of a DECLARED optional
+    // pattern, so a broad-but-optional pattern must be declared here even
+    // though only the narrow per-site origin the user actually adds is ever
+    // requested (sidepanel/main.ts's addSetupRule). Declared, never requested
+    // at install, so the install dialog stays warning-free.
     expect(manifest.optional_host_permissions).toEqual([
       'http://127.0.0.1/*',
       'https://github.com/*',
       'https://www.linkedin.com/*',
       'https://admin.nanoforgeflow.com/*',
+      'http://*/*',
+      'https://*/*',
     ]);
   });
 

@@ -154,7 +154,7 @@ export async function status(port: number, token: string): Promise<StatusRespons
 }
 
 export interface ClipPayload {
-  kind: 'selection' | 'link' | 'page' | 'note';
+  kind: 'selection' | 'link' | 'page' | 'note' | 'pagevisit';
   text: string;
   url?: string;
   title?: string;

@@ -45,6 +45,7 @@ import {
 } from './client.js';
 import { HEALTH_ALARM, currentPhase, ensureAlarm, pairWithServer, probe, unpair } from './connection.js';
 import { clearActivity, logVisit, removableNodeCount } from './activity.js';
+import { capturePageVisit } from './pageVisitCapture.js';
 import { parseRuleInput, ruleLabel } from './gate.js';
 import { derivePhase } from './health.js';
 import { ensureRecorderScripts, onLinkedinInviteRequest, onLinkedinNet, onRecorderEvent, recorderPublicState, setRecorderEnabled } from './recorder.js';
@@ -818,7 +819,12 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 chrome.permissions.onAdded.addListener(() => void probe({ force: true }));
 // Page-visit log → activity history ("Navigated to LinkedIn — …"). Needs only
 // the `tabs` permission already declared; the handler re-checks nb.logVisits.
-chrome.tabs.onUpdated.addListener((_tabId, info, tab) => void logVisit(info, tab));
+// capturePageVisit is the separate, allowlist-gated passive content reader —
+// see its own file header for why it cannot share logVisit's ungated tap.
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  void logVisit(info, tab);
+  void capturePageVisit(tabId, info, tab);
+});
 // Guarded: chrome.debugger is present only while the optional `debugger`
 // permission is granted. Registered here (top level) so an infobar Cancel is
 // heard whenever the permission was already granted at worker start.

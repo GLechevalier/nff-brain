@@ -15,7 +15,10 @@ import {
   buildClipPrompt,
   compactClipMap,
   finishTake,
+  isClipTierNode,
   loadBrain,
+  MAX_CLIP_NODES,
+  MAX_PAGEVISIT_NODES,
   mutateBrain,
   parseClipResponse,
   pruneClips,
@@ -98,14 +101,19 @@ async function drainClipsInner(paths: BrainPaths, opts: DrainClipsOptions): Prom
     return EMPTY;
   }
 
-  const batch = fresh.slice(0, MAX_CLIPS_PER_DRAIN);
+  // Explicit clips always win the batch cap — a flood of passive page visits
+  // must not push a "Remember this" capture to next session. A stable sort on
+  // "is this a page visit" preserves chronological order within each tier.
+  const prioritized = [...fresh].sort((a, b) => Number(a.kind === 'pagevisit') - Number(b.kind === 'pagevisit'));
+  const batch = prioritized.slice(0, MAX_CLIPS_PER_DRAIN);
   const batchIds = new Set(batch.map((r) => r.id));
   const clipsById = new Map(batch.map((r) => [r.id, r]));
 
-  // Known clip nodes from BOTH brains — the model flags re-captures against them.
+  // Known clip-tier nodes from BOTH brains — the model flags re-captures
+  // against them (clip AND pagevisit, so a re-visited page isn't re-minted).
   const knownClipNodes = targets
     .flatMap((t) => loadBrain(t.brainPath)?.nodes ?? [])
-    .filter((n) => n.origin === 'clip')
+    .filter(isClipTierNode)
     .map((n) => ({ id: n.id, title: n.title, sourceUrl: n.sourceUrl }));
 
   const prompt = buildClipPrompt({ clips: batch, knownClipNodes });
@@ -143,7 +151,12 @@ async function drainClipsInner(paths: BrainPaths, opts: DrainClipsOptions): Prom
 
     const applied = mutateBrain(t.brainPath, (brain) => {
       const r = applyClips(brain, proposals, duplicates, clipsById);
-      const evicted = pruneClips(brain);
+      // Each origin has its own budget — a heavy browsing day can never crowd
+      // out nodes the user explicitly asked to remember.
+      const evicted = [
+        ...pruneClips(brain, MAX_CLIP_NODES, 'clip'),
+        ...pruneClips(brain, MAX_PAGEVISIT_NODES, 'pagevisit'),
+      ];
       return { r, evicted };
     });
 

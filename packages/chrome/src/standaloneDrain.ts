@@ -154,8 +154,28 @@ export async function enqueuePageVisit(
   return true;
 }
 
-function todayKey(now = new Date()): string {
+export function todayKey(now = new Date()): string {
   return now.toISOString().slice(0, 10);
+}
+
+/**
+ * Pure batch planning for page visits: same freshness filter as
+ * planDrainBatch, further capped by (a) whatever per-tick room the explicit
+ * clip batch left in the shared MAX_CLIPS_PER_DRAIN ceiling and (b) the daily
+ * distill budget — the cost gate. A stale `budget.day` (yesterday, or never
+ * set) means the day has rolled over and the full cap is available again.
+ * Exported for tests.
+ */
+export function planPageVisitBatch(
+  queue: readonly ClipRecord[],
+  seen: readonly string[],
+  explicitBatchLength: number,
+  budget: PageVisitBudget,
+  today: string,
+): ClipRecord[] {
+  const headroom = budget.day === today ? Math.max(0, PAGEVISIT_DAILY_DRAIN_CAP - budget.drained) : PAGEVISIT_DAILY_DRAIN_CAP;
+  const room = Math.max(0, MAX_CLIPS_PER_DRAIN - explicitBatchLength);
+  return planDrainBatch(queue, seen).slice(0, Math.min(headroom, room));
 }
 
 export interface StandaloneDrainResult {
@@ -190,9 +210,7 @@ export async function drainStandaloneClips(): Promise<StandaloneDrainResult> {
   const explicitBatch = planDrainBatch(queue, seen);
   const budget = await getPageVisitBudget();
   const today = todayKey();
-  const headroom = budget.day === today ? Math.max(0, PAGEVISIT_DAILY_DRAIN_CAP - budget.drained) : PAGEVISIT_DAILY_DRAIN_CAP;
-  const visitRoom = Math.max(0, MAX_CLIPS_PER_DRAIN - explicitBatch.length);
-  const visitBatch = planDrainBatch(pageVisitQueue, seen).slice(0, Math.min(headroom, visitRoom));
+  const visitBatch = planPageVisitBatch(pageVisitQueue, seen, explicitBatch.length, budget, today);
   const batch = [...explicitBatch, ...visitBatch];
 
   if (batch.length === 0) {

@@ -118,3 +118,39 @@ outbound actions only, saved as notes in their local memory. Requested only
 when the user enables the LinkedIn recorder; removed on disable. The content
 script never reads profiles, feeds, or messages, and never automates any
 action.
+
+## v0.3.x (passive page-visit capture — submit ONLY with this release)
+
+### `optional_host_permissions: http://*/*` and `https://*/*`
+
+Back a new, per-domain opt-in feature: when the user adds a domain to their
+capture allowlist (Settings tab, same allowlist that already gates the
+right-click "Remember this" verbs and the recorders above), the extension also
+reads a short excerpt of each allowlisted page's own text — title, headings,
+and main body, not the full page HTML — when the user navigates to it, so that
+content can become a note in their personal knowledge base alongside their
+explicit captures. Both patterns are declared but requested **only** for the
+single narrow origin the user just added (e.g. `https://docs.example.com/*`),
+in the same click that adds the allowlist rule — Chrome requires the runtime
+request to be a subset of a *declared* optional pattern, and since any domain
+the user types is allowed, the declared pattern must be broad even though the
+actual grant per click is not. Declining the prompt does not block adding the
+domain: explicit "Remember this" keeps working there either way, and passive
+reading on that domain simply stays off. Removing the domain from the
+allowlist releases the permission again. This never runs via `chrome.debugger`
+— it uses `chrome.scripting.executeScript`, so it carries no additional
+install-time warning and shows none of the "being debugged" UI the Act feature
+does. Gated by the same capture on/off switch as everything else in this
+document, and by a daily cap on how many visited pages actually get turned
+into notes (excess pages simply wait for the next day) — so the feature cannot
+run away with API cost or storage even on a heavy browsing day.
+
+### Data-usage certification answers (updated)
+
+- Collects "Website content": **yes** — text/links the user explicitly
+  right-clicks to save, AND (new, opt-in per domain) a short excerpt of pages
+  the user visits on a domain they added to their allowlist and granted
+  browsing access to.
+- Everything else in the v0.1.0 answers above is unchanged: nothing is sold,
+  nothing is transmitted except to the AI provider the user configured with
+  their own key, and nothing is used for lending/creditworthiness.

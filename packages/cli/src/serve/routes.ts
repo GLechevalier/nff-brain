@@ -12,6 +12,7 @@ import {
   findClientById,
   fuseRanked,
   helloProof,
+  isClipTierNode,
   mutateBrain,
   readClipMap,
   removeClient,
@@ -31,6 +32,14 @@ import { TRACE_ROUTES } from './traceRoutes.js';
 
 const PAIR_BODY_MAX = 8 * 1024;
 const CLIP_BODY_MAX = 64 * 1024;
+/**
+ * The clip queue is one shared file (clips.jsonl) — unlike the browser's
+ * separate nb.clipQueue/nb.pageVisitQueue. Passive page-visit volume must
+ * never be able to fill it and start 507ing real "Remember this" clicks, so
+ * pagevisit clips stop landing once the queue passes this fraction of
+ * MAX_CLIPS_BYTES, reserving the rest for explicit capture.
+ */
+const PAGEVISIT_QUEUE_RESERVE_RATIO = 0.8;
 
 export type AuthLevel = 'none' | 'client' | 'admin';
 
@@ -194,6 +203,14 @@ const clip: Handler = async (req, res, ctx) => {
 
   const target: CaptureTarget = body?.target === 'project' ? 'project' : body?.target === 'global' ? 'global' : cfg.capture.defaultTarget;
   const brainPath = state.targetBrainPath(target);
+
+  if (body?.kind === 'pagevisit' && state.queueStats(target).bytes >= MAX_CLIPS_BYTES * PAGEVISIT_QUEUE_RESERVE_RATIO) {
+    // Not queue_full/507 — that code means an explicit clip was rejected.
+    // A passive page visit just silently fails here; the extension's own
+    // catch treats it exactly like a network hiccup (see pageVisitCapture.ts).
+    sendError(res, 429, 'queue_reserved', 'the clip queue is reserved for explicit captures right now', ctx.cors);
+    return;
+  }
 
   const result = appendClip(brainPath, body ?? {}, {
     target,
@@ -484,11 +501,12 @@ const clipsMap: Handler = (req, res, ctx) => {
 const RETRACT_MAX_IDS = 200;
 
 /**
- * Delete clip nodes at the extension's request ("clear activity history, also
- * remove nodes"). Three INDEPENDENT gates per node, each load-bearing:
+ * Delete clip-tier nodes at the extension's request ("clear activity history,
+ * also remove nodes"). Three INDEPENDENT gates per node, each load-bearing:
  *   1. it was requested by id;
- *   2. origin === 'clip' — the hard security line: the extension can never
- *      delete agent/seed/import knowledge, even via a poisoned ledger;
+ *   2. isClipTierNode(node) (origin 'clip' or 'pagevisit') — the hard
+ *      security line: the extension can never delete agent/seed/import
+ *      knowledge, even via a poisoned ledger;
  *   3. the requesting client's own clips created it — one paired browser
  *      cannot delete another's.
  * Ids that fail a gate (or were already evicted by pruneClips) are silently
@@ -515,7 +533,7 @@ const retract: Handler = async (req, res, ctx) => {
       const out: string[] = [];
       for (const id of candidates) {
         const node = brain.nodes.find((n) => n.id === id);
-        if (node && node.origin === 'clip' && removeNode(brain, id)) out.push(id);
+        if (node && isClipTierNode(node) && removeNode(brain, id)) out.push(id);
       }
       return out;
     });

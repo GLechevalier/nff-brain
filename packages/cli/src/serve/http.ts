@@ -16,6 +16,7 @@ export type ErrorCode =
   | 'unsupported_media_type'
   | 'payload_too_large'
   | 'queue_full'
+  | 'queue_reserved'
   | 'pairing_closed'
   | 'bad_code'
   | 'run_active'

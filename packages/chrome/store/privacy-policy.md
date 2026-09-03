@@ -19,6 +19,13 @@ Only what you explicitly capture:
   structured note about actions **you yourself perform** on that site (for
   example, the title of an issue you just opened). Recorders never read pages
   you did not act on.
+- If you add a domain to your allowlist and grant it browsing access when
+  Chrome prompts, a short excerpt of each page's own text — its title,
+  headings, and main body, not the full page HTML and not what's off-screen —
+  each time you navigate to a page on that domain. This is the one exception
+  to "only what you explicitly act on": it is opt-in per domain (nothing is
+  read anywhere until you add the domain and grant the permission) and it
+  never fires more than once per page per day.
 
 Nothing is captured unless capture is switched **on** (it is off after install)
 **and** the site is on your allowlist (which starts empty — default deny).
@@ -99,7 +106,9 @@ also releases the site permission) or by uninstalling.
 - A capped local activity history of recent captures, so you can review and
   delete them.
 - In standalone mode: your API key, your model choices, the queued captures,
-  and the in-browser knowledge base built from them (capped at 200 notes).
+  and the in-browser knowledge base built from them (capped at 200 notes, plus
+  a separate 150-note cap for notes distilled from page visits, so a heavy
+  browsing day can never crowd out something you explicitly asked to remember).
 
 ## Your controls
 
@@ -107,14 +116,17 @@ also releases the site permission) or by uninstalling.
 - **Default deny**: no domain is ever captured unless you added it.
 - **Clear activity history** wipes the local buffer, and can also ask your local
   server to delete the notes created from those captures.
-- Disabling a recorder also releases its site permission.
+- Disabling a recorder also releases its site permission; removing a domain
+  from your allowlist also releases its browsing-access permission and stops
+  passive page-visit reading on it immediately.
 - Uninstalling the extension removes everything it stored in the browser.
 
 ## What we never do
 
 - Sell, share, or transmit your data to us or to anyone you did not configure
   (we never possess it).
-- Read pages, profiles, or content you did not explicitly act on.
+- Read page content on any domain that is not on your allowlist, or before you
+  have granted Chrome's browsing-access prompt for that domain.
 - Run in incognito windows (`"incognito": "not_allowed"`).
 - Load remote code.
 
