@@ -104,6 +104,8 @@ describe('buildDensityClusters (overlap merging)', () => {
       ['n3', 'n4'],
     ]);
     expect(a.map((c) => c.anchorId)).toEqual(['n1', 'n4']);
+    // No priority map ≡ an empty one: everything ranks as absorbable.
+    expect(buildDensityClusters(nodes, [], { priority: new Map() })).toEqual(a);
   });
 
   it('coalesces more as the caller dezooms (bigger slack)', () => {
@@ -127,34 +129,86 @@ describe('buildDensityClusters (overlap merging)', () => {
     expect(buildDensityClusters([node('only')], [])).toEqual([]);
   });
 
-  it('a protected node anchors its blob even when a bigger member overlaps it', () => {
-    // Without protection the size-40 node would anchor and hide the tab
-    // master; protected, the master wins the anchor pick and stays visible.
+  it('a protected (priority 2) node anchors its blob even when a bigger member overlaps it', () => {
+    // Without priority the size-40 node would anchor and hide the tab
+    // master; ranked 2, the master wins the anchor pick and stays visible.
     const nodes = [node('tab-master', { x: 0, size: 20 }), node('big', { x: 30, size: 40 })];
-    const [c] = buildDensityClusters(nodes, [], { protectedIds: new Set(['tab-master']) });
+    const [c] = buildDensityClusters(nodes, [], { priority: new Map([['tab-master', 2]]) });
     expect(c.anchorId).toBe('tab-master');
     expect(c.memberIds).toEqual(['big', 'tab-master']);
   });
 
   it('two protected nodes never merge with each other, even bridged by a plain node', () => {
-    // hub∩mid and mid∩tool: transitively one component — but that would hide
-    // one protected node behind the other, so the union guard splits it: the
-    // bridge joins ONE of them, and both protected nodes stay visible.
+    // hub∩mid and mid∩tool at equal distance and equal rank: the bridge joins
+    // ONE of them (lowest id), and both protected nodes stay visible.
     const nodes = [
       node('hub', { x: 0, size: 20 }),
       node('mid', { x: 35, size: 16 }),
       node('tool', { x: 70, size: 20 }),
     ];
-    const clusters = buildDensityClusters(nodes, [], { protectedIds: new Set(['hub', 'tool']) });
+    const clusters = buildDensityClusters(nodes, [], { priority: new Map([['hub', 2], ['tool', 2]]) });
     const hidden = new Set(clusters.flatMap((c) => c.memberIds.filter((id) => id !== c.anchorId)));
     expect(hidden.has('hub')).toBe(false);
     expect(hidden.has('tool')).toBe(false);
     expect(clusters).toHaveLength(1);
-    expect(clusters[0].memberIds).toContain('mid');
+    expect(clusters[0].memberIds).toEqual(['hub', 'mid']);
   });
 
   it('two overlapping protected nodes produce no blob at all', () => {
     const nodes = [node('hub', { x: 0 }), node('tool', { x: 10 })];
-    expect(buildDensityClusters(nodes, [], { protectedIds: new Set(['hub', 'tool']) })).toEqual([]);
+    expect(buildDensityClusters(nodes, [], { priority: new Map([['hub', 2], ['tool', 2]]) })).toEqual([]);
+  });
+
+  it('priority beats distance: a plain node closer to a tool still joins the hub', () => {
+    // mid is 30 from the hub and 20 from the tool — both overlap it. Rank 1
+    // wins over rank 2 regardless of distance (and of id order: today's
+    // sorted scan would have paired it with 'a-tool').
+    const nodes = [
+      node('hub', { x: 0, size: 20 }),
+      node('mid', { x: 30 }),
+      node('a-tool', { x: 50, size: 20 }),
+    ];
+    const clusters = buildDensityClusters(nodes, [], { priority: new Map([['hub', 1], ['a-tool', 2]]) });
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].anchorId).toBe('hub');
+    expect(clusters[0].memberIds).toEqual(['hub', 'mid']);
+  });
+
+  it('equal priority → the closest anchor wins', () => {
+    const nodes = [
+      node('tool-a', { x: 0, size: 20 }),
+      node('tool-b', { x: 50, size: 20 }),
+      node('mid', { x: 30 }),
+    ];
+    const clusters = buildDensityClusters(nodes, [], { priority: new Map([['tool-a', 2], ['tool-b', 2]]) });
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].anchorId).toBe('tool-b');
+    expect(clusters[0].memberIds).toEqual(['mid', 'tool-b']);
+  });
+
+  it('plain nodes pair with their closest neighbour, not everything they touch', () => {
+    // b overlaps a (25) and c (30); c overlaps b (30) and d (25). Each joins
+    // its closest → two blobs, where connected components would give one.
+    // The grown anchors (25.6 at x=0 and x=80) do not overlap, so it holds.
+    const nodes = [
+      node('a', { x: 0, size: 20 }),
+      node('b', { x: 25 }),
+      node('c', { x: 55 }),
+      node('d', { x: 80, size: 20 }),
+    ];
+    const clusters = buildDensityClusters(nodes, []);
+    expect(clusters.map((c) => c.memberIds)).toEqual([
+      ['a', 'b'],
+      ['c', 'd'],
+    ]);
+    expect(clusters.map((c) => c.anchorId)).toEqual(['a', 'd']);
+  });
+
+  it('pickAnchor ranks priority over size', () => {
+    const nodes = [node('hub', { x: 0 }), node('big', { x: 10, size: 40 }), node('small', { x: 20, size: 10 })];
+    const [c] = buildDensityClusters(nodes, [], { priority: new Map([['hub', 1]]) });
+    expect(c.anchorId).toBe('hub');
+    expect(c.memberIds).toEqual(['big', 'hub', 'small']);
+    expect(c.size).toBe(blobSize(16, [40, 10]));
   });
 });

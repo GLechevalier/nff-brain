@@ -1,19 +1,27 @@
 // Overlap-triggered merging: nodes whose squares visually overlap at the
-// current zoom fuse into one blob — Agar.io style. Transitive and
-// category-blind: whatever is stacked on screen becomes ONE node, anchored on
-// its largest member, which renders in that member's own shape/size class,
-// grown by the mass it absorbed. Same contract as the old statistical
-// clustering it replaces: pure, deterministic, never persisted, recomputed
-// every render, hides its members.
+// current zoom fuse into blobs — Agar.io style. Category-blind: whatever is
+// stacked on screen joins a blob, anchored on its highest-priority member
+// (then largest), which renders in that member's own shape/size class, grown
+// by the mass it absorbed. Same contract as the old statistical clustering it
+// replaces: pure, deterministic, never persisted, recomputed every render,
+// hides its members.
+//
+// Each node (or plain blob) joins ONE neighbour per round: among everything
+// it overlaps, the highest-priority candidate wins, ties → the closest
+// anchor, then lowest id. So a node hesitating between the central hub and a
+// tool master goes to the hub, and zoomed out the biggest blob is (almost)
+// always the hub. This is NOT connected components: two plain nodes each
+// closer to a different neighbour form two blobs even if one overlaps both —
+// "merge with the closest cluster". Union-find keeps a round's picks
+// transitive (a→b, b→c is one blob), and the grown blob re-picks next round.
 //
 // Why anchor-based: the previous design had TWO render paths — a generic
 // "×N" cluster square, plus an invisible hit-target for clusters "merged
 // into" a nearby hub (nearBigNodeId) — and the second path twice regressed
 // into "fully dezoomed, nothing visible" (an invisible cluster anchored to a
-// node that was itself hidden). Anchoring every blob on its own largest
-// member makes the invariant structural: the anchor is a member, members are
-// hidden EXCEPT the anchor, so a blob can never be anchored to something
-// hidden.
+// node that was itself hidden). Anchoring every blob on its own member makes
+// the invariant structural: the anchor is a member, members are hidden
+// EXCEPT the anchor, so a blob can never be anchored to something hidden.
 //
 // The merge trigger is the SAME axis-aligned geometry layoutBrain/spaceOutNodes
 // guarantee (layout.ts's requiredSeparation): two squares of half-extent
@@ -46,7 +54,7 @@ export interface DensityCluster {
   category: string;
   /** ALL members, anchor included, sorted by id. Renderers hide every member EXCEPT the anchor. */
   memberIds: string[];
-  /** The largest member (ties → lowest id). The blob renders AS this node — its position, its glyph/logo — grown to `size`. */
+  /** The highest-priority member, then largest (ties → lowest id). The blob renders AS this node — its position, its glyph/logo — grown to `size`. */
   anchorId: string;
   /** Extractive, not generated: count + a few member titles. Same philosophy as spine's summarise(). */
   summary: string;
@@ -63,14 +71,18 @@ export interface DensityOptions {
    */
   slack?: number;
   /**
-   * Ids of nodes that must ALWAYS stay visible (the central hub, tab and
-   * tool masters). A protected node can still anchor a blob — it absorbs
-   * whatever overlaps it — but it can never be hidden as another blob's
-   * member: it wins the anchor pick over any size, and two protected nodes
-   * never merge with each other (each keeps its own square on the board).
+   * Node id → priority rank; missing ids are DEFAULT_PRIORITY (3). 1 = the
+   * central hub, 2 = tab/tool masters and employee nodes, 3 = everything
+   * else. A node overlapping several blobs joins the highest-priority one
+   * (lowest number), ties → closest. Ranks below 3 are PROTECTED: they anchor
+   * blobs and absorb whatever overlaps them but are never hidden as another
+   * blob's member — two protected nodes never merge with each other.
    */
-  protectedIds?: ReadonlySet<string>;
+  priority?: ReadonlyMap<string, number>;
 }
+
+/** Rank of every node not in `DensityOptions.priority` — absorbable. */
+export const DEFAULT_PRIORITY = 3;
 
 /**
  * Screen-pixel radius of the density HEATMAP blobs (the "▦ Density" toggle),
@@ -92,9 +104,10 @@ export const MERGE_SCREEN_SLACK = 16;
 const LABEL_PAD = 14;
 
 // Chain-eating rounds: a grown blob can overlap nodes its base anchor did
-// not; each round re-tests with grown sizes. Converges almost immediately on
-// real graphs — the cap is a safety net, not a tuning knob.
-const MAX_GROW_ROUNDS = 5;
+// not; each round re-tests with grown sizes. One pick per group per round
+// can take ~log2(n) rounds on an alternating close/far chain, hence the
+// generous cap — a safety net, not a tuning knob.
+const MAX_GROW_ROUNDS = 16;
 
 const DENSITY_PREFIX = 'density:';
 
@@ -134,19 +147,24 @@ function overlaps(
   return Math.abs(ax - bx) < sa + sb + slack && Math.abs(ay - by) < sa + sb + LABEL_PAD + slack;
 }
 
-/** The anchor of a member set: the protected member if there is one (the
- *  union guard allows at most one per group), else largest size, ties →
- *  lowest id. */
+/** The anchor of a member set: highest priority (lowest rank), then largest
+ *  size, then lowest id. A group holds at most one protected member (they
+ *  never merge with each other), so the rank key is decisive whenever it
+ *  applies. */
 function pickAnchor(
   memberIds: readonly string[],
   byId: Map<string, DensityInputNode>,
-  protectedIds: ReadonlySet<string>,
+  rank: (id: string) => number,
 ): DensityInputNode {
   let anchor = byId.get(memberIds[0])!;
+  let anchorRank = rank(anchor.id);
   for (const id of memberIds) {
     const n = byId.get(id)!;
-    if (protectedIds.has(n.id)) return n;
-    if (n.size > anchor.size || (n.size === anchor.size && n.id < anchor.id)) anchor = n;
+    const r = rank(n.id);
+    if (r < anchorRank || (r === anchorRank && (n.size > anchor.size || (n.size === anchor.size && n.id < anchor.id)))) {
+      anchor = n;
+      anchorRank = r;
+    }
   }
   return anchor;
 }
@@ -163,18 +181,17 @@ export function buildDensityClusters(
 ): DensityCluster[] {
   void edges;
   const slack = opts.slack ?? 0;
-  const protectedIds = opts.protectedIds ?? new Set<string>();
+  const rank = (id: string): number => opts.priority?.get(id) ?? DEFAULT_PRIORITY;
   if (nodes.length < 2) return [];
 
   const byId = new Map(nodes.map((n) => [n.id, n]));
 
   // Union-find over node ids, deterministic: roots resolve to the lowest id
-  // on union, and pairs are scanned in the sorted order below. Each root
-  // tracks how many protected members its group holds — a union that would
-  // put two protected nodes in one group is refused, so every protected node
-  // either stands alone or anchors its own blob (never hides behind another).
+  // on union, and groups are scanned in the sorted order below. No protected
+  // guard is needed: only absorbable groups pick a target, protected groups
+  // never initiate, and a group that picked a protected target is protected
+  // from then on — so two protected nodes can never end up in one set.
   const parent = new Map<string, string>(nodes.map((n) => [n.id, n.id]));
-  const protCount = new Map<string, number>(nodes.map((n) => [n.id, protectedIds.has(n.id) ? 1 : 0]));
   const find = (id: string): string => {
     let root = id;
     while (parent.get(root)! !== root) root = parent.get(root)!;
@@ -191,44 +208,45 @@ export function buildDensityClusters(
     const ra = find(a);
     const rb = find(b);
     if (ra === rb) return false;
-    const prot = protCount.get(ra)! + protCount.get(rb)!;
-    if (prot > 1) return false; // both groups hold a must-stay-visible node
-    const root = ra < rb ? ra : rb;
-    parent.set(ra < rb ? rb : ra, root);
-    protCount.set(root, prot);
+    parent.set(ra < rb ? rb : ra, ra < rb ? ra : rb);
     return true;
   };
 
   const sorted = [...nodes].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   // Chain-eating: each round replaces every group by its anchor grown to the
-  // group's blob size and re-tests overlaps, so a blob that got fatter can
-  // absorb what its base anchor never touched. ponytail: O(rounds·n²)
-  // pairwise scan — fine at brain-graph sizes (tens–hundreds of nodes);
-  // switch to a spatial grid if that stops being true.
+  // group's blob size, then every ABSORBABLE group joins the one overlapping
+  // group it prefers (rank, then squared centre distance, then root id).
+  // ponytail: O(rounds·n²) pairwise scan — fine at brain-graph sizes
+  // (tens–hundreds of nodes); switch to a spatial grid if that stops being true.
   for (let round = 0; round < MAX_GROW_ROUNDS; round++) {
-    // Current super-node per group root: anchor position, grown size.
+    // Current super-node per group root: anchor position, grown size, rank.
     const members = new Map<string, string[]>();
     for (const n of sorted) {
       const root = find(n.id);
       (members.get(root) ?? members.set(root, []).get(root)!).push(n.id);
     }
     const supers = [...members.values()].map((ids) => {
-      const anchor = pickAnchor(ids, byId, protectedIds);
+      const anchor = pickAnchor(ids, byId, rank);
       const absorbed = ids.filter((id) => id !== anchor.id).map((id) => byId.get(id)!.size);
-      return { root: find(anchor.id), x: anchor.x, y: anchor.y, size: blobSize(anchor.size, absorbed) };
+      return { root: find(anchor.id), x: anchor.x, y: anchor.y, size: blobSize(anchor.size, absorbed), rank: rank(anchor.id) };
     });
     supers.sort((a, b) => (a.root < b.root ? -1 : a.root > b.root ? 1 : 0));
 
     let merged = false;
-    for (let i = 0; i < supers.length; i++) {
-      for (let j = i + 1; j < supers.length; j++) {
-        const a = supers[i];
-        const b = supers[j];
-        if (overlaps(a.x, a.y, a.size, b.x, b.y, b.size, slack)) {
-          if (union(a.root, b.root)) merged = true;
+    for (const g of supers) {
+      if (g.rank < DEFAULT_PRIORITY) continue; // protected groups only receive
+      let best: (typeof g) | null = null;
+      let bestD = 0;
+      for (const c of supers) {
+        if (c === g || !overlaps(g.x, g.y, g.size, c.x, c.y, c.size, slack)) continue;
+        const d = (g.x - c.x) * (g.x - c.x) + (g.y - c.y) * (g.y - c.y);
+        if (!best || c.rank < best.rank || (c.rank === best.rank && (d < bestD || (d === bestD && c.root < best.root)))) {
+          best = c;
+          bestD = d;
         }
       }
+      if (best && union(g.root, best.root)) merged = true;
     }
     if (!merged) break;
   }
@@ -251,7 +269,7 @@ export function buildDensityClusters(
 
   let seq = 0;
   return found.map((memberIds) => {
-    const anchor = pickAnchor(memberIds, byId, protectedIds);
+    const anchor = pickAnchor(memberIds, byId, rank);
     // Dominant category (ties → the anchor's own).
     const tally = new Map<string, number>();
     for (const id of memberIds) {

@@ -634,10 +634,11 @@ export function renderGraph(
   const screenRect = host.getBoundingClientRect();
   const refBox = currentViewBox ?? box;
   const scale = refBox.w > 0 && screenRect.width > 0 ? screenRect.width / refBox.w : 1;
-  // Core nodes (the hub) are important landmarks: they may anchor blobs but
-  // must never be hidden as another blob's member.
-  const protectedIds = new Set(nodes.filter((n) => n.category === 'core').map((n) => n.id));
-  const densityClusters = buildDensityClusters(nodes, edges, { slack: MERGE_SCREEN_SLACK / scale, protectedIds });
+  // Core nodes (the hub) rank 1: a node hesitating between blobs joins them
+  // first, and they may anchor blobs but are never hidden as another blob's
+  // member.
+  const priority = new Map(nodes.filter((n) => n.category === 'core').map((n) => [n.id, 1]));
+  const densityClusters = buildDensityClusters(nodes, edges, { slack: MERGE_SCREEN_SLACK / scale, priority });
   // A blob's anchor keeps rendering as itself; only the OTHER members hide.
   const blobByAnchor = new Map(densityClusters.map((c) => [c.anchorId, c]));
   const hiddenIds = new Set(densityClusters.flatMap((c) => c.memberIds.filter((id) => id !== c.anchorId)));

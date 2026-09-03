@@ -315,10 +315,11 @@ export const BrainGraph = forwardRef<BrainGraphHandle, BrainGraphProps>(function
       const p = laidOut[n.id];
       return p ? { ...n, x: p.x, y: p.y } : n;
     });
-    // Core nodes (the hub) are important landmarks: they may anchor blobs
-    // but must never be hidden as another blob's member.
-    const protectedIds = new Set(positioned.filter((n) => n.category === 'core').map((n) => n.id));
-    return buildDensityClusters(positioned, edges, { slack: MERGE_SCREEN_SLACK / view.scale, protectedIds });
+    // Core nodes (the hub) rank 1: a node hesitating between blobs joins
+    // them first, and they may anchor blobs but are never hidden as another
+    // blob's member.
+    const priority = new Map(positioned.filter((n) => n.category === 'core').map((n) => [n.id, 1]));
+    return buildDensityClusters(positioned, edges, { slack: MERGE_SCREEN_SLACK / view.scale, priority });
   }, [nodes, edges, laidOut, view.scale]);
   // A blob's anchor keeps rendering as itself; only the OTHER members hide.
   const blobByAnchor = useMemo(
